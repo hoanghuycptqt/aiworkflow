@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.production
+
+# Database (SQLite - regenerated on deploy)
+*.db
+*.db-journal
+
+# Uploads (user files, not code)
+server/uploads/
+
+# Build output (regenerated)
+client/dist/
+
+# Chrome profiles (temp browser data)
+.chrome-profiles/
+.cp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Antigravity/AI tool files
+.gemini/
+.agents/
+_agents/
+
+# Screenshots (dev only)
+screenshot_*.png

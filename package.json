@@ -1,0 +1,16 @@
+{
+  "name": "video-creator-workflow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Workflow Automation Platform for Bulk Video Production",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "build": "cd client && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

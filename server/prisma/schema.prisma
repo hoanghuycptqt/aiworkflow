@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  password      String
+  name          String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  workflows     Workflow[]
+  credentials   Credential[]
+  telegramLinks TelegramLink[]
+}
+
+model Credential {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider  String   // 'chatgpt' | 'google-flow' | etc.
+  label     String   // user-friendly name
+  token     String   // encrypted access token / cookie
+  metadata  String?  // JSON: extra config like custom GPT id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, provider])
+}
+
+model Workflow {
+  id          String              @id @default(uuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  nodesData   String              // JSON: React Flow nodes
+  edgesData   String              // JSON: React Flow edges
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  executions  WorkflowExecution[]
+  jobs        Job[]
+  jobBatches  JobBatch[]
+
+  @@index([userId])
+}
+
+model Job {
+  id          String   @id @default(uuid())
+  workflowId  String
+  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  name        String              // "Scene 1", "Frame A", etc.
+  order       Int     @default(0) // for sequential ordering
+  inputData   String?             // JSON: { filePaths: [...], variables: {...} }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workflowId, order])
+}
+
+model JobBatch {
+  id            String   @id @default(uuid())
+  workflowId    String
+  workflow      Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  mode          String   @default("parallel") // "parallel" | "sequential"
+  concurrency   Int      @default(3)          // max parallel jobs (for parallel mode)
+  status        String   @default("pending")  // pending | running | completed | failed | cancelled | partial
+  totalJobs     Int      @default(0)
+  completedJobs Int      @default(0)
+  failedJobs    Int      @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  error         String?
+  executions    WorkflowExecution[]
+
+  @@index([workflowId, status])
+}
+
+model WorkflowExecution {
+  id             String          @id @default(uuid())
+  workflowId     String
+  workflow       Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  instanceIndex  Int             @default(0) // for batch execution
+  status         String          @default("pending") // pending | running | completed | failed | cancelled
+  inputData      String?         // JSON: initial input for this instance
+  jobId          String?         // link to Job definition
+  jobBatchId     String?         // link to JobBatch run
+  jobBatch       JobBatch?       @relation(fields: [jobBatchId], references: [id])
+  startedAt      DateTime?
+  completedAt    DateTime?
+  error          String?
+  nodeExecutions NodeExecution[]
+
+  @@index([workflowId, status])
+}
+
+model NodeExecution {
+  id          String            @id @default(uuid())
+  executionId String
+  execution   WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  nodeId      String            // references node id in workflow's nodesData
+  nodeType    String
+  status      String            @default("pending") // pending | running | completed | failed | skipped
+  inputData   String?           // JSON
+  outputData  String?           // JSON
+  startedAt   DateTime?
+  completedAt DateTime?
+  error       String?
+  logs        String?           // JSON array of log entries
+
+  @@index([executionId, nodeId])
+}
+
+model TelegramLink {
+  id        String   @id @default(uuid())
+  userId    String
+  chatId    String   @unique
+  label     String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model TelegramLinkToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model TelegramChatMessage {
+  id        String   @id @default(uuid())
+  chatId    String
+  role      String   // 'user' | 'assistant'
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([chatId, createdAt])
+}
