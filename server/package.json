@@ -24,6 +24,7 @@
         "multer": "^1.4.5-lts.1",
         "node-fetch": "^3.3.2",
         "puppeteer-core": "^24.38.0",
+        "resend": "^6.9.3",
         "socket.io": "^4.8.1",
         "telegraf": "^4.16.3",
         "uuid": "^11.1.0"

@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { prisma } from '../index.js';
 import { generateToken, hashPassword, comparePassword } from '../services/auth.service.js';
+import { sendVerificationEmail } from '../services/email.service.js';
 
 const router = Router();
 
@@ -19,19 +21,38 @@ router.post('/register', async (req, res, next) => {
 
         const hashedPassword = await hashPassword(password);
 
-        // First user becomes admin
+        // First user becomes admin + auto-verified
         const userCount = await prisma.user.count();
-        const role = userCount === 0 ? 'admin' : 'user';
+        const isFirstUser = userCount === 0;
+        const role = isFirstUser ? 'admin' : 'user';
+        const verificationToken = isFirstUser ? null : randomUUID();
 
         const user = await prisma.user.create({
-            data: { email, password: hashedPassword, name, role },
+            data: {
+                email, password: hashedPassword, name, role,
+                isVerified: isFirstUser,
+                verificationToken,
+            },
             select: { id: true, email: true, name: true, role: true, createdAt: true },
         });
 
-        const token = generateToken(user.id);
+        // First user: auto-login. Others: send verification email.
+        if (isFirstUser) {
+            const token = generateToken(user.id);
+            return res.status(201).json({ user, token });
+        }
 
-        res.status(201).json({ user, token });
+        // Send verification email
+        await sendVerificationEmail(email, verificationToken);
+
+        res.status(201).json({
+            message: 'Registration successful! Please check your email to verify your account.',
+            requireVerification: true,
+        });
     } catch (err) {
+        if (err.code === 'P2002') {
+            return res.status(409).json({ error: 'Email already exists' });
+        }
         next(err);
     }
 });
@@ -47,7 +68,7 @@ router.post('/login', async (req, res, next) => {
 
         const user = await prisma.user.findUnique({
             where: { email },
-            select: { id: true, email: true, name: true, password: true, role: true, isActive: true },
+            select: { id: true, email: true, name: true, password: true, role: true, isActive: true, isVerified: true },
         });
         if (!user) {
             return res.status(401).json({ error: 'Invalid credentials' });
@@ -57,12 +78,20 @@ router.post('/login', async (req, res, next) => {
             return res.status(403).json({ error: 'Account is disabled. Contact admin.' });
         }
 
+        if (!user.isVerified) {
+            return res.status(403).json({
+                error: 'Please verify your email before logging in.',
+                needVerification: true,
+                email: user.email,
+            });
+        }
+
         const isValid = await comparePassword(password, user.password);
         if (!isValid) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // Update last login (non-blocking, don't fail login if this errors)
+        // Update last login (non-blocking)
         prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }).catch(() => { });
 
         const token = generateToken(user.id);
@@ -71,6 +100,73 @@ router.post('/login', async (req, res, next) => {
             user: { id: user.id, email: user.email, name: user.name, role: user.role },
             token,
         });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/auth/verify?token=xxx
+router.get('/verify', async (req, res, next) => {
+    try {
+        const { token } = req.query;
+        if (!token) {
+            return res.status(400).json({ error: 'Verification token is required' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { verificationToken: token },
+            select: { id: true, isVerified: true },
+        });
+
+        if (!user) {
+            return res.status(400).json({ error: 'Invalid or expired verification token' });
+        }
+
+        if (user.isVerified) {
+            return res.json({ message: 'Email already verified', alreadyVerified: true });
+        }
+
+        await prisma.user.update({
+            where: { id: user.id },
+            data: { isVerified: true, verificationToken: null },
+        });
+
+        res.json({ message: 'Email verified successfully! You can now log in.', verified: true });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// POST /api/auth/resend-verification
+router.post('/resend-verification', async (req, res, next) => {
+    try {
+        const { email } = req.body;
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { email },
+            select: { id: true, isVerified: true },
+        });
+
+        if (!user) {
+            return res.json({ message: 'If this email exists, a verification link has been sent.' });
+        }
+
+        if (user.isVerified) {
+            return res.json({ message: 'Email is already verified.' });
+        }
+
+        const newToken = randomUUID();
+        await prisma.user.update({
+            where: { id: user.id },
+            data: { verificationToken: newToken },
+        });
+
+        await sendVerificationEmail(email, newToken);
+
+        res.json({ message: 'Verification email sent! Please check your inbox.' });
     } catch (err) {
         next(err);
     }

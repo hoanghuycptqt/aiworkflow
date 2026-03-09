@@ -38,19 +38,23 @@ class ApiClient {
         const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.error || `Request failed: ${response.status}`);
+            const err = new Error(data.error || `Request failed: ${response.status}`);
+            if (data.needVerification) err.needVerification = true;
+            if (data.email) err.email = data.email;
+            throw err;
         }
 
         return data;
     }
 
-    // Auth
     async register(email, password, name) {
         const data = await this.request('/auth/register', {
             method: 'POST',
             body: JSON.stringify({ email, password, name }),
         });
-        this.setToken(data.token);
+        if (data.token) {
+            this.setToken(data.token);
+        }
         return data;
     }
 

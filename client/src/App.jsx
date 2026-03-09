@@ -72,6 +72,7 @@ function App() {
         {!user ? (
           <>
             <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
+            <Route path="/auth/verify" element={<AuthPage onLogin={handleLogin} />} />
             <Route path="*" element={<Navigate to="/auth" replace />} />
           </>
         ) : (
