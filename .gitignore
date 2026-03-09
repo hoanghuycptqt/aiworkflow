@@ -41,3 +41,6 @@ _agents/
 
 # Screenshots (dev only)
 screenshot_*.png
+
+# SSL certificates
+cert/
