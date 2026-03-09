@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { getNodeType } from '../../services/nodeTypes.js';
 import { api } from '../../services/api.js';
 
+const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
+
 export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClose }) {
     const [credentials, setCredentials] = useState([]);
     const [uploading, setUploading] = useState(false);
@@ -18,11 +20,11 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
         // Multi-file: filePaths array
         if (config.filePaths && config.filePaths.length > 0) {
             setUploadPreviews(config.filePaths.map(p =>
-                p.startsWith('/uploads') ? `http://localhost:3001${p}` : p
+                p.startsWith('/uploads') ? `${SERVER}${p}` : p
             ));
         } else if (config.filePath && (config.filePath.startsWith('/uploads') || config.filePath.startsWith('http'))) {
             // Legacy single file compat
-            setUploadPreviews([config.filePath.startsWith('/uploads') ? `http://localhost:3001${config.filePath}` : config.filePath]);
+            setUploadPreviews([config.filePath.startsWith('/uploads') ? `${SERVER}${config.filePath}` : config.filePath]);
         } else {
             setUploadPreviews([]);
         }
@@ -47,7 +49,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
             }
 
             const token = localStorage.getItem('vcw_token');
-            const res = await fetch('http://localhost:3001/api/upload/batch', {
+            const res = await fetch(`${SERVER}/api/upload/batch`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}` },
                 body: formData,
@@ -63,7 +65,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
             const newPaths = data.files.map(f => f.fileUrl);
             const allPaths = [...existingPaths, ...newPaths];
             onUpdateConfig({ filePaths: allPaths, filePath: allPaths[0] });
-            setUploadPreviews(allPaths.map(p => `http://localhost:3001${p}`));
+            setUploadPreviews(allPaths.map(p => `${SERVER}${p}`));
         } catch (err) {
             alert(`Upload failed: ${err.message}`);
         }

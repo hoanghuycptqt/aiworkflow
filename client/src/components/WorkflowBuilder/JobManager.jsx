@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../../services/api.js';
 import toast from 'react-hot-toast';
 
-const SERVER = 'http://localhost:3001';
+const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
 
 export default function JobManager({ workflowId, onRunBatch }) {
     const [jobs, setJobs] = useState([]);

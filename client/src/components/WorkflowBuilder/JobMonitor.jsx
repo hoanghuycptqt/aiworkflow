@@ -3,7 +3,7 @@ import { api } from '../../services/api.js';
 import { onJobUpdate, onExecutionUpdate } from '../../services/socket.js';
 import toast from 'react-hot-toast';
 
-const SERVER = 'http://localhost:3001';
+const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
 // Only these node types produce output media for display
 const OUTPUT_NODE_TYPES = ['google-flow-image', 'google-flow-video'];
 
