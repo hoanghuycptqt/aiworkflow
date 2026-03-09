@@ -45,7 +45,10 @@ router.post('/login', async (req, res, next) => {
             return res.status(400).json({ error: 'Email and password are required' });
         }
 
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await prisma.user.findUnique({
+            where: { email },
+            select: { id: true, email: true, name: true, password: true, role: true, isActive: true },
+        });
         if (!user) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
@@ -59,8 +62,8 @@ router.post('/login', async (req, res, next) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // Update last login
-        await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+        // Update last login (non-blocking, don't fail login if this errors)
+        prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }).catch(() => { });
 
         const token = generateToken(user.id);
 
