@@ -62,6 +62,7 @@ app.get('/api/health', (req, res) => {
 
 // Public routes
 app.use('/api/auth', authRoutes);
+app.use('/api/telegram/webhook', telegramRoutes); // Webhook must be public (Telegram POSTs here)
 
 // Protected routes
 app.use('/api/workflows', authMiddleware, workflowRoutes);

@@ -108,4 +108,22 @@ router.delete('/unlink/:linkId', async (req, res, next) => {
     }
 });
 
+/**
+ * Telegram Webhook endpoint (production mode).
+ * This route is PUBLIC — no auth middleware.
+ * Telegram sends POST requests here with updates.
+ */
+router.post('/webhook', async (req, res) => {
+    try {
+        const { bot } = await import('../services/telegram-bot.js');
+        if (bot) {
+            await bot.handleUpdate(req.body);
+        }
+        res.sendStatus(200);
+    } catch (err) {
+        console.error('[Telegram] Webhook error:', err.message);
+        res.sendStatus(200); // Always 200 to avoid Telegram retries
+    }
+});
+
 export default router;
