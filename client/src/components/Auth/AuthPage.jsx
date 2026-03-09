@@ -129,7 +129,7 @@ export default function AuthPage({ onLogin }) {
             <div className="auth-card">
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                     <img src="/icon.png" alt="THHFlow" style={{ width: 56, height: 56 }} />
-                    <h1 style={{ margin: 0, fontSize: 24, background: 'var(--gradient-primary)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>THHFlow</h1>
+                    <h1 style={{ margin: 0, fontSize: 24, background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>THHFlow</h1>
                 </div>
                 <p className="subtitle">AI Workflow Automation</p>
 
