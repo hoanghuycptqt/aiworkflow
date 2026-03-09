@@ -127,8 +127,11 @@ export default function AuthPage({ onLogin }) {
     return (
         <div className="auth-container">
             <div className="auth-card">
-                <h1>⚡ VCW</h1>
-                <p className="subtitle">Video Creator Workflow</p>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <img src="/logo.png" alt="THHFlow logo" style={{ width: 64, height: 64, borderRadius: 16 }} />
+                    <h1 style={{ margin: 0, fontSize: 24, background: 'var(--gradient-primary)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>THHFlow</h1>
+                </div>
+                <p className="subtitle">AI Workflow Automation</p>
 
                 <form className="auth-form" onSubmit={handleSubmit}>
                     {!isLogin && (

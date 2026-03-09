@@ -7,8 +7,11 @@ export default function AppLayout({ user, onLogout }) {
         <div className="app-layout">
             <aside className="app-sidebar">
                 <div className="app-sidebar-header">
-                    <h1>⚡ VCW</h1>
-                    <p>Video Creator Workflow</p>
+                    <img src="/logo.png" alt="THHFlow logo" style={{ width: 40, height: 40, borderRadius: 10 }} />
+                    <div>
+                        <h1 style={{ fontSize: 18, margin: 0 }}>THHFlow</h1>
+                        <p style={{ margin: 0, fontSize: 11 }}>AI Workflow Automation</p>
+                    </div>
                 </div>
 
                 <nav className="app-sidebar-nav">
