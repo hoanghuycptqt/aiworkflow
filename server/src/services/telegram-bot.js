@@ -199,18 +199,31 @@ export async function startBot() {
     });
 
     // ─── Start bot ───────────────────────────────────────────
-    const mode = process.env.TELEGRAM_MODE || 'polling';
-    if (mode === 'webhook') {
-        const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
-        if (webhookUrl) {
-            await bot.telegram.setWebhook(webhookUrl);
-            console.log(`[Telegram] 🤖 Bot started (webhook: ${webhookUrl})`);
+    // Catch polling/webhook errors gracefully (don't crash server)
+    bot.catch((err) => {
+        if (err.response?.error_code === 409) {
+            console.warn('[Telegram] ⚠️ Another bot instance is polling — stopping this one. Check your .env tokens.');
         } else {
-            console.error('[Telegram] TELEGRAM_WEBHOOK_URL not set for webhook mode');
+            console.error('[Telegram] Bot error:', err.message);
         }
-    } else {
-        bot.launch({ dropPendingUpdates: true });
-        console.log('[Telegram] 🤖 Bot started (polling mode)');
+    });
+
+    const mode = process.env.TELEGRAM_MODE || 'polling';
+    try {
+        if (mode === 'webhook') {
+            const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
+            if (webhookUrl) {
+                await bot.telegram.setWebhook(webhookUrl);
+                console.log(`[Telegram] 🤖 Bot started (webhook: ${webhookUrl})`);
+            } else {
+                console.error('[Telegram] TELEGRAM_WEBHOOK_URL not set for webhook mode');
+            }
+        } else {
+            bot.launch({ dropPendingUpdates: true });
+            console.log('[Telegram] 🤖 Bot started (polling mode)');
+        }
+    } catch (err) {
+        console.error('[Telegram] Failed to start bot:', err.message);
     }
 
     // Graceful shutdown
