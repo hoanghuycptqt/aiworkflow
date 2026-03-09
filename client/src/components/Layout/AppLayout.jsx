@@ -20,6 +20,12 @@ export default function AppLayout({ user, onLogout }) {
                         <span className="nav-icon">🔑</span>
                         Credentials
                     </NavLink>
+                    {user.role === 'admin' && (
+                        <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                            <span className="nav-icon">⚙️</span>
+                            Admin
+                        </NavLink>
+                    )}
                 </nav>
 
                 <div className="app-sidebar-footer">
@@ -28,7 +34,10 @@ export default function AppLayout({ user, onLogout }) {
                             {user.name?.[0]?.toUpperCase() || 'U'}
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
-                            <div className="user-name">{user.name}</div>
+                            <div className="user-name">
+                                {user.name}
+                                <span className={`role-badge role-${user.role}`}>{user.role}</span>
+                            </div>
                             <div className="user-email">{user.email}</div>
                         </div>
                     </div>

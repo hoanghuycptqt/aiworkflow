@@ -8,6 +8,7 @@ import AppLayout from './components/Layout/AppLayout.jsx';
 import Dashboard from './components/Dashboard/Dashboard.jsx';
 import WorkflowBuilder from './components/WorkflowBuilder/WorkflowBuilder.jsx';
 import CredentialsPage from './components/Credentials/CredentialsPage.jsx';
+import AdminPage from './components/Admin/AdminPage.jsx';
 import './index.css';
 
 function App() {
@@ -78,6 +79,9 @@ function App() {
             <Route path="/" element={<AppLayout user={user} onLogout={handleLogout} />}>
               <Route index element={<Dashboard />} />
               <Route path="credentials" element={<CredentialsPage />} />
+              {user.role === 'admin' && (
+                <Route path="admin" element={<AdminPage />} />
+              )}
             </Route>
             <Route path="/workflow/:id" element={<WorkflowBuilder />} />
             <Route path="*" element={<Navigate to="/" replace />} />

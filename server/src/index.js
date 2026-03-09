@@ -16,7 +16,9 @@ import chatgptAuthRoutes from './routes/chatgpt-auth.routes.js';
 import credentialCheckRoutes from './routes/credential-check.routes.js';
 import jobRoutes from './routes/job.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
+import { requireAdmin } from './middleware/role.middleware.js';
 import { errorHandler } from './middleware/error.middleware.js';
 
 const app = express();
@@ -83,6 +85,7 @@ app.use('/api/chatgpt-auth', authMiddleware, chatgptAuthRoutes);
 app.use('/api/credential-check', authMiddleware, credentialCheckRoutes);
 app.use('/api/jobs', authMiddleware, jobRoutes);
 app.use('/api/telegram', authMiddleware, telegramRoutes);
+app.use('/api/admin', authMiddleware, requireAdmin, adminRoutes);
 
 // Error handler
 app.use(errorHandler);

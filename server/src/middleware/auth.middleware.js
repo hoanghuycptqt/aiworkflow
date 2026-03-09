@@ -19,11 +19,15 @@ export async function authMiddleware(req, res, next) {
 
         const user = await prisma.user.findUnique({
             where: { id: payload.userId },
-            select: { id: true, email: true, name: true },
+            select: { id: true, email: true, name: true, role: true, isActive: true },
         });
 
         if (!user) {
             return res.status(401).json({ error: 'User not found' });
+        }
+
+        if (!user.isActive) {
+            return res.status(403).json({ error: 'Account is disabled' });
         }
 
         req.user = user;

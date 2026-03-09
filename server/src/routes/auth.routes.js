@@ -19,9 +19,13 @@ router.post('/register', async (req, res, next) => {
 
         const hashedPassword = await hashPassword(password);
 
+        // First user becomes admin
+        const userCount = await prisma.user.count();
+        const role = userCount === 0 ? 'admin' : 'user';
+
         const user = await prisma.user.create({
-            data: { email, password: hashedPassword, name },
-            select: { id: true, email: true, name: true, createdAt: true },
+            data: { email, password: hashedPassword, name, role },
+            select: { id: true, email: true, name: true, role: true, createdAt: true },
         });
 
         const token = generateToken(user.id);
@@ -46,15 +50,22 @@ router.post('/login', async (req, res, next) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
+        if (!user.isActive) {
+            return res.status(403).json({ error: 'Account is disabled. Contact admin.' });
+        }
+
         const isValid = await comparePassword(password, user.password);
         if (!isValid) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
+        // Update last login
+        await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+
         const token = generateToken(user.id);
 
         res.json({
-            user: { id: user.id, email: user.email, name: user.name },
+            user: { id: user.id, email: user.email, name: user.name, role: user.role },
             token,
         });
     } catch (err) {
@@ -75,7 +86,7 @@ router.get('/me', async (req, res, next) => {
 
         const user = await prisma.user.findUnique({
             where: { id: payload.userId },
-            select: { id: true, email: true, name: true, createdAt: true },
+            select: { id: true, email: true, name: true, role: true, createdAt: true },
         });
 
         if (!user) return res.status(404).json({ error: 'User not found' });
