@@ -62,7 +62,17 @@ app.get('/api/health', (req, res) => {
 
 // Public routes
 app.use('/api/auth', authRoutes);
-app.use('/api/telegram', telegramRoutes); // Webhook at /api/telegram/webhook must be public (checked inside route)
+// Telegram webhook — must be public (Telegram POSTs here, no auth)
+app.post('/api/telegram/webhook', async (req, res) => {
+  try {
+    const { bot } = await import('./services/telegram-bot.js');
+    if (bot) await bot.handleUpdate(req.body);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('[Telegram] Webhook error:', err.message);
+    res.sendStatus(200);
+  }
+});
 
 // Protected routes
 app.use('/api/workflows', authMiddleware, workflowRoutes);
