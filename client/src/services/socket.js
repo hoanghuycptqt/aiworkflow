@@ -1,7 +1,9 @@
 import { io } from 'socket.io-client';
 import { api } from './api.js';
 
-const SOCKET_URL = 'http://localhost:3001';
+const SOCKET_URL = window.location.hostname === 'localhost'
+    ? 'http://localhost:3001'
+    : window.location.origin;
 
 let socket = null;
 const listeners = new Map();
