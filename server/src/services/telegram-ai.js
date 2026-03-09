@@ -462,7 +462,7 @@ async function callGemini(messages) {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-        model: 'gemini-3.1-flash-lite-preview',
+        model: 'gemini-flash-latest',
         tools: [{ functionDeclarations }],
         systemInstruction: SYSTEM_PROMPT,
     });
