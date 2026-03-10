@@ -266,18 +266,11 @@ export async function downloadTelegramPhoto(ctx, fileId) {
  * Called from job-runner when a job completes.
  */
 export async function notifyTelegramUser(userId, message, mediaFiles = []) {
-    if (!bot) {
-        console.warn('[Telegram] notifyTelegramUser: bot is not initialized');
-        return;
-    }
+    if (!bot) return;
 
     const links = await prisma.telegramLink.findMany({ where: { userId } });
-    if (links.length === 0) {
-        console.log(`[Telegram] No linked accounts for userId=${userId}, skipping notification`);
-        return;
-    }
+    if (links.length === 0) return;
 
-    console.log(`[Telegram] Sending notification to ${links.length} account(s) for userId=${userId}, media: ${mediaFiles.length} files`);
     for (const link of links) {
         try {
             // Send text message first
