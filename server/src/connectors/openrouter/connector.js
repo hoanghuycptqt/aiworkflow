@@ -22,12 +22,12 @@ const FREE_MODELS = [
     'meta-llama/llama-3.2-3b-instruct:free',     // Text only
 ];
 
-export class GeminiConnector extends BaseConnector {
+export class OpenRouterConnector extends BaseConnector {
     static get metadata() {
         return {
-            name: 'Google Gemini',
-            description: 'AI text generation and image analysis (via OpenRouter, auto-fallback)',
-            icon: '✨',
+            name: 'OpenRouter',
+            description: 'AI text generation & image analysis via OpenRouter (multi-model, auto-fallback)',
+            icon: '🔀',
             category: 'ai',
             configSchema: {
                 prompt: {

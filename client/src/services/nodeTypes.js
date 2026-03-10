@@ -15,13 +15,13 @@ export const NODE_TYPES = {
         inputs: 0,
         outputs: 1,
     },
-    'gemini': {
-        type: 'gemini',
-        label: 'Google Gemini',
-        icon: '✨',
+    'ai-text': {
+        type: 'ai-text',
+        label: 'AI Text',
+        icon: '🔀',
         category: 'ai',
         color: '#4285f4',
-        description: 'AI text generation & image analysis via OpenRouter (Free models)',
+        description: 'AI text generation & image analysis via OpenRouter (multi-model, auto-fallback)',
         configSchema: {
             prompt: { type: 'textarea', label: 'Prompt', required: true, description: 'Use {{nodeId.field}} for dynamic values' },
             systemInstruction: { type: 'textarea', label: 'System Instruction', description: 'Custom instructions (like Custom GPT). Applied to every request.' },
@@ -40,7 +40,7 @@ export const NODE_TYPES = {
             },
             temperature: { type: 'number', label: 'Temperature', default: 0.7, min: 0, max: 2 },
             includeImage: { type: 'boolean', label: 'Include Image from Previous Node', default: false },
-            credentialId: { type: 'credential', label: 'Credential', provider: 'gemini', required: true },
+            credentialId: { type: 'credential', label: 'Credential', provider: 'openrouter', required: true },
         },
         inputs: 1,
         outputs: 1,

@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import TelegramLink from '../Settings/TelegramLink.jsx';
 
 const PROVIDERS = [
-    { id: 'gemini', label: 'Google Gemini (OpenRouter)', icon: '✨', description: 'Free AI via OpenRouter — supports Gemini, Llama, DeepSeek' },
+    { id: 'openrouter', label: 'OpenRouter', icon: '🔀', description: 'AI via OpenRouter — supports Gemini, Llama, DeepSeek & more' },
     { id: 'google-flow', label: 'Google Flow', icon: '🎬', description: 'Auth token for Google Flow (labs.google/fx)' },
     { id: 'chatgpt', label: 'ChatGPT', icon: '💬', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },
 ];
@@ -14,7 +14,7 @@ export default function CredentialsPage() {
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editingId, setEditingId] = useState(null);
-    const [form, setForm] = useState({ provider: 'gemini', label: '', token: '', metadata: {} });
+    const [form, setForm] = useState({ provider: 'openrouter', label: '', token: '', metadata: {} });
     const [refreshing, setRefreshing] = useState(null); // credentialId being refreshed
     const [tokenStatus, setTokenStatus] = useState({}); // { credentialId: { valid, expiresInHuman } }
 
@@ -183,10 +183,10 @@ export default function CredentialsPage() {
                 <div>
                     <h2>Credentials</h2>
                     <p style={{ color: 'var(--text-muted)', fontSize: 14, marginTop: 4 }}>
-                        Manage your API keys for Google Gemini and Google Flow
+                        Manage your API keys for OpenRouter, Google Flow and ChatGPT
                     </p>
                 </div>
-                <button className="btn btn-primary" onClick={() => { setEditingId(null); setForm({ provider: 'gemini', label: '', token: '', metadata: {} }); setShowModal(true); }}>
+                <button className="btn btn-primary" onClick={() => { setEditingId(null); setForm({ provider: 'openrouter', label: '', token: '', metadata: {} }); setShowModal(true); }}>
                     + Add Credential
                 </button>
             </div>
@@ -195,7 +195,7 @@ export default function CredentialsPage() {
                 <div className="empty-state">
                     <div className="empty-state-icon">🔑</div>
                     <h3>No Credentials Yet</h3>
-                    <p>Add your Google Gemini API key or Google Flow token to start using AI nodes in your workflows.</p>
+                    <p>Add your OpenRouter API key or Google Flow token to start using AI nodes in your workflows.</p>
                 </div>
             ) : (
                 <div className="credential-list">
@@ -295,13 +295,13 @@ export default function CredentialsPage() {
                                 <input
                                     className="input"
                                     type="text"
-                                    placeholder="My Gemini API Key"
+                                    placeholder="My OpenRouter Key"
                                     value={form.label}
                                     onChange={(e) => setForm({ ...form, label: e.target.value })}
                                 />
                             </div>
 
-                            {form.provider === 'gemini' ? (
+                            {form.provider === 'openrouter' ? (
                                 <div className="form-group">
                                     <label className="form-label">OpenRouter API Key</label>
                                     <input

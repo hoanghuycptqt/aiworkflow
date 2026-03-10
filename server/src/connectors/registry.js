@@ -2,10 +2,10 @@
  * Connector Registry
  * 
  * Central registry for all workflow node connectors.
- * Each connector handles a specific node type (gemini, google-flow, file-upload, etc.)
+ * Each connector handles a specific node type (ai-text, google-flow, file-upload, etc.)
  */
 
-import { GeminiConnector } from './gemini/connector.js';
+import { OpenRouterConnector } from './openrouter/connector.js';
 import { GoogleFlowImageConnector, GoogleFlowVideoConnector } from './google-flow/connector.js';
 import { FileUploadConnector, FileDownloadConnector } from './file-handler/connector.js';
 import { DelayConnector, TextTemplateConnector } from './utilities/connector.js';
@@ -30,7 +30,7 @@ export function getAllConnectorMetadata() {
 }
 
 // Register all built-in connectors
-register('gemini', new GeminiConnector());
+register('ai-text', new OpenRouterConnector());
 register('google-flow-image', new GoogleFlowImageConnector());
 register('google-flow-video', new GoogleFlowVideoConnector());
 register('chatgpt-note', new ChatGPTNoteConnector());
