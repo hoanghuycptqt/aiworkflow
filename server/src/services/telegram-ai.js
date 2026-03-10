@@ -468,10 +468,16 @@ async function callGemini(messages) {
     });
 
     const chat = model.startChat({
-        history: messages.slice(0, -1).map(m => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }],
-        })),
+        history: messages.slice(0, -1)
+            .map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content }],
+            }))
+            // Gemini requires history to start with 'user' — drop leading 'model' messages
+            .reduce((acc, msg) => {
+                if (acc.length === 0 && msg.role === 'model') return acc;
+                return [...acc, msg];
+            }, []),
     });
 
     const lastMessage = messages[messages.length - 1];
