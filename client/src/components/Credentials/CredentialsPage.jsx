@@ -383,6 +383,19 @@ export default function CredentialsPage() {
                                             Get from DevTools → Network → XHR → Authorization: Bearer ...
                                         </span>
                                     </div>
+                                    <div className="form-group">
+                                        <label className="form-label">Session Cookies 🍪</label>
+                                        <textarea
+                                            className="textarea"
+                                            placeholder={'Paste cookies from labs.google here...\n\n📝 How to get:\n1. Open labs.google/fx → F12 → Network tab\n2. Click any request to aisandbox-pa.googleapis.com\n3. In Headers → find "Cookie:" → copy full value'}
+                                            value={form.metadata?.sessionCookies || ''}
+                                            onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, sessionCookies: e.target.value } })}
+                                            style={{ minHeight: 100, fontSize: 11 }}
+                                        />
+                                        <span className="form-hint">
+                                            Required for Auto Refresh and video download. After first setup, Auto Refresh will keep them updated.
+                                        </span>
+                                    </div>
                                 </>
                             )}
                         </div>
