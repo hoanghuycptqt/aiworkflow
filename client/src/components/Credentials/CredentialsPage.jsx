@@ -106,10 +106,9 @@ export default function CredentialsPage() {
         try {
             const data = await api.getCredentials();
             setCredentials(data.credentials);
-            // Auto-check token status for Google Flow credentials only
-            // ChatGPT uses cookies only — no token check needed
+            // Auto-check status for ChatGPT and Google Flow credentials
             for (const cred of data.credentials) {
-                if (cred.provider === 'google-flow') {
+                if (cred.provider === 'chatgpt' || cred.provider === 'google-flow') {
                     checkTokenStatus(cred.id, cred.provider);
                 }
             }
@@ -219,15 +218,16 @@ export default function CredentialsPage() {
                                     <div className="credential-detail">
                                         <h4>{cred.label}</h4>
                                         <p>{provider.label} · Added {new Date(cred.createdAt).toLocaleDateString('vi-VN')}</p>
-                                        {cred.provider === 'chatgpt' && status && (
+                                        {cred.provider === 'chatgpt' && (
                                             <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.6 }}>
-                                                <span style={{ color: cred.metadata?.cookies ? '#4ade80' : '#f87171', fontWeight: 500 }}>
-                                                    {cred.metadata?.cookies ? '🍪 Cookies: ✅ Configured' : '🍪 Cookies: ❌ Missing'}
-                                                </span>
-                                                {cred.metadata?.lastRefreshed && (
-                                                    <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>
-                                                        · Refreshed: {new Date(cred.metadata.lastRefreshed).toLocaleString('vi-VN')}
+                                                {status ? (
+                                                    <span style={{ color: status.tokenValid ? '#4ade80' : '#f87171', fontWeight: 500 }}>
+                                                        {status.tokenValid ? '🍪 Cookies: ✅ Valid' : '🍪 Cookies: ❌ Expired'}
                                                     </span>
+                                                ) : cred.metadata?.cookies ? (
+                                                    <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>⏳ Checking cookies...</span>
+                                                ) : (
+                                                    <span style={{ color: '#f87171', fontWeight: 500 }}>🍪 Cookies: ❌ Missing</span>
                                                 )}
                                             </div>
                                         )}

@@ -95,6 +95,28 @@ router.post('/token', async (req, res) => {
                 tokenValid = false;
             }
         }
+    } else if (credential.provider === 'chatgpt') {
+        // ChatGPT uses cookies only — check via /backend-api/me
+        const meta = credential.metadata ? JSON.parse(credential.metadata) : {};
+        if (meta.cookies) {
+            try {
+                const testRes = await fetch('https://chatgpt.com/backend-api/me', {
+                    method: 'GET',
+                    headers: {
+                        'Cookie': meta.cookies,
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+                        'oai-device-id': meta.deviceId || '',
+                        'oai-language': 'en-US',
+                    },
+                });
+                tokenValid = testRes.status === 200;
+                console.log(`[CredCheck] ChatGPT cookie test: status=${testRes.status}, valid=${tokenValid}`);
+            } catch (e) {
+                console.log(`[CredCheck] ChatGPT cookie test failed: ${e.message}`);
+                // If network error, assume valid (don't block user)
+                tokenValid = true;
+            }
+        }
     }
 
     // For google-flow: also check if session cookies exist
