@@ -1,11 +1,32 @@
+import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 export default function AppLayout({ user, onLogout }) {
     const location = useLocation();
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+
+    // Auto-close sidebar on navigation
+    useEffect(() => {
+        setSidebarOpen(false);
+    }, [location.pathname]);
 
     return (
         <div className="app-layout">
-            <aside className="app-sidebar">
+            {/* Mobile top bar (visible only on mobile via CSS) */}
+            <div className="mobile-topbar">
+                <button className="hamburger-btn" onClick={() => setSidebarOpen(true)}>
+                    ☰
+                </button>
+                <span className="mobile-topbar-title">THHFlow</span>
+            </div>
+
+            {/* Sidebar overlay (mobile only) */}
+            <div
+                className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
+                onClick={() => setSidebarOpen(false)}
+            />
+
+            <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''}`}>
                 <div className="app-sidebar-header">
                     <img src="/icon.png" alt="THHFlow" style={{ width: 36, height: 36 }} />
                     <div>
