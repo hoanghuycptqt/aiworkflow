@@ -63,11 +63,24 @@ router.post('/token', async (req, res) => {
                         'oai-language': 'en-US',
                     },
                 });
-                tokenValid = testRes.status === 200;
-                console.log(`[CredCheck] ChatGPT cookie test: status=${testRes.status}, valid=${tokenValid}`);
+                // Must check body too — Cloudflare can return 200 with HTML challenge page
+                if (testRes.status === 200) {
+                    try {
+                        const body = await testRes.json();
+                        tokenValid = !!(body.email || body.id || body.name);
+                        console.log(`[CredCheck] ChatGPT cookie test: status=200, email=${body.email || 'N/A'}, valid=${tokenValid}`);
+                    } catch {
+                        // 200 but not JSON = Cloudflare challenge page
+                        tokenValid = false;
+                        console.log(`[CredCheck] ChatGPT cookie test: status=200 but NOT JSON (Cloudflare challenge) → invalid`);
+                    }
+                } else {
+                    tokenValid = false;
+                    console.log(`[CredCheck] ChatGPT cookie test: status=${testRes.status} → invalid`);
+                }
             } catch (e) {
                 console.log(`[CredCheck] ChatGPT cookie test failed: ${e.message}`);
-                tokenValid = true; // network error, assume valid
+                tokenValid = false;
             }
         }
     } else if (payload?.exp) {
