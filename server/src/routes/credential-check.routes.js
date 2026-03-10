@@ -44,12 +44,33 @@ router.post('/token', async (req, res) => {
         return res.status(404).json({ error: 'Credential not found' });
     }
 
-    // Try JWT decode first
-    const payload = decodeJWT(credential.token);
+    // Try JWT decode first (skip for chatgpt — cookies only)
+    const payload = credential.provider !== 'chatgpt' ? decodeJWT(credential.token) : null;
     let tokenValid = false;
     let expiresIn = 0;
 
-    if (payload?.exp) {
+    if (credential.provider === 'chatgpt') {
+        // ChatGPT uses cookies only — check via /backend-api/me
+        const meta = credential.metadata ? JSON.parse(credential.metadata) : {};
+        if (meta.cookies) {
+            try {
+                const testRes = await fetch('https://chatgpt.com/backend-api/me', {
+                    method: 'GET',
+                    headers: {
+                        'Cookie': meta.cookies,
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+                        'oai-device-id': meta.deviceId || '',
+                        'oai-language': 'en-US',
+                    },
+                });
+                tokenValid = testRes.status === 200;
+                console.log(`[CredCheck] ChatGPT cookie test: status=${testRes.status}, valid=${tokenValid}`);
+            } catch (e) {
+                console.log(`[CredCheck] ChatGPT cookie test failed: ${e.message}`);
+                tokenValid = true; // network error, assume valid
+            }
+        }
+    } else if (payload?.exp) {
         // JWT token — check exp
         const now = Math.floor(Date.now() / 1000);
         expiresIn = payload.exp - now;
@@ -95,28 +116,6 @@ router.post('/token', async (req, res) => {
                 tokenValid = false;
             }
         }
-    } else if (credential.provider === 'chatgpt') {
-        // ChatGPT uses cookies only — check via /backend-api/me
-        const meta = credential.metadata ? JSON.parse(credential.metadata) : {};
-        if (meta.cookies) {
-            try {
-                const testRes = await fetch('https://chatgpt.com/backend-api/me', {
-                    method: 'GET',
-                    headers: {
-                        'Cookie': meta.cookies,
-                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-                        'oai-device-id': meta.deviceId || '',
-                        'oai-language': 'en-US',
-                    },
-                });
-                tokenValid = testRes.status === 200;
-                console.log(`[CredCheck] ChatGPT cookie test: status=${testRes.status}, valid=${tokenValid}`);
-            } catch (e) {
-                console.log(`[CredCheck] ChatGPT cookie test failed: ${e.message}`);
-                // If network error, assume valid (don't block user)
-                tokenValid = true;
-            }
-        }
     }
 
     // For google-flow: also check if session cookies exist
@@ -151,6 +150,7 @@ router.post('/token', async (req, res) => {
         valid: overallValid,
         tokenValid,
         hasSession,
+        provider: credential.provider,
         reason: !tokenValid ? 'token_expired' : (!hasSession ? 'no_session' : null),
         expiresAt: payload?.exp ? new Date(payload.exp * 1000).toISOString() : (expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null),
         expiresIn,
