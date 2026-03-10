@@ -20,9 +20,105 @@ import { join, extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import fetch from 'node-fetch';
 import https from 'https';
+import { prisma } from '../../index.js';
 
 const API_BASE = 'https://aisandbox-pa.googleapis.com';
 const TOOL = 'PINHOLE';
+
+/**
+ * Check if Google Flow token is expired or near expiry (< 5 min).
+ * If so, call the session API to get a fresh token and update DB.
+ * Returns the (possibly refreshed) token and updated credentials object.
+ */
+async function ensureFreshToken(credentials) {
+    if (!credentials?.token || !credentials?.metadata?.sessionCookies) {
+        return credentials; // Can't refresh without cookies, return as-is
+    }
+
+    const meta = credentials.metadata || {};
+    let needsRefresh = false;
+
+    // Check tokenExpiresAt (set by session API)
+    if (meta.tokenExpiresAt) {
+        const expiresAt = new Date(meta.tokenExpiresAt).getTime();
+        const remainingMs = expiresAt - Date.now();
+        const remainingMin = Math.floor(remainingMs / 60000);
+
+        if (remainingMs <= 5 * 60 * 1000) { // < 5 minutes
+            console.log(`[GoogleFlow] Token expires in ${remainingMin}m — refreshing...`);
+            needsRefresh = true;
+        }
+    }
+    // Check lastRefreshed + 1 hour (fallback for tokens without tokenExpiresAt)
+    else if (meta.lastRefreshed) {
+        const refreshedAt = new Date(meta.lastRefreshed).getTime();
+        const elapsed = Date.now() - refreshedAt;
+        if (elapsed > 55 * 60 * 1000) { // > 55 minutes (5 min buffer before 1h expiry)
+            console.log(`[GoogleFlow] Token refreshed ${Math.round(elapsed / 60000)}m ago — refreshing...`);
+            needsRefresh = true;
+        }
+    }
+
+    if (!needsRefresh) return credentials;
+
+    try {
+        const sessionRes = await fetch('https://labs.google/fx/api/auth/session', {
+            method: 'GET',
+            headers: {
+                'Accept': '*/*',
+                'Content-Type': 'application/json',
+                'Cookie': meta.sessionCookies,
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+                'Referer': 'https://labs.google/fx/vi/tools/flow/',
+            },
+        });
+
+        if (!sessionRes.ok) {
+            console.warn(`[GoogleFlow] Session API returned ${sessionRes.status} — using existing token`);
+            return credentials;
+        }
+
+        const sessionData = await sessionRes.json();
+        if (!sessionData.access_token) {
+            console.warn('[GoogleFlow] No access_token in session response — using existing token');
+            return credentials;
+        }
+
+        const newToken = sessionData.access_token;
+        const expiresAt = sessionData.expires || null;
+
+        console.log('[GoogleFlow] ✅ Auto-refreshed token!', newToken.substring(0, 30) + '...');
+        console.log('[GoogleFlow] New expiry:', expiresAt);
+
+        // Update DB
+        const newMeta = {
+            ...meta,
+            lastRefreshed: new Date().toISOString(),
+            tokenExpiresAt: expiresAt,
+            userName: sessionData.user?.name || meta.userName,
+            userEmail: sessionData.user?.email || meta.userEmail,
+        };
+
+        await prisma.credential.update({
+            where: { id: credentials.id },
+            data: {
+                token: newToken,
+                metadata: JSON.stringify(newMeta),
+            },
+        });
+
+        // Return updated credentials
+        return {
+            ...credentials,
+            token: newToken,
+            metadata: newMeta,
+        };
+
+    } catch (e) {
+        console.warn('[GoogleFlow] Auto-refresh failed:', e.message, '— using existing token');
+        return credentials;
+    }
+}
 
 // Model name mapping (UI label -> API value)
 const IMAGE_MODELS = {
@@ -272,6 +368,9 @@ export class GoogleFlowImageConnector extends BaseConnector {
         if (!credentials?.token) {
             throw new Error('Google Flow credentials required (Bearer token).');
         }
+
+        // Auto-refresh token if expired or near expiry
+        credentials = await ensureFreshToken(credentials);
 
         const token = credentials.token;
         const projectId = config.projectId;
@@ -580,6 +679,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         if (!credentials?.token) {
             throw new Error('Google Flow credentials required (Bearer token).');
         }
+
+        // Auto-refresh token if expired or near expiry
+        credentials = await ensureFreshToken(credentials);
 
         const token = credentials.token;
         const projectId = config.projectId;
