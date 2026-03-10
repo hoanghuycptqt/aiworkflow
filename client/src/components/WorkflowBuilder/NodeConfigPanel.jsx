@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getNodeType } from '../../services/nodeTypes.js';
+import { getNodeType, PROVIDER_MODELS } from '../../services/nodeTypes.js';
 import { api } from '../../services/api.js';
 
 const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
@@ -135,20 +135,34 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                     />
                 );
 
-            case 'select':
+            case 'select': {
+                // Dynamic model list based on selected credential's provider
+                let options = fieldSchema.options || [];
+                if (fieldSchema.dynamic && key === 'model') {
+                    const credId = config.credentialId;
+                    const selectedCred = credentials.find(c => c.id === credId);
+                    if (selectedCred && PROVIDER_MODELS[selectedCred.provider]) {
+                        options = PROVIDER_MODELS[selectedCred.provider];
+                    } else {
+                        // Show all models grouped if no credential selected yet
+                        options = Object.values(PROVIDER_MODELS).flat();
+                    }
+                }
                 return (
                     <select
                         className="select"
                         value={value}
                         onChange={(e) => onUpdateConfig({ [key]: e.target.value })}
                     >
-                        {fieldSchema.options?.map((opt) => {
+                        {!value && <option value="">Select model...</option>}
+                        {options.map((opt) => {
                             const optValue = typeof opt === 'object' ? opt.value : opt;
                             const optLabel = typeof opt === 'object' ? opt.label : opt;
                             return <option key={optValue} value={optValue}>{optLabel}</option>;
                         })}
                     </select>
                 );
+            }
 
             case 'boolean':
                 return (
@@ -165,19 +179,38 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                     </div>
                 );
 
-            case 'credential':
-                const filtered = credentials.filter((c) => c.provider === fieldSchema.provider);
+            case 'credential': {
+                const providerFilter = fieldSchema.provider;
+                const filtered = credentials.filter((c) => {
+                    if (Array.isArray(providerFilter)) return providerFilter.includes(c.provider);
+                    return c.provider === providerFilter;
+                });
                 return (
                     <div>
                         <select
                             className="select"
                             value={value}
-                            onChange={(e) => onUpdateConfig({ [key]: e.target.value })}
+                            onChange={(e) => {
+                                const selectedCredId = e.target.value;
+                                const updates = { [key]: selectedCredId };
+                                // When credential changes, auto-set model to provider's default
+                                const selectedCred = credentials.find(c => c.id === selectedCredId);
+                                if (selectedCred && PROVIDER_MODELS[selectedCred.provider]) {
+                                    const currentModel = config.model || '';
+                                    const providerModels = PROVIDER_MODELS[selectedCred.provider];
+                                    // Only reset model if current model doesn't belong to new provider
+                                    if (!providerModels.includes(currentModel)) {
+                                        updates.model = providerModels[0];
+                                    }
+                                }
+                                onUpdateConfig(updates);
+                            }}
                         >
                             <option value="">Select credential...</option>
-                            {filtered.map((c) => (
-                                <option key={c.id} value={c.id}>{c.label}</option>
-                            ))}
+                            {filtered.map((c) => {
+                                const providerLabel = Array.isArray(providerFilter) ? ` (${c.provider})` : '';
+                                return <option key={c.id} value={c.id}>{c.label}{providerLabel}</option>;
+                            })}
                         </select>
                         {filtered.length === 0 && (
                             <span className="form-hint" style={{ color: 'var(--warning)', marginTop: 6, display: 'block' }}>
@@ -186,6 +219,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                         )}
                     </div>
                 );
+            }
 
             case 'file':
                 return (

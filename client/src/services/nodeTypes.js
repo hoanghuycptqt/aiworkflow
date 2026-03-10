@@ -1,6 +1,27 @@
 /**
  * Node type definitions for the workflow builder
  */
+
+/**
+ * Models available per credential provider — used by AI Text node
+ * for dynamic model selection based on selected credential.
+ */
+export const PROVIDER_MODELS = {
+    openrouter: [
+        'nvidia/nemotron-nano-12b-v2-vl:free',
+        'mistralai/mistral-small-3.1-24b-instruct:free',
+        'google/gemma-3-27b-it:free',
+        'google/gemma-3-12b-it:free',
+        'nvidia/nemotron-nano-9b-v2:free',
+        'qwen/qwen3-4b:free',
+        'meta-llama/llama-3.2-3b-instruct:free',
+    ],
+    gemini: [
+        'gemini-3-flash-preview',
+        'gemini-3-pro-preview',
+    ],
+};
+
 export const NODE_TYPES = {
     'file-upload': {
         type: 'file-upload',
@@ -21,26 +42,19 @@ export const NODE_TYPES = {
         icon: '🔀',
         category: 'ai',
         color: '#4285f4',
-        description: 'AI text generation & image analysis via OpenRouter (multi-model, auto-fallback)',
+        description: 'AI text generation & image analysis (supports OpenRouter & Google Gemini)',
         configSchema: {
             prompt: { type: 'textarea', label: 'Prompt', required: true, description: 'Use {{nodeId.field}} for dynamic values' },
             systemInstruction: { type: 'textarea', label: 'System Instruction', description: 'Custom instructions (like Custom GPT). Applied to every request.' },
             model: {
                 type: 'select', label: 'Model',
-                options: [
-                    'nvidia/nemotron-nano-12b-v2-vl:free',
-                    'mistralai/mistral-small-3.1-24b-instruct:free',
-                    'google/gemma-3-27b-it:free',
-                    'google/gemma-3-12b-it:free',
-                    'nvidia/nemotron-nano-9b-v2:free',
-                    'qwen/qwen3-4b:free',
-                    'meta-llama/llama-3.2-3b-instruct:free',
-                ],
-                default: 'nvidia/nemotron-nano-12b-v2-vl:free',
+                options: [],  // populated dynamically based on credential provider
+                default: '',
+                dynamic: true,  // flag for NodeConfigPanel to handle dynamically
             },
             temperature: { type: 'number', label: 'Temperature', default: 0.7, min: 0, max: 2 },
             includeImage: { type: 'boolean', label: 'Include Image from Previous Node', default: false },
-            credentialId: { type: 'credential', label: 'Credential', provider: 'openrouter', required: true },
+            credentialId: { type: 'credential', label: 'Credential', provider: ['openrouter', 'gemini'], required: true },
         },
         inputs: 1,
         outputs: 1,
