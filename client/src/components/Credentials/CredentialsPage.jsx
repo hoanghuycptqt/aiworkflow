@@ -154,7 +154,7 @@ export default function CredentialsPage() {
 
     function openEdit(cred) {
         setEditingId(cred.id);
-        setForm({ provider: cred.provider, label: cred.label, token: '', metadata: cred.metadata || {} });
+        setForm({ provider: cred.provider, label: cred.label, token: cred.token || '', metadata: cred.metadata || {} });
         setShowModal(true);
     }
 

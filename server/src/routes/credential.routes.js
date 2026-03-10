@@ -13,10 +13,10 @@ router.get('/', async (req, res, next) => {
                 id: true,
                 provider: true,
                 label: true,
+                token: true,
                 metadata: true,
                 createdAt: true,
                 updatedAt: true,
-                // NOTE: token is excluded for security
             },
         });
 
