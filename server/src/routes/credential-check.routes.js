@@ -56,30 +56,49 @@ router.post('/token', async (req, res) => {
         tokenValid = expiresIn > 0;
     } else if (credential.provider === 'google-flow') {
         // Non-JWT token (ya29.*) — validate via API call
-        try {
-            const testRes = await fetch('https://aisandbox-pa.googleapis.com/v1/flow/uploadImage', {
-                method: 'POST',
-                headers: {
+        const meta = credential.metadata ? JSON.parse(credential.metadata) : {};
+
+        // If refreshed recently (within 5 min), trust the token
+        if (meta.lastRefreshed) {
+            const refreshedAt = new Date(meta.lastRefreshed).getTime();
+            if (Date.now() - refreshedAt < 5 * 60 * 1000) {
+                tokenValid = true;
+                console.log(`[CredCheck] Google Flow: recently refreshed, trusting token`);
+            }
+        }
+
+        if (!tokenValid) {
+            try {
+                const headers = {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${credential.token}`,
                     'Origin': 'https://labs.google',
-                },
-                body: JSON.stringify({}), // empty body — will get 400 if auth is valid, 401 if not
-            });
-            // 401/403 = token expired, anything else (400, 200) = token is valid
-            tokenValid = testRes.status !== 401 && testRes.status !== 403;
-            console.log(`[CredCheck] Google Flow API test: status=${testRes.status}, valid=${tokenValid}`);
-        } catch (e) {
-            console.log(`[CredCheck] Google Flow API test failed: ${e.message}`);
-            tokenValid = false;
+                    'Referer': 'https://labs.google/',
+                };
+                // Include session cookies if available
+                if (meta.sessionCookies) {
+                    headers['Cookie'] = meta.sessionCookies;
+                }
+                const testRes = await fetch('https://aisandbox-pa.googleapis.com/v1/flow/uploadImage', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({}), // empty body — will get 400 if auth is valid, 401 if not
+                });
+                // 401/403 = token expired, anything else (400, 200) = token is valid
+                tokenValid = testRes.status !== 401 && testRes.status !== 403;
+                console.log(`[CredCheck] Google Flow API test: status=${testRes.status}, valid=${tokenValid}`);
+            } catch (e) {
+                console.log(`[CredCheck] Google Flow API test failed: ${e.message}`);
+                tokenValid = false;
+            }
         }
     }
 
     // For google-flow: also check if session cookies exist (needed for video download)
     let hasSession = true;
     if (credential.provider === 'google-flow') {
-        const meta = credential.metadata ? JSON.parse(credential.metadata) : {};
-        hasSession = !!(meta.sessionCookies && meta.sessionCookies.length > 10);
+        const gfMeta = credential.metadata ? JSON.parse(credential.metadata) : {};
+        hasSession = !!(gfMeta.sessionCookies && gfMeta.sessionCookies.length > 10);
         if (!hasSession) {
             console.log(`[CredCheck] Google Flow: ⚠️ No session cookies found — need refresh`);
         }
