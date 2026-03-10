@@ -67,8 +67,10 @@ router.post('/token', async (req, res) => {
                 if (testRes.status === 200) {
                     try {
                         const body = await testRes.json();
-                        tokenValid = !!(body.email || body.id || body.name);
-                        console.log(`[CredCheck] ChatGPT cookie test: status=200, email=${body.email || 'N/A'}, valid=${tokenValid}`);
+                        // body.created = user account timestamp, only present when truly authenticated
+                        // body.id can appear even without auth (device-based), body.email can be empty
+                        tokenValid = !!(body.created && body.id);
+                        console.log(`[CredCheck] ChatGPT cookie test: status=200, id=${body.id || 'N/A'}, created=${body.created || 'N/A'}, valid=${tokenValid}`);
                     } catch {
                         // 200 but not JSON = Cloudflare challenge page
                         tokenValid = false;
