@@ -4,7 +4,8 @@
 import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM = process.env.EMAIL_FROM || 'THHFlow <noreply@thhflow.com>';
+const FROM_VERIFY = 'THHFlow Security <verify@thhflow.com>';
+const FROM_WELCOME = 'THHFlow Team <hello@thhflow.com>';
 const APP_URL = process.env.APP_URL || 'http://localhost:5173';
 
 /**
@@ -15,7 +16,7 @@ export async function sendVerificationEmail(email, token) {
 
     try {
         await resend.emails.send({
-            from: FROM,
+            from: FROM_VERIFY,
             to: email,
             subject: '✉️ Xác nhận email — VCW',
             html: `
@@ -58,7 +59,7 @@ export async function sendVerificationEmail(email, token) {
 export async function sendWelcomeEmail(email, name) {
     try {
         await resend.emails.send({
-            from: FROM,
+            from: FROM_WELCOME,
             to: email,
             subject: '🎉 Chào mừng đến với THHFlow!',
             html: `
