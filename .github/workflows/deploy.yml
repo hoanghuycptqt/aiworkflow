@@ -29,7 +29,8 @@ jobs:
             # Apply database migrations
             cd server && npx prisma db push && cd ..
 
-            # Restart server
+            # Restart server & save process list for auto-start on reboot
             pm2 restart ecosystem.config.cjs --update-env
+            pm2 save
 
             echo "✅ Deploy complete!"

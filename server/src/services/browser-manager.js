@@ -6,11 +6,65 @@
  *  - Avoid EPERM errors when system temp dir is restricted
  *
  * Also provides per-user browser isolation for multi-user deployment.
+ * On Linux VPS (no display), auto-starts Xvfb for headful browser sessions.
  */
 
 import puppeteer from 'puppeteer-core';
 import { join } from 'path';
 import { mkdir, rm, readdir } from 'fs/promises';
+import { execSync, spawn } from 'child_process';
+
+// ── Xvfb (Virtual Display) for headless VPS ─────────────
+let xvfbProcess = null;
+const XVFB_DISPLAY = ':99';
+
+/**
+ * Ensure a virtual display is available on Linux when no DISPLAY is set.
+ * Starts Xvfb on :99 if needed. Only runs on Linux (VPS).
+ */
+function ensureDisplay() {
+    // Only needed on Linux (VPS) — macOS/Windows have native displays
+    if (process.platform !== 'linux') return;
+
+    // Already has a display (e.g. desktop Linux)
+    if (process.env.DISPLAY) return;
+
+    // Xvfb already running
+    if (xvfbProcess && !xvfbProcess.killed) {
+        process.env.DISPLAY = XVFB_DISPLAY;
+        return;
+    }
+
+    try {
+        // Check if Xvfb is installed
+        execSync('which Xvfb', { stdio: 'ignore' });
+    } catch {
+        console.warn('[BrowserManager] ⚠️ Xvfb not installed. Run: sudo apt-get install -y xvfb');
+        throw new Error('Xvfb is required for headful browser on VPS. Install with: sudo apt-get install -y xvfb');
+    }
+
+    // Kill any stale Xvfb on :99
+    try { execSync(`kill $(cat /tmp/.X99-lock 2>/dev/null) 2>/dev/null || true`, { stdio: 'ignore' }); } catch { /* ok */ }
+
+    console.log('[BrowserManager] Starting Xvfb virtual display on :99...');
+    xvfbProcess = spawn('Xvfb', [XVFB_DISPLAY, '-screen', '0', '1280x1024x24', '-ac'], {
+        stdio: 'ignore',
+        detached: true,
+    });
+
+    xvfbProcess.on('error', (err) => {
+        console.error('[BrowserManager] Xvfb error:', err.message);
+        xvfbProcess = null;
+    });
+
+    xvfbProcess.unref();
+
+    // Give Xvfb a moment to start
+    execSync('sleep 0.5');
+
+    process.env.DISPLAY = XVFB_DISPLAY;
+    console.log('[BrowserManager] ✅ Xvfb started on', XVFB_DISPLAY);
+}
 
 // ── Config ──────────────────────────────────────────────
 export const CHROME_PATH = process.env.CHROME_PATH
@@ -70,6 +124,9 @@ async function cleanupProfiles() {
  * @returns {{ browser: Browser, profileDir: string }}
  */
 export async function acquireBrowser(key, opts = {}) {
+    // If headful mode requested, ensure virtual display on VPS
+    if (opts.headless === false) ensureDisplay();
+
     // Close any existing browser for this key
     await releaseBrowser(key);
 
@@ -123,6 +180,9 @@ export async function acquireBrowser(key, opts = {}) {
  * @returns {{ browser: Browser, profileDir: string }}
  */
 export async function launchTempBrowser(opts = {}) {
+    // If headful mode requested, ensure virtual display on VPS
+    if (opts.headless === false) ensureDisplay();
+
     const profileDir = await createShortProfileDir();
 
     const userArgs = opts.args || [];
