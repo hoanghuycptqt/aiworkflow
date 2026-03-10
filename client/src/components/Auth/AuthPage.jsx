@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { api } from '../../services/api.js';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { api, SERVER } from '../../services/api.js';
 import toast from 'react-hot-toast';
 
 export default function AuthPage({ onLogin }) {
@@ -9,6 +9,52 @@ export default function AuthPage({ onLogin }) {
     const [verificationSent, setVerificationSent] = useState(false);
     const [verifyStatus, setVerifyStatus] = useState(null); // null | 'success' | 'error'
     const [unverifiedEmail, setUnverifiedEmail] = useState('');
+    const googleBtnRef = useRef(null);
+    const googleInitRef = useRef(false);
+
+    // Initialize Google Sign-In
+    useEffect(() => {
+        if (googleInitRef.current) return;
+
+        function initGoogle() {
+            if (!window.google?.accounts?.id) {
+                // GIS script not loaded yet, retry
+                setTimeout(initGoogle, 200);
+                return;
+            }
+            googleInitRef.current = true;
+            window.google.accounts.id.initialize({
+                client_id: '691523742369-iajbsntm2pq5qso2ar37rg11l8m6545p.apps.googleusercontent.com',
+                callback: handleGoogleResponse,
+            });
+            if (googleBtnRef.current) {
+                window.google.accounts.id.renderButton(googleBtnRef.current, {
+                    theme: 'filled_black',
+                    size: 'large',
+                    width: '100%',
+                    text: 'signin_with',
+                    shape: 'rectangular',
+                });
+            }
+        }
+        initGoogle();
+    }, []);
+
+    async function handleGoogleResponse(response) {
+        try {
+            const data = await api.request('/auth/google', {
+                method: 'POST',
+                body: JSON.stringify({ credential: response.credential }),
+            });
+            if (data.token) {
+                localStorage.setItem('vcw_token', data.token);
+                toast.success(`Welcome, ${data.user.name}!`);
+                onLogin(data);
+            }
+        } catch (err) {
+            toast.error(err.message || 'Google login failed');
+        }
+    }
 
     // Handle /auth/verify?token=xxx
     useEffect(() => {
@@ -178,6 +224,14 @@ export default function AuthPage({ onLogin }) {
                         {isLogin ? 'Sign In' : 'Create Account'}
                     </button>
                 </form>
+
+                {/* Google Sign-In */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '16px 0 12px' }}>
+                    <div style={{ flex: 1, height: 1, background: 'var(--border-primary)' }} />
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>or</span>
+                    <div style={{ flex: 1, height: 1, background: 'var(--border-primary)' }} />
+                </div>
+                <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center' }} />
 
                 {unverifiedEmail && (
                     <div style={{ marginTop: 16, padding: 12, background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: 8, textAlign: 'center' }}>
