@@ -91,45 +91,37 @@ router.post('/token', async (req, res) => {
         expiresIn = payload.exp - now;
         tokenValid = expiresIn > 0;
     } else if (credential.provider === 'google-flow') {
-        // Non-JWT token (ya29.*) — validate via API call or trust recent refresh
+        // Always validate via real API call — tokens can be revoked before expiry
         const meta = credential.metadata ? JSON.parse(credential.metadata) : {};
 
-        // If we have tokenExpiresAt from session API, use that
+        // Use tokenExpiresAt only for display (expiresIn), NOT for validity
         if (meta.tokenExpiresAt) {
             const expiry = new Date(meta.tokenExpiresAt).getTime();
             expiresIn = Math.floor((expiry - Date.now()) / 1000);
-            tokenValid = expiresIn > 0;
-        }
-        // If refreshed recently (within 5 min), trust the token
-        else if (meta.lastRefreshed) {
-            const refreshedAt = new Date(meta.lastRefreshed).getTime();
-            if (Date.now() - refreshedAt < 5 * 60 * 1000) {
-                tokenValid = true;
-            }
+            if (expiresIn < 0) expiresIn = 0;
         }
 
-        if (!tokenValid && !meta.tokenExpiresAt) {
-            try {
-                const headers = {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${credential.token}`,
-                    'Origin': 'https://labs.google',
-                    'Referer': 'https://labs.google/',
-                };
-                if (meta.sessionCookies) {
-                    headers['Cookie'] = meta.sessionCookies;
-                }
-                const testRes = await fetch('https://aisandbox-pa.googleapis.com/v1/flow/uploadImage', {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({}),
-                });
-                tokenValid = testRes.status !== 401 && testRes.status !== 403;
-                console.log(`[CredCheck] Google Flow API test: status=${testRes.status}, valid=${tokenValid}`);
-            } catch (e) {
-                console.log(`[CredCheck] Google Flow API test failed: ${e.message}`);
-                tokenValid = false;
+        // Always test the token via actual API call
+        try {
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${credential.token}`,
+                'Origin': 'https://labs.google',
+                'Referer': 'https://labs.google/',
+            };
+            if (meta.sessionCookies) {
+                headers['Cookie'] = meta.sessionCookies;
             }
+            const testRes = await fetch('https://aisandbox-pa.googleapis.com/v1/flow/uploadImage', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({}),
+            });
+            tokenValid = testRes.status !== 401 && testRes.status !== 403;
+            console.log(`[CredCheck] Google Flow API test: status=${testRes.status}, valid=${tokenValid}`);
+        } catch (e) {
+            console.log(`[CredCheck] Google Flow API test failed: ${e.message}`);
+            tokenValid = false;
         }
     }
 
