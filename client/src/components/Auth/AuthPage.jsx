@@ -47,7 +47,7 @@ export default function AuthPage({ onLogin }) {
                 body: JSON.stringify({ credential: response.credential }),
             });
             if (data.token) {
-                localStorage.setItem('vcw_token', data.token);
+                api.setToken(data.token);
                 toast.success(`Welcome, ${data.user.name}!`);
                 onLogin(data);
             }
