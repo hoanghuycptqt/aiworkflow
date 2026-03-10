@@ -225,8 +225,8 @@ class ApiClient {
         });
     }
 
-    async getJobHistory(workflowId) {
-        return this.request(`/executions/${workflowId}/job-history`);
+    async getJobHistory(workflowId, limit = 10, offset = 0) {
+        return this.request(`/executions/${workflowId}/job-history?limit=${limit}&offset=${offset}`);
     }
 
     async deleteExecution(executionId) {

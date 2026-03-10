@@ -210,7 +210,7 @@ router.post('/batch/:batchId/cancel', async (req, res, next) => {
     }
 });
 
-// GET /api/executions/:workflowId/job-history — flat list of all job executions
+// GET /api/executions/:workflowId/job-history — flat list of all job executions (paginated)
 router.get('/:workflowId/job-history', async (req, res, next) => {
     try {
         const workflow = await prisma.workflow.findFirst({
@@ -218,14 +218,26 @@ router.get('/:workflowId/job-history', async (req, res, next) => {
         });
         if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
 
-        // Get all executions that belong to a job (have jobId)
+        const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+        const offset = parseInt(req.query.offset) || 0;
+
+        // Get total count for hasMore
+        const total = await prisma.workflowExecution.count({
+            where: {
+                workflowId: req.params.workflowId,
+                jobId: { not: null },
+            },
+        });
+
+        // Get paginated executions
         const executions = await prisma.workflowExecution.findMany({
             where: {
                 workflowId: req.params.workflowId,
                 jobId: { not: null },
             },
             orderBy: { startedAt: 'desc' },
-            take: 100,
+            take: limit,
+            skip: offset,
             include: {
                 nodeExecutions: {
                     select: {
@@ -252,6 +264,8 @@ router.get('/:workflowId/job-history', async (req, res, next) => {
         const batchMap = new Map(batches.map(b => [b.id, b]));
 
         res.json({
+            total,
+            hasMore: offset + limit < total,
             executions: executions.map(e => {
                 const job = e.jobId ? jobMap.get(e.jobId) : null;
                 const batch = e.jobBatchId ? batchMap.get(e.jobBatchId) : null;

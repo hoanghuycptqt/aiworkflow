@@ -17,8 +17,11 @@ export default function JobMonitor({ workflowId }) {
     const [expandedJob, setExpandedJob] = useState(null);
     const [expandedNode, setExpandedNode] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(false);
+    const [totalCount, setTotalCount] = useState(0);
     const [gallery, setGallery] = useState(null);
-    const [confirmDelete, setConfirmDelete] = useState(null); // executionId to confirm
+    const [confirmDelete, setConfirmDelete] = useState(null);
     const notifiedRef = useRef(new Set());
 
     // Load all job executions
@@ -85,14 +88,23 @@ export default function JobMonitor({ workflowId }) {
         return () => { unsubJob(); unsubExec(); };
     }, [workflowId]);
 
-    async function loadHistory() {
+    async function loadHistory(append = false) {
         try {
-            const data = await api.getJobHistory(workflowId);
-            setExecutions(data.executions || []);
+            const offset = append ? executions.length : 0;
+            if (append) setLoadingMore(true);
+            const data = await api.getJobHistory(workflowId, 10, offset);
+            if (append) {
+                setExecutions(prev => [...prev, ...(data.executions || [])]);
+            } else {
+                setExecutions(data.executions || []);
+            }
+            setHasMore(data.hasMore || false);
+            setTotalCount(data.total || 0);
         } catch (err) {
             toast.error('Failed to load job history');
         }
         setLoading(false);
+        setLoadingMore(false);
     }
 
     async function stopBatch(batchId) {
@@ -225,7 +237,7 @@ export default function JobMonitor({ workflowId }) {
                                                 fontSize: 22, border: '1px solid var(--border-primary)',
                                             }}>🎬</div>
                                         ) : (
-                                            <img src={outputMedia[0].url} alt="" style={{
+                                            <img src={outputMedia[0].url} alt="" loading="lazy" style={{
                                                 width: 56, height: 56, borderRadius: 6,
                                                 objectFit: 'cover', flexShrink: 0,
                                                 border: '1px solid var(--border-primary)',
@@ -431,6 +443,25 @@ export default function JobMonitor({ workflowId }) {
                         );
                     })}
                 </div>
+
+                {/* Load More Button */}
+                {hasMore && (
+                    <div style={{ textAlign: 'center', padding: '12px 0' }}>
+                        <button
+                            className="btn btn-sm"
+                            onClick={() => loadHistory(true)}
+                            disabled={loadingMore}
+                            style={{
+                                padding: '8px 24px', fontSize: 13,
+                                background: 'var(--bg-tertiary)',
+                                border: '1px solid var(--border-primary)',
+                                opacity: loadingMore ? 0.6 : 1,
+                            }}
+                        >
+                            {loadingMore ? '⏳ Loading...' : `📜 Load More (${executions.length}/${totalCount})`}
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Gallery Lightbox */}
@@ -544,7 +575,7 @@ function formatValue(key, value) {
                     <a href={`${SERVER}${value}`} target="_blank" rel="noreferrer"
                         style={{ color: '#60a5fa', textDecoration: 'none' }}>{displayUrl}</a>
                     {/\.(jpg|jpeg|png|webp|gif)/i.test(value) && (
-                        <img src={`${SERVER}${value}`} alt="" style={{
+                        <img src={`${SERVER}${value}`} alt="" loading="lazy" style={{
                             display: 'block', marginTop: 4,
                             maxWidth: 120, maxHeight: 80,
                             borderRadius: 4, border: '1px solid var(--border-primary)',
