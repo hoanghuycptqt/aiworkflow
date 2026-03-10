@@ -265,29 +265,42 @@ router.get('/:workflowId/job-history', async (req, res, next) => {
             : [];
 
         // Extract thumbnail URLs per execution
-        const thumbnailMap = new Map(); // executionId -> { thumbnailUrl, mediaCount }
+        const thumbnailMap = new Map();
         for (const mn of mediaNodes) {
             let output;
             try { output = typeof mn.outputData === 'string' ? JSON.parse(mn.outputData) : mn.outputData; } catch { continue; }
             if (!output) continue;
 
             if (!thumbnailMap.has(mn.executionId)) {
-                thumbnailMap.set(mn.executionId, { urls: [], types: [] });
+                thumbnailMap.set(mn.executionId, { urls: [] });
             }
             const entry = thumbnailMap.get(mn.executionId);
 
-            if (output.imageUrl) entry.urls.push({ url: output.imageUrl, type: 'image' });
-            if (output.videoUrl) entry.urls.push({ url: output.videoUrl, type: 'video' });
+            // Prefer local paths over external URLs (Google signed URLs expire after ~24h)
+            if (output.imageUrl) {
+                const url = output.imagePath ? `/${output.imagePath}` : output.imageUrl;
+                entry.urls.push({ url, type: 'image' });
+            }
+            if (output.videoUrl || output.videoPath) {
+                const url = output.videoPath ? `/${output.videoPath}` : output.videoUrl;
+                entry.urls.push({ url, type: 'video' });
+            }
             if (output.fileUrl && !output.imageUrl && !output.videoUrl) {
                 const ext = (output.fileName || output.fileUrl || '').split('.').pop()?.toLowerCase();
                 const isVideo = ['mp4', 'webm', 'mov'].includes(ext);
                 const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
-                if (isVideo || isImage) entry.urls.push({ url: output.fileUrl, type: isVideo ? 'video' : 'image' });
+                if (isVideo || isImage) {
+                    const url = output.filePath ? `/${output.filePath}` : output.fileUrl;
+                    entry.urls.push({ url, type: isVideo ? 'video' : 'image' });
+                }
             }
             for (const arrKey of ['allImages', 'savedImages']) {
                 if (Array.isArray(output[arrKey])) {
                     for (const item of output[arrKey]) {
-                        if (item.imageUrl) entry.urls.push({ url: item.imageUrl, type: 'image' });
+                        if (item.imageUrl) {
+                            const url = item.imagePath ? `/${item.imagePath}` : item.imageUrl;
+                            entry.urls.push({ url, type: 'image' });
+                        }
                     }
                 }
             }
