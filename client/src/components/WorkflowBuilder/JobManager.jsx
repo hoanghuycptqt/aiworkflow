@@ -212,9 +212,9 @@ export default function JobManager({ workflowId, onRunBatch }) {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {/* Job List + Editor */}
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            <div className="job-manager-layout" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
                 {/* Job List (left) */}
-                <div style={{
+                <div className="job-list-panel" style={{
                     width: 320,
                     borderRight: '1px solid var(--border-primary)',
                     display: 'flex',
@@ -347,7 +347,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                 </div>
 
                 {/* Job Editor (right) */}
-                <div style={{ flex: 1, overflow: 'auto', padding: 20, background: 'var(--bg-secondary)' }}>
+                <div className="job-editor-panel" style={{ flex: 1, overflow: 'auto', padding: 20, background: 'var(--bg-secondary)' }}>
                     {!selectedJob ? (
                         <div style={{
                             display: 'flex',
@@ -492,7 +492,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
             </div>
 
             {/* Run Controls (bottom bar) */}
-            <div style={{
+            <div className="job-run-bar" style={{
                 padding: '12px 20px',
                 borderTop: '2px solid var(--border-primary)',
                 background: 'var(--bg-tertiary)',

@@ -1926,4 +1926,85 @@ body {
     padding: 5px 10px;
     font-size: 12px;
   }
+
+  /* ─── Admin Dashboard ──────── */
+  .stat-cards {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .stat-card {
+    padding: 14px;
+  }
+
+  .stat-icon {
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+
+  .stat-value {
+    font-size: 22px;
+  }
+
+  .admin-card {
+    padding: 16px;
+  }
+
+  .admin-card h3 {
+    font-size: 14px;
+  }
+
+  .admin-grid-2 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .chart-container {
+    gap: 6px;
+    height: 120px;
+  }
+
+  /* ─── User Management ──────── */
+  .um-toolbar {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .um-search {
+    min-width: unset;
+  }
+
+  .um-table th,
+  .um-table td {
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+
+  /* ─── Job Manager ──────── */
+  .job-manager-layout {
+    flex-direction: column;
+  }
+
+  .job-list-panel {
+    width: 100% !important;
+    max-height: 200px;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border-primary);
+  }
+
+  .job-editor-panel {
+    padding: 16px !important;
+  }
+
+  .job-run-bar {
+    flex-wrap: wrap;
+    gap: 8px !important;
+    padding: 10px 12px !important;
+  }
+
+  .job-run-bar .mode-toggle,
+  .job-run-bar .concurrency-control {
+    flex: 1;
+    min-width: 0;
+  }
 }
