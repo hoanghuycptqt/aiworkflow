@@ -6,7 +6,7 @@
  */
 
 import { AITextConnector } from './ai-text/connector.js';
-import { GeminiConnector } from './gemini/connector.js';
+
 import { GoogleFlowImageConnector, GoogleFlowVideoConnector } from './google-flow/connector.js';
 import { FileUploadConnector, FileDownloadConnector } from './file-handler/connector.js';
 import { DelayConnector, TextTemplateConnector } from './utilities/connector.js';
@@ -32,7 +32,6 @@ export function getAllConnectorMetadata() {
 
 // Register all built-in connectors
 register('ai-text', new AITextConnector());
-register('gemini', new GeminiConnector());
 register('google-flow-image', new GoogleFlowImageConnector());
 register('google-flow-video', new GoogleFlowVideoConnector());
 register('chatgpt-note', new ChatGPTNoteConnector());

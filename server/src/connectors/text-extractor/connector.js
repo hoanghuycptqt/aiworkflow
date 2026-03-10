@@ -119,10 +119,13 @@ export class TextExtractorConnector extends BaseConnector {
 
         // Clean up: remove leading/trailing markdown artifacts and quotes
         extracted = extracted
+            .replace(/^```(?:json|text|plaintext)?\s*\n?/i, '')  // leading ```json or ```
+            .replace(/\n?```\s*$/i, '')                          // trailing ```
             .replace(/^\s*\*\*\s*/, '')   // leading **
             .replace(/\s*\*\*\s*$/, '')   // trailing **
             .replace(/^\s*---+\s*/, '')   // leading ---
             .replace(/\s*---+\s*$/, '')   // trailing ---
+            .replace(/^\s*json\s*\n/i, '') // leading standalone "json" word (from code blocks)
             .replace(/^\s*[""\u201C\u201D]+\s*/, '')  // leading quotes " " "
             .replace(/\s*[""\u201C\u201D]+\s*$/, '')  // trailing quotes " " "
             .trim();
