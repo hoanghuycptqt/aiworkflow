@@ -106,9 +106,10 @@ export default function CredentialsPage() {
         try {
             const data = await api.getCredentials();
             setCredentials(data.credentials);
-            // Auto-check token status for ChatGPT and Google Flow credentials
+            // Auto-check token status for Google Flow credentials only
+            // ChatGPT uses cookies only — no token check needed
             for (const cred of data.credentials) {
-                if (cred.provider === 'chatgpt' || cred.provider === 'google-flow') {
+                if (cred.provider === 'google-flow') {
                     checkTokenStatus(cred.id, cred.provider);
                 }
             }
