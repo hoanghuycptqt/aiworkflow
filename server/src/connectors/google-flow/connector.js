@@ -241,17 +241,27 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
     console.log(`[FlowImage] Generating ${count} image(s), model=${modelName}, ratio=${aspectRatio}...`);
     console.log(`[FlowImage] Request body:`, JSON.stringify(body, null, 2));
 
-    const res = await fetch(
-        `${API_BASE}/v1/projects/${projectId}/flowMedia:batchGenerateImages`,
-        {
-            method: 'POST',
-            headers: buildHeaders(token),
-            body: JSON.stringify(body),
-        }
-    );
+    let res;
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        res = await fetch(
+            `${API_BASE}/v1/projects/${projectId}/flowMedia:batchGenerateImages`,
+            {
+                method: 'POST',
+                headers: buildHeaders(token),
+                body: JSON.stringify(body),
+            }
+        );
 
-    if (!res.ok) {
+        if (res.ok) break;
+
         const errText = await res.text();
+        // Only retry on 5xx server errors
+        if (res.status >= 500 && attempt < MAX_RETRIES) {
+            console.log(`[FlowImage] ⚠️ Server error ${res.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
+            await new Promise(r => setTimeout(r, 3000)); // wait 3s before retry
+            continue;
+        }
         throw new Error(`Generation failed (${res.status}): ${errText.substring(0, 400)}`);
     }
 
@@ -778,23 +788,32 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         console.log(`[FlowVideo] Submitting video generation, model=${videoModelKey}, aspect=${aspectRatio}, startFrame=${!!startFrameMediaId}...`);
         console.log('[FlowVideo] Request body:', JSON.stringify(body, null, 2).substring(0, 1000));
 
-        const res = await fetch(
-            `${API_BASE}/v1/video:batchAsyncGenerateVideoStartImage`,
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/plain;charset=UTF-8',
-                    'Authorization': `Bearer ${token}`,
-                    'Origin': 'https://labs.google',
-                    'Referer': 'https://labs.google/',
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                },
-                body: JSON.stringify(body),
-            }
-        );
+        let res;
+        const MAX_RETRIES = 2;
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            res = await fetch(
+                `${API_BASE}/v1/video:batchAsyncGenerateVideoStartImage`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/plain;charset=UTF-8',
+                        'Authorization': `Bearer ${token}`,
+                        'Origin': 'https://labs.google',
+                        'Referer': 'https://labs.google/',
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    },
+                    body: JSON.stringify(body),
+                }
+            );
 
-        if (!res.ok) {
+            if (res.ok) break;
+
             const errText = await res.text();
+            if (res.status >= 500 && attempt < MAX_RETRIES) {
+                console.log(`[FlowVideo] ⚠️ Server error ${res.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
+                await new Promise(r => setTimeout(r, 3000));
+                continue;
+            }
             throw new Error(`Video generation failed (${res.status}): ${errText.substring(0, 400)}`);
         }
 
