@@ -20,20 +20,11 @@ export default function CredentialsPage() {
 
     const checkTokenStatus = async (credId, provider) => {
         try {
-            if (provider === 'chatgpt') {
-                const res = await api.request('/chatgpt-auth/check', {
-                    method: 'POST',
-                    body: JSON.stringify({ credentialId: credId }),
-                });
-                setTokenStatus(prev => ({ ...prev, [credId]: res }));
-            } else {
-                // Lightweight JWT-only check for google-flow and others
-                const res = await api.request('/credential-check/token', {
-                    method: 'POST',
-                    body: JSON.stringify({ credentialId: credId }),
-                });
-                setTokenStatus(prev => ({ ...prev, [credId]: { ...res, tokenOnly: true } }));
-            }
+            const res = await api.request('/credential-check/token', {
+                method: 'POST',
+                body: JSON.stringify({ credentialId: credId }),
+            });
+            setTokenStatus(prev => ({ ...prev, [credId]: res }));
         } catch (e) { /* ignore */ }
     };
 
