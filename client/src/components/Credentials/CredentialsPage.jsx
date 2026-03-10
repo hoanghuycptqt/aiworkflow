@@ -119,8 +119,22 @@ export default function CredentialsPage() {
     }
 
     async function saveCredential() {
-        if (!form.label.trim() || !form.token.trim()) {
-            toast.error('Label and token are required');
+        if (!form.label.trim()) {
+            toast.error('Label is required');
+            return;
+        }
+        // ChatGPT: require cookies, not token
+        if (form.provider === 'chatgpt') {
+            if (!form.metadata?.cookies?.trim()) {
+                toast.error('Browser cookies are required for ChatGPT');
+                return;
+            }
+            // Auto-set placeholder token since ChatGPT uses cookies only
+            if (!form.token.trim()) {
+                form.token = 'cookies-only';
+            }
+        } else if (!form.token.trim()) {
+            toast.error('Token is required');
             return;
         }
 
@@ -206,12 +220,8 @@ export default function CredentialsPage() {
                                         <p>{provider.label} · Added {new Date(cred.createdAt).toLocaleDateString('vi-VN')}</p>
                                         {cred.provider === 'chatgpt' && status && (
                                             <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.6 }}>
-                                                <span style={{ color: status.tokenValid ? '#4ade80' : '#f87171', fontWeight: 500 }}>
-                                                    {status.tokenValid ? `🔑 Token: ✅ ${status.expiresInHuman}` : '🔑 Token: ❌ EXPIRED'}
-                                                </span>
-                                                <br />
-                                                <span style={{ color: status.sessionValid ? '#4ade80' : '#f87171', fontWeight: 500 }}>
-                                                    {status.sessionValid ? '🍪 Session: ✅ Active' : '🍪 Session: ❌ Invalid'}
+                                                <span style={{ color: cred.metadata?.cookies ? '#4ade80' : '#f87171', fontWeight: 500 }}>
+                                                    {cred.metadata?.cookies ? '🍪 Cookies: ✅ Configured' : '🍪 Cookies: ❌ Missing'}
                                                 </span>
                                                 {cred.metadata?.lastRefreshed && (
                                                     <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>
@@ -329,16 +339,16 @@ export default function CredentialsPage() {
                             ) : form.provider === 'chatgpt' ? (
                                 <>
                                     <div className="form-group">
-                                        <label className="form-label">Access Token (Bearer)</label>
+                                        <label className="form-label">Browser Cookies 🍪 <span style={{ color: '#f87171', fontSize: 11 }}>(required)</span></label>
                                         <textarea
                                             className="textarea"
-                                            placeholder={'Paste your ChatGPT access token here...\n\n📝 How to get:\n1. Open chatgpt.com → F12 → Network tab\n2. Find any API request to backend-api/\n3. Copy the Authorization: Bearer ... value'}
-                                            value={form.token}
-                                            onChange={(e) => setForm({ ...form, token: e.target.value })}
-                                            style={{ minHeight: 120 }}
+                                            placeholder={'Paste ALL cookies from chatgpt.com here...\n\n📝 How to get:\n1. Open chatgpt.com → F12 → Application tab\n2. Click Cookies → chatgpt.com (left sidebar)\n3. Select all rows → Right click → Copy all\n\nOr via Network tab:\n1. Click any request to backend-api/\n2. In Headers → find "Cookie:" → copy full value'}
+                                            value={form.metadata?.cookies || ''}
+                                            onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, cookies: e.target.value } })}
+                                            style={{ minHeight: 140, fontSize: 11 }}
                                         />
                                         <span className="form-hint">
-                                            Get from DevTools → Network → Any request to backend-api → Authorization header
+                                            ⚠️ Must paste ALL cookies (including cf_clearance, oai-sc, session-token, etc.). Do NOT shorten.
                                         </span>
                                     </div>
                                     <div className="form-group">
@@ -352,19 +362,6 @@ export default function CredentialsPage() {
                                         />
                                         <span className="form-hint">
                                             Optional — found in oai-device-id header. Auto-generated if left empty.
-                                        </span>
-                                    </div>
-                                    <div className="form-group">
-                                        <label className="form-label">Browser Cookies 🍪</label>
-                                        <textarea
-                                            className="textarea"
-                                            placeholder={'Paste cookies from browser here...\n\n📝 How to get:\n1. Open chatgpt.com → F12 → Network tab\n2. Click any request to backend-api/\n3. In Headers → find "Cookie:" → copy full value'}
-                                            value={form.metadata?.cookies || ''}
-                                            onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, cookies: e.target.value } })}
-                                            style={{ minHeight: 100, fontSize: 11 }}
-                                        />
-                                        <span className="form-hint">
-                                            Required for Cloudflare bypass. Expires after a few hours — update when needed.
                                         </span>
                                     </div>
                                 </>
