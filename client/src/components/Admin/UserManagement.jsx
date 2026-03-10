@@ -123,7 +123,7 @@ export default function UserManagement() {
                     <option value="active">Active</option>
                     <option value="disabled">Disabled</option>
                 </select>
-                <button className="btn-primary" onClick={openCreate}>+ New User</button>
+                <button className="btn btn-primary" onClick={openCreate}>+ New User</button>
             </div>
 
             <div className="um-count">{total} user{total !== 1 ? 's' : ''}</div>
@@ -216,8 +216,8 @@ export default function UserManagement() {
                                 </div>
                             )}
                             <div className="modal-actions">
-                                <button type="button" className="btn-secondary" onClick={() => setModal(null)}>Cancel</button>
-                                <button type="submit" className="btn-primary">
+                                <button type="button" className="btn" onClick={() => setModal(null)}>Cancel</button>
+                                <button type="submit" className="btn btn-primary">
                                     {modal.mode === 'create' ? 'Create' : modal.mode === 'edit' ? 'Save' : 'Reset'}
                                 </button>
                             </div>
