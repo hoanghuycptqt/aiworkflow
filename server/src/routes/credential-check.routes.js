@@ -106,6 +106,17 @@ router.post('/token', async (req, res) => {
 
     const overallValid = tokenValid && hasSession;
 
+    // For google-flow ya29.* tokens: estimate expiry as lastRefreshed + 1 hour
+    if (credential.provider === 'google-flow' && expiresIn === 0) {
+        const gfMeta2 = credential.metadata ? JSON.parse(credential.metadata) : {};
+        if (gfMeta2.lastRefreshed) {
+            const refreshedAt = new Date(gfMeta2.lastRefreshed).getTime();
+            const estimatedExpiry = refreshedAt + 3600 * 1000; // 1 hour
+            expiresIn = Math.floor((estimatedExpiry - Date.now()) / 1000);
+            if (expiresIn < 0) expiresIn = 0;
+        }
+    }
+
     const hours = Math.floor(Math.max(0, expiresIn) / 3600);
     const mins = Math.floor((Math.max(0, expiresIn) % 3600) / 60);
 
@@ -116,7 +127,7 @@ router.post('/token', async (req, res) => {
         tokenValid,
         hasSession,
         reason: !tokenValid ? 'token_expired' : (!hasSession ? 'no_session' : null),
-        expiresAt: payload?.exp ? new Date(payload.exp * 1000).toISOString() : null,
+        expiresAt: payload?.exp ? new Date(payload.exp * 1000).toISOString() : (expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null),
         expiresIn,
         expiresInHuman: overallValid ? (expiresIn > 0 ? `${hours}h ${mins}m` : 'Active') : (!tokenValid ? 'EXPIRED' : 'No Session'),
     });

@@ -223,7 +223,7 @@ export default function CredentialsPage() {
                                         {cred.provider === 'google-flow' && status && (
                                             <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.6 }}>
                                                 <span style={{ color: status.tokenValid ? '#4ade80' : '#f87171', fontWeight: 500 }}>
-                                                    {status.tokenValid ? '🔑 Token: ✅ Valid' : '🔑 Token: ❌ Invalid'}
+                                                    {status.tokenValid ? `🔑 Token: ✅ ${status.expiresInHuman || 'Valid'}` : '🔑 Token: ❌ Invalid'}
                                                 </span>
                                                 <br />
                                                 <span style={{ color: status.hasSession ? '#4ade80' : '#f87171', fontWeight: 500 }}>
