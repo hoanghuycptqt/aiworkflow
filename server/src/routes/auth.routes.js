@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { prisma } from '../index.js';
 import { generateToken, hashPassword, comparePassword } from '../services/auth.service.js';
-import { sendVerificationEmail } from '../services/email.service.js';
+import { sendVerificationEmail, sendWelcomeEmail } from '../services/email.service.js';
 import { OAuth2Client } from 'google-auth-library';
 
 const router = Router();
@@ -139,6 +139,10 @@ router.get('/verify', async (req, res, next) => {
             data: { isVerified: true, verificationToken: null },
         });
 
+        // Send welcome email (non-blocking)
+        const fullUser = await prisma.user.findUnique({ where: { id: user.id }, select: { email: true, name: true } });
+        if (fullUser) sendWelcomeEmail(fullUser.email, fullUser.name).catch(() => { });
+
         res.json({ message: 'Email verified successfully! You can now log in.', verified: true });
     } catch (err) {
         next(err);
@@ -240,6 +244,9 @@ router.post('/google', async (req, res, next) => {
                 select: { id: true, email: true, name: true, role: true },
             });
             console.log(`[Auth] New Google user created: ${email} (${role})`);
+
+            // Send welcome email (non-blocking)
+            sendWelcomeEmail(email, user.name).catch(() => { });
         }
 
         const token = generateToken(user.id);
