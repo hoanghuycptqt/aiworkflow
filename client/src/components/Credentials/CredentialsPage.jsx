@@ -5,6 +5,7 @@ import TelegramLink from '../Settings/TelegramLink.jsx';
 
 const PROVIDERS = [
     { id: 'openrouter', label: 'OpenRouter', icon: '🔀', description: 'AI via OpenRouter — supports Gemini, Llama, DeepSeek & more' },
+    { id: 'gemini', label: 'Google Gemini', icon: '✨', description: 'Official Google Gemini API — Gemini 3 Flash & Pro' },
     { id: 'google-flow', label: 'Google Flow', icon: '🎬', description: 'Auth token for Google Flow (labs.google/fx)' },
     { id: 'chatgpt', label: 'ChatGPT', icon: '💬', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },
 ];
@@ -313,6 +314,20 @@ export default function CredentialsPage() {
                                     />
                                     <span className="form-hint">
                                         🔑 Get your free API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>openrouter.ai/keys</a>
+                                    </span>
+                                </div>
+                            ) : form.provider === 'gemini' ? (
+                                <div className="form-group">
+                                    <label className="form-label">Gemini API Key</label>
+                                    <input
+                                        className="input"
+                                        type="password"
+                                        placeholder="AIza... (from Google AI Studio)"
+                                        value={form.token}
+                                        onChange={(e) => setForm({ ...form, token: e.target.value })}
+                                    />
+                                    <span className="form-hint">
+                                        🔑 Get your API key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>aistudio.google.com/apikey</a>
                                     </span>
                                 </div>
                             ) : form.provider === 'chatgpt' ? (

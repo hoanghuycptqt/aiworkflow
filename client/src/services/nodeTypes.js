@@ -45,6 +45,31 @@ export const NODE_TYPES = {
         inputs: 1,
         outputs: 1,
     },
+    'gemini': {
+        type: 'gemini',
+        label: 'Google Gemini',
+        icon: '✨',
+        category: 'ai',
+        color: '#8b5cf6',
+        description: 'AI text generation & image analysis via Google Gemini API (official)',
+        configSchema: {
+            prompt: { type: 'textarea', label: 'Prompt', required: true, description: 'Use {{nodeId.field}} for dynamic values' },
+            systemInstruction: { type: 'textarea', label: 'System Instruction', description: 'Custom instructions for the AI.' },
+            model: {
+                type: 'select', label: 'Model',
+                options: [
+                    'gemini-3-flash-preview',
+                    'gemini-3-pro-preview',
+                ],
+                default: 'gemini-3-flash-preview',
+            },
+            temperature: { type: 'number', label: 'Temperature', default: 1.0, min: 0, max: 2, description: 'Gemini 3 recommends 1.0' },
+            includeImage: { type: 'boolean', label: 'Include Image from Previous Node', default: false },
+            credentialId: { type: 'credential', label: 'Credential', provider: 'gemini', required: true },
+        },
+        inputs: 1,
+        outputs: 1,
+    },
     'google-flow-image': {
         type: 'google-flow-image',
         label: 'Flow — Image',
