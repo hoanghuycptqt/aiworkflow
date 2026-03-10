@@ -39,7 +39,7 @@ export default function CredentialsPage() {
 
     const handleRefreshCredential = async (credId) => {
         setRefreshing(credId);
-        toast('🌐 Opening Chrome... Please log in to ChatGPT', { duration: 10000 });
+        toast('⏳ Auto-refreshing ChatGPT credentials...', { duration: 15000 });
         try {
             const res = await api.request('/chatgpt-auth/refresh', {
                 method: 'POST',
@@ -70,7 +70,7 @@ export default function CredentialsPage() {
 
     const handleRefreshGoogleFlow = async (credId) => {
         setRefreshing(credId);
-        toast('🌐 Opening Chrome... Please log in to Google and interact with Flow', { duration: 15000 });
+        toast('⏳ Auto-refreshing Google Flow credentials...', { duration: 15000 });
         try {
             const res = await api.request('/credential-check/google-flow-refresh', {
                 method: 'POST',
@@ -254,7 +254,7 @@ export default function CredentialsPage() {
                                             onClick={() => handleRefreshCredential(cred.id)}
                                             disabled={refreshing === cred.id}
                                         >
-                                            {refreshing === cred.id ? '⏳ Waiting for login...' : '🔄 Auto Refresh'}
+                                            {refreshing === cred.id ? '⏳ Refreshing...' : '🔄 Auto Refresh'}
                                         </button>
                                     )}
                                     {cred.provider === 'google-flow' && (
@@ -269,7 +269,7 @@ export default function CredentialsPage() {
                                             onClick={() => handleRefreshGoogleFlow(cred.id)}
                                             disabled={refreshing === cred.id}
                                         >
-                                            {refreshing === cred.id ? '⏳ Waiting for login...' : '🔄 Auto Refresh'}
+                                            {refreshing === cred.id ? '⏳ Refreshing...' : '🔄 Auto Refresh'}
                                         </button>
                                     )}
                                     <button className="btn btn-sm" onClick={() => openEdit(cred)}>Edit</button>

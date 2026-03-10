@@ -106,11 +106,30 @@ router.post('/token', async (req, res) => {
 // ─────────────────────────────────────────────────────────
 //  POST /api/credential-check/google-flow-refresh
 // ─────────────────────────────────────────────────────────
-//  Opens a VISIBLE Chrome window to labs.google/fx
-//  Intercepts network requests to capture Bearer token + projectId
+//  Headless auto-refresh: injects saved session cookies into
+//  invisible Chrome, navigates to Google Flow, intercepts
+//  the fresh Bearer token automatically. No user interaction.
 // ─────────────────────────────────────────────────────────
 
 import { acquireBrowser, releaseBrowser } from '../services/browser-manager.js';
+
+/**
+ * Parse a cookie string ("name1=val1; name2=val2") into Puppeteer cookie objects.
+ */
+function parseGoogleCookies(cookieStr) {
+    if (!cookieStr) return [];
+    return cookieStr.split(';').map(c => {
+        const trimmed = c.trim();
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx <= 0) return null;
+        return {
+            name: trimmed.substring(0, eqIdx).trim(),
+            value: trimmed.substring(eqIdx + 1).trim(),
+            domain: '.google',
+            path: '/',
+        };
+    }).filter(Boolean);
+}
 
 router.post('/google-flow-refresh', async (req, res) => {
     const { credentialId } = req.body;
@@ -127,28 +146,40 @@ router.post('/google-flow-refresh', async (req, res) => {
         return res.status(404).json({ error: 'Credential not found' });
     }
 
+    // Check if we have session cookies to inject
+    const existingMeta = credential.metadata ? JSON.parse(credential.metadata) : {};
+    if (!existingMeta.sessionCookies) {
+        return res.status(400).json({
+            error: 'No session cookies saved. Please manually update your Google Flow credential with a fresh Bearer token and cookies via the Edit form.',
+        });
+    }
+
     const browserKey = `gflow_refresh_${req.user.id}`;
 
-    console.log('[GoogleFlow Auth] Opening visible Chrome for login...');
+    console.log('[GoogleFlow Auth] Starting headless auto-refresh with saved session cookies...');
 
     let browser;
     try {
         const result = await acquireBrowser(browserKey, {
-            headless: false,
-            args: [
-                '--window-size=1200,800',
-                '--window-position=200,100',
-            ],
-            defaultViewport: null,
+            headless: 'new',
+            args: ['--disable-gpu'],
         });
         browser = result.browser;
 
         const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36');
 
         // Hide webdriver detection
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
+
+        // Inject saved session cookies BEFORE navigation
+        const cookieObjs = parseGoogleCookies(existingMeta.sessionCookies);
+        if (cookieObjs.length > 0) {
+            await page.setCookie(...cookieObjs);
+            console.log(`[GoogleFlow Auth] Injected ${cookieObjs.length} session cookies`);
+        }
 
         // Enable request interception to capture Bearer token
         let capturedToken = '';
@@ -179,103 +210,93 @@ router.post('/google-flow-refresh', async (req, res) => {
         });
 
         // Navigate to Google Flow
+        console.log('[GoogleFlow Auth] Navigating to Google Flow...');
         await page.goto('https://labs.google/fx/vi/tools/flow/', {
-            waitUntil: 'domcontentloaded',
+            waitUntil: 'networkidle2',
             timeout: 60000,
         });
 
-        console.log('[GoogleFlow Auth] Chrome opened. Navigate to Flow and interact to trigger API calls...');
+        // Wait for page to settle and trigger API calls
+        await new Promise(r => setTimeout(r, 5000));
 
-        // Poll for captured token
-        const MAX_WAIT = 300000; // 5 minutes
+        // If no token captured yet, try clicking around to trigger API calls
+        if (!capturedToken) {
+            console.log('[GoogleFlow Auth] No token from initial load, waiting more...');
+            await new Promise(r => setTimeout(r, 10000));
+        }
+
+        // Poll for captured token (shorter timeout since it should be automatic)
+        const MAX_WAIT = 60000; // 1 minute
         const POLL_INTERVAL = 2000;
         const startTime = Date.now();
 
-        while (Date.now() - startTime < MAX_WAIT) {
+        while (!capturedToken && Date.now() - startTime < MAX_WAIT) {
             await new Promise(r => setTimeout(r, POLL_INTERVAL));
-
-            // Check if browser was closed
-            try {
-                if (!browser.isConnected()) {
-                    return res.status(400).json({ error: 'Browser was closed before token was captured' });
-                }
-            } catch (e) {
-                return res.status(400).json({ error: 'Browser connection lost' });
-            }
-
             const elapsed = Math.round((Date.now() - startTime) / 1000);
             if (elapsed % 10 === 0) {
                 console.log(`[GoogleFlow Auth] Waiting for token... ${elapsed}s elapsed`);
             }
-
-            if (capturedToken) {
-                console.log('[GoogleFlow Auth] Token captured! Saving...');
-
-                // Try to extract projectId from page if not captured from request
-                if (!capturedProjectId) {
-                    try {
-                        const pageUrl = page.url();
-                        const urlMatch = pageUrl.match(/projects\/([^/]+)/);
-                        if (urlMatch) capturedProjectId = urlMatch[1];
-                    } catch (e) { /* ignore */ }
-                }
-
-                // Parse existing metadata
-                const existingMeta = credential.metadata ? JSON.parse(credential.metadata) : {};
-
-                // Capture session cookies from labs.google for video download
-                let sessionCookies = '';
-                try {
-                    const cookies = await page.cookies('https://labs.google');
-                    sessionCookies = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-                    console.log(`[GoogleFlow Auth] ✅ Captured ${cookies.length} cookies from labs.google`);
-                } catch (e) {
-                    console.warn('[GoogleFlow Auth] Could not capture cookies:', e.message);
-                }
-
-                // Update credential in database
-                await prisma.credential.update({
-                    where: { id: credentialId },
-                    data: {
-                        token: capturedToken,
-                        metadata: JSON.stringify({
-                            ...existingMeta,
-                            projectId: capturedProjectId || existingMeta.projectId || '',
-                            sessionCookies,
-                            lastRefreshed: new Date().toISOString(),
-                        }),
-                    },
-                });
-
-                // Decode JWT to get expiry
-                const payload = decodeJWT(capturedToken);
-                const expiresAt = payload?.exp ? new Date(payload.exp * 1000).toISOString() : null;
-
-                // Show success message in browser before closing
-                try {
-                    await page.evaluate(() => {
-                        document.title = '✅ Token captured! Closing in 3s...';
-                    });
-                } catch (e) { /* ignore */ }
-                await new Promise(r => setTimeout(r, 3000));
-
-                // Close browser
-                await releaseBrowser(browserKey);
-
-                console.log('[GoogleFlow Auth] ✅ Credentials saved successfully!');
-
-                return res.json({
-                    success: true,
-                    expiresAt,
-                    projectId: capturedProjectId || existingMeta.projectId || '',
-                });
-            }
         }
 
-        // Timeout
+        if (!capturedToken) {
+            await releaseBrowser(browserKey);
+            console.log('[GoogleFlow Auth] ❌ Could not capture token — session cookies may be expired');
+            return res.status(408).json({
+                error: 'Could not auto-refresh — session cookies may be expired. Please manually update credentials via the Edit form.',
+            });
+        }
+
+        console.log('[GoogleFlow Auth] Token captured! Saving...');
+
+        // Try to extract projectId from page URL
+        if (!capturedProjectId) {
+            try {
+                const pageUrl = page.url();
+                const urlMatch = pageUrl.match(/projects\/([^/]+)/);
+                if (urlMatch) capturedProjectId = urlMatch[1];
+            } catch (e) { /* ignore */ }
+        }
+
+        // Capture updated session cookies
+        let sessionCookies = existingMeta.sessionCookies;
+        try {
+            const cookies = await page.cookies('https://labs.google');
+            if (cookies.length > 0) {
+                sessionCookies = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+                console.log(`[GoogleFlow Auth] ✅ Updated ${cookies.length} session cookies`);
+            }
+        } catch (e) {
+            console.warn('[GoogleFlow Auth] Could not capture cookies:', e.message);
+        }
+
+        // Close browser
         await releaseBrowser(browserKey);
 
-        return res.status(408).json({ error: 'Timeout — no token captured. Make sure to interact with Google Flow to trigger API calls.' });
+        // Update credential in database
+        await prisma.credential.update({
+            where: { id: credentialId },
+            data: {
+                token: capturedToken,
+                metadata: JSON.stringify({
+                    ...existingMeta,
+                    projectId: capturedProjectId || existingMeta.projectId || '',
+                    sessionCookies,
+                    lastRefreshed: new Date().toISOString(),
+                }),
+            },
+        });
+
+        // Decode JWT to get expiry
+        const payload = decodeJWT(capturedToken);
+        const expiresAt = payload?.exp ? new Date(payload.exp * 1000).toISOString() : null;
+
+        console.log('[GoogleFlow Auth] ✅ Credentials saved successfully!');
+
+        return res.json({
+            success: true,
+            expiresAt,
+            projectId: capturedProjectId || existingMeta.projectId || '',
+        });
 
     } catch (e) {
         console.error('[GoogleFlow Auth] Error:', e.message);

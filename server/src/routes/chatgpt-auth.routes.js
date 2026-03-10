@@ -184,8 +184,9 @@ router.post('/check', async (req, res) => {
 // ─────────────────────────────────────────────────────────
 //  POST /api/chatgpt-auth/refresh
 // ─────────────────────────────────────────────────────────
-//  Opens a VISIBLE Chrome window for the user to log in.
-//  After login, captures token + cookies + deviceId.
+//  Headless auto-refresh: injects saved session cookies into
+//  invisible Chrome, navigates to ChatGPT, fetches a fresh
+//  access token automatically. No user interaction needed.
 // ─────────────────────────────────────────────────────────
 
 
@@ -204,19 +205,23 @@ router.post('/refresh', async (req, res) => {
         return res.status(404).json({ error: 'Credential not found' });
     }
 
+    // Check if we have session cookies to inject
+    const existingMeta = credential.metadata ? JSON.parse(credential.metadata) : {};
+    if (!existingMeta.cookies) {
+        return res.status(400).json({
+            error: 'No session cookies saved. Please manually update your ChatGPT credential with a fresh token and cookies via the Edit form.',
+        });
+    }
+
     const browserKey = `chatgpt_refresh_${req.user.id}`;
 
-    console.log('[ChatGPT Auth] Opening visible Chrome for login...');
+    console.log('[ChatGPT Auth] Starting headless auto-refresh with saved session cookies...');
 
     let browser;
     try {
         const result = await acquireBrowser(browserKey, {
-            headless: false,
-            args: [
-                '--window-size=1200,800',
-                '--window-position=200,100',
-            ],
-            defaultViewport: null,
+            headless: 'new',
+            args: ['--disable-gpu'],
         });
         browser = result.browser;
 
@@ -228,19 +233,24 @@ router.post('/refresh', async (req, res) => {
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
 
-        // DON'T inject old cookies — start fresh so user must actually log in
-        const existingMeta = credential.metadata ? JSON.parse(credential.metadata) : {};
-        const oldToken = credential.token || '';
+        // Inject saved session cookies BEFORE navigation
+        const cookieObjs = parseCookieString(existingMeta.cookies);
+        if (cookieObjs.length > 0) {
+            await page.setCookie(...cookieObjs);
+            console.log(`[ChatGPT Auth] Injected ${cookieObjs.length} session cookies`);
+        }
 
-        // Navigate to ChatGPT login
+        // Navigate to ChatGPT
+        console.log('[ChatGPT Auth] Navigating to ChatGPT...');
         await page.goto('https://chatgpt.com/', {
-            waitUntil: 'domcontentloaded',
+            waitUntil: 'networkidle2',
             timeout: 60000,
         });
 
-        console.log('[ChatGPT Auth] Chrome opened. Waiting for user to log in...');
+        // Wait for page to settle
+        await new Promise(r => setTimeout(r, 5000));
 
-        const MAX_WAIT = 300000; // 5 minutes
+        const MAX_WAIT = 60000; // 1 minute
         const POLL_INTERVAL = 3000;
         const startTime = Date.now();
 
@@ -249,45 +259,29 @@ router.post('/refresh', async (req, res) => {
         let cookies = '';
 
         while (Date.now() - startTime < MAX_WAIT) {
-            await new Promise(r => setTimeout(r, POLL_INTERVAL));
-
-            // Check if browser was closed by user
-            try {
-                if (!browser.isConnected()) {
-                    return res.status(400).json({ error: 'Browser was closed before login completed' });
-                }
-            } catch (e) {
-                return res.status(400).json({ error: 'Browser connection lost' });
-            }
-
             try {
                 const currentUrl = page.url();
                 const elapsed = Math.round((Date.now() - startTime) / 1000);
                 console.log(`[ChatGPT Auth] Poll ${elapsed}s: URL=${currentUrl.substring(0, 60)}`);
 
-                // Skip if still on login/auth page
+                // If redirected to login, cookies are expired
                 if (currentUrl.includes('auth0') || currentUrl.includes('auth.openai') ||
                     currentUrl.includes('/login')) {
-                    continue;
+                    console.log('[ChatGPT Auth] ❌ Redirected to login — session cookies expired');
+                    break;
                 }
 
-                // Check for session expired overlay
-                const hasExpiredOverlay = await page.evaluate(() => {
+                // Check for session expired overlay or logged-out state
+                const pageState = await page.evaluate(() => {
                     const bodyText = document.body.innerText || '';
-                    return bodyText.includes('session has expired') && bodyText.includes('log in again');
+                    if (bodyText.includes('session has expired') && bodyText.includes('log in again')) return 'expired';
+                    if (bodyText.includes('Sign up for free') || bodyText.includes('Log in\nSign up')) return 'logged_out';
+                    return 'ok';
                 });
-                if (hasExpiredOverlay) {
-                    console.log('[ChatGPT Auth] Session expired overlay still showing, waiting...');
-                    continue;
-                }
 
-                // Check for logged-out state (Sign up for free button)
-                const isLoggedOut = await page.evaluate(() => {
-                    const bodyText = document.body.innerText || '';
-                    return bodyText.includes('Sign up for free') || bodyText.includes('Log in\nSign up');
-                });
-                if (isLoggedOut) {
-                    continue;
+                if (pageState === 'expired' || pageState === 'logged_out') {
+                    console.log(`[ChatGPT Auth] ❌ Page state: ${pageState} — cookies expired`);
+                    break;
                 }
 
                 // Try to get a FRESH session token
@@ -302,7 +296,7 @@ router.post('/refresh', async (req, res) => {
                     }
                 });
 
-                if (sessionData?.accessToken && sessionData.accessToken !== oldToken) {
+                if (sessionData?.accessToken) {
                     accessToken = sessionData.accessToken;
                     console.log('[ChatGPT Auth] ✅ Got FRESH access token!');
 
@@ -320,19 +314,22 @@ router.post('/refresh', async (req, res) => {
                     console.log('[ChatGPT Auth] Cookies captured:', cookies.length, 'chars');
                     console.log('[ChatGPT Auth] Device ID:', deviceId);
                     break;
-                } else if (sessionData?.accessToken === oldToken) {
-                    console.log('[ChatGPT Auth] Got stale token, waiting for fresh one...');
                 }
             } catch (e) {
                 // Page might be navigating, continue polling
             }
+
+            await new Promise(r => setTimeout(r, POLL_INTERVAL));
         }
 
         // Close browser
         await releaseBrowser(browserKey);
 
         if (!accessToken) {
-            return res.status(408).json({ error: 'Login timed out. Please try again.' });
+            console.log('[ChatGPT Auth] ❌ Could not auto-refresh — session cookies may be expired');
+            return res.status(408).json({
+                error: 'Could not auto-refresh — session cookies may be expired. Please manually update credentials via the Edit form.',
+            });
         }
 
         // Update credential in database
