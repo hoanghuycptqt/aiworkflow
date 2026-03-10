@@ -122,11 +122,13 @@ function parseGoogleCookies(cookieStr) {
         const trimmed = c.trim();
         const eqIdx = trimmed.indexOf('=');
         if (eqIdx <= 0) return null;
+        const name = trimmed.substring(0, eqIdx).trim();
+        const value = trimmed.substring(eqIdx + 1).trim();
+        if (!name) return null;
         return {
-            name: trimmed.substring(0, eqIdx).trim(),
-            value: trimmed.substring(eqIdx + 1).trim(),
-            domain: '.google',
-            path: '/',
+            name,
+            value,
+            url: 'https://labs.google',
         };
     }).filter(Boolean);
 }
