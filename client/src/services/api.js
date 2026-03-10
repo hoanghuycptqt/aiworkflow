@@ -1,6 +1,8 @@
-const API_BASE = window.location.hostname === 'localhost'
-    ? 'http://localhost:3001/api'
-    : '/api';
+export const SERVER = window.location.hostname === 'localhost'
+    ? 'http://localhost:3001'
+    : '';
+
+const API_BASE = `${SERVER}/api`;
 
 class ApiClient {
     constructor() {

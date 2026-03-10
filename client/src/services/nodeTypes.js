@@ -17,7 +17,7 @@ export const PROVIDER_MODELS = {
         'meta-llama/llama-3.2-3b-instruct:free',
     ],
     gemini: [
-        'gemini-3-flash-preview',
+        'gemini-2.5-flash',
         'gemini-3-pro-preview',
     ],
 };
@@ -72,10 +72,10 @@ export const NODE_TYPES = {
             model: {
                 type: 'select', label: 'Model',
                 options: [
-                    'gemini-3-flash-preview',
+                    'gemini-2.5-flash',
                     'gemini-3-pro-preview',
                 ],
-                default: 'gemini-3-flash-preview',
+                default: 'gemini-2.5-flash',
             },
             temperature: { type: 'number', label: 'Temperature', default: 1.0, min: 0, max: 2, description: 'Gemini 3 recommends 1.0' },
             includeImage: { type: 'boolean', label: 'Include Image from Previous Node', default: false },

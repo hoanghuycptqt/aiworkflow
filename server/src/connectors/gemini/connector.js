@@ -10,7 +10,7 @@
 import { BaseConnector } from '../base-connector.js';
 
 const GEMINI_MODELS = [
-    'gemini-3-flash-preview',
+    'gemini-2.5-flash',
     'gemini-3-pro-preview',
 ];
 
@@ -124,15 +124,33 @@ export class GeminiConnector extends BaseConnector {
             };
         }
 
-        // Call Gemini API
         const url = `${API_BASE}/models/${model}:generateContent`;
         console.log(`[Gemini] 📤 Calling ${model}...`);
 
-        const response = await fetch(`${url}?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
+        // Timeout after 30s (Gemini API may be geo-blocked in some regions)
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+
+        let response;
+        try {
+            response = await fetch(`${url}?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
+        } catch (fetchErr) {
+            clearTimeout(timeout);
+            if (fetchErr.name === 'AbortError') {
+                throw new Error(
+                    'Gemini API request timed out (30s). ' +
+                    'This may be due to geo-blocking — Google Gemini API is not available in all regions. ' +
+                    'Try using a VPN, or switch to OpenRouter provider.'
+                );
+            }
+            throw new Error(`Network error calling Gemini API: ${fetchErr.message}`);
+        }
+        clearTimeout(timeout);
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -191,9 +209,13 @@ export class GeminiConnector extends BaseConnector {
 
     async testConnection(credentials) {
         try {
+            const controller = new AbortController();
+            const tout = setTimeout(() => controller.abort(), 10000);
             const resp = await fetch(
                 `${API_BASE}/models?key=${credentials.token}`,
+                { signal: controller.signal },
             );
+            clearTimeout(tout);
             return resp.ok;
         } catch {
             return false;

@@ -235,7 +235,12 @@ export class AITextConnector extends BaseConnector {
     async _executeGemini(input, credentials, config) {
         const apiKey = credentials.token;
         const prompt = config.prompt || '';
-        const model = config.model || 'gemini-3-flash-preview';
+        const validModels = ['gemini-2.5-flash', 'gemini-3-pro-preview'];
+        let model = config.model || 'gemini-2.5-flash';
+        if (!validModels.includes(model)) {
+            console.log(`[AI-Text/Gemini] ⚠️ Model "${model}" not in valid list, falling back to gemini-2.5-flash`);
+            model = 'gemini-2.5-flash';
+        }
         const systemInstruction = config.systemInstruction || '';
         const temperature = parseFloat(config.temperature ?? 1.0);
         const includeImage = config.includeImage || false;
@@ -280,11 +285,30 @@ export class AITextConnector extends BaseConnector {
         const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${apiKey}`;
         console.log(`[AI-Text/Gemini] 📤 Calling ${model}...`);
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
+        // Timeout after 30s (Gemini API may be geo-blocked in some regions)
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+
+        let response;
+        try {
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
+        } catch (fetchErr) {
+            clearTimeout(timeout);
+            if (fetchErr.name === 'AbortError') {
+                throw new Error(
+                    'Gemini API request timed out (30s). ' +
+                    'This may be due to geo-blocking — Google Gemini API is not available in all regions. ' +
+                    'Try using a VPN, or switch to OpenRouter provider.'
+                );
+            }
+            throw new Error(`Network error calling Gemini API: ${fetchErr.message}`);
+        }
+        clearTimeout(timeout);
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -328,13 +352,18 @@ export class AITextConnector extends BaseConnector {
 
     async testConnection(credentials) {
         try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
             if (credentials.provider === 'gemini') {
-                const resp = await fetch(`${GEMINI_API_BASE}/models?key=${credentials.token}`);
+                const resp = await fetch(`${GEMINI_API_BASE}/models?key=${credentials.token}`, { signal: controller.signal });
+                clearTimeout(timeout);
                 return resp.ok;
             }
             const resp = await fetch('https://openrouter.ai/api/v1/models', {
                 headers: { 'Authorization': `Bearer ${credentials.token}` },
+                signal: controller.signal,
             });
+            clearTimeout(timeout);
             return resp.ok;
         } catch {
             return false;
