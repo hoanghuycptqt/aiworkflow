@@ -252,21 +252,8 @@ export default function CredentialsPage() {
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                    {cred.provider === 'chatgpt' && (
-                                        <button
-                                            className="btn btn-sm"
-                                            style={{
-                                                background: refreshing === cred.id ? 'var(--bg-tertiary)' : 'linear-gradient(135deg, #10b981, #059669)',
-                                                color: '#fff',
-                                                border: 'none',
-                                                opacity: refreshing === cred.id ? 0.7 : 1,
-                                            }}
-                                            onClick={() => handleRefreshCredential(cred.id)}
-                                            disabled={refreshing === cred.id}
-                                        >
-                                            {refreshing === cred.id ? '⏳ Refreshing...' : '🔄 Auto Refresh'}
-                                        </button>
-                                    )}
+
+
                                     {cred.provider === 'google-flow' && (
                                         <button
                                             className="btn btn-sm"
