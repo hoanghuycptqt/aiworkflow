@@ -37,6 +37,7 @@ npm-debug.log*
 # Antigravity/AI tool files
 .gemini/
 .agents/
+.agent/
 _agents/
 
 # Screenshots (dev only)
