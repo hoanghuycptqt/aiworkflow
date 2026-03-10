@@ -20,6 +20,7 @@ export default function JobMonitor({ workflowId }) {
     const [loadingMore, setLoadingMore] = useState(false);
     const [hasMore, setHasMore] = useState(false);
     const [totalCount, setTotalCount] = useState(0);
+    const [loadingDetail, setLoadingDetail] = useState(null); // executionId currently loading
     const [gallery, setGallery] = useState(null);
     const [confirmDelete, setConfirmDelete] = useState(null);
     const notifiedRef = useRef(new Set());
@@ -142,6 +143,41 @@ export default function JobMonitor({ workflowId }) {
         setGallery({ items, index });
     }, []);
 
+    // Lazy load full node details (with outputData) when expanding a job
+    async function toggleExpand(execId) {
+        if (expandedJob === execId) {
+            setExpandedJob(null);
+            return;
+        }
+        setExpandedJob(execId);
+
+        // Check if outputData is already loaded
+        const exec = executions.find(e => e.id === execId);
+        const hasOutputData = exec?.nodeExecutions?.some(ne => ne.outputData !== undefined);
+        if (hasOutputData) return;
+
+        // Fetch full detail with outputData
+        setLoadingDetail(execId);
+        try {
+            const detail = await api.getExecutionDetail(execId);
+            if (detail.execution) {
+                setExecutions(prev => prev.map(e => {
+                    if (e.id !== execId) return e;
+                    return {
+                        ...e,
+                        nodeExecutions: e.nodeExecutions.map(ne => {
+                            const detailNode = detail.execution.nodeExecutions.find(dn => dn.nodeId === ne.nodeId);
+                            return detailNode ? { ...ne, outputData: detailNode.outputData } : ne;
+                        }),
+                    };
+                }));
+            }
+        } catch (err) {
+            console.warn('Failed to load execution detail:', err);
+        }
+        setLoadingDetail(null);
+    }
+
     if (loading) {
         return (
             <div style={{ padding: 40, textAlign: 'center' }}>
@@ -222,7 +258,7 @@ export default function JobMonitor({ workflowId }) {
                             }}>
                                 {/* Job Card Header */}
                                 <div
-                                    onClick={() => setExpandedJob(isExpanded ? null : exec.id)}
+                                    onClick={() => toggleExpand(exec.id)}
                                     style={{
                                         padding: '12px 16px',
                                         display: 'flex',
@@ -377,7 +413,12 @@ export default function JobMonitor({ workflowId }) {
                                                 letterSpacing: '0.05em',
                                             }}>Node Pipeline</div>
 
-                                            {sortedNodes.length === 0 ? (
+                                            {loadingDetail === exec.id ? (
+                                                <div style={{ padding: '12px 0', fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                    <div className="loading-spinner" style={{ width: 16, height: 16 }} />
+                                                    Loading node details...
+                                                </div>
+                                            ) : sortedNodes.length === 0 ? (
                                                 <div style={{ padding: '12px 0', fontSize: 12, color: 'var(--text-muted)' }}>
                                                     No node data yet...
                                                 </div>
