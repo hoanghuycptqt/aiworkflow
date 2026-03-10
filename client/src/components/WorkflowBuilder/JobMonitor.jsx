@@ -200,7 +200,11 @@ export default function JobMonitor({ workflowId }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {executions.map((exec) => {
                         const isExpanded = expandedJob === exec.id;
-                        const { input: inputMedia, output: outputMedia } = extractMediaFromExecution(exec);
+                        // Use server-provided media items (lightweight, no outputData parsing)
+                        const outputMedia = (exec.mediaItems || []).map(m => ({
+                            ...m,
+                            url: m.url.startsWith('http') ? m.url : `${SERVER}${m.url}`,
+                        }));
                         const totalMedia = outputMedia.length;
 
                         const sortedNodes = [...(exec.nodeExecutions || [])].sort((a, b) => {

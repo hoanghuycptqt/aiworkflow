@@ -229,7 +229,7 @@ router.get('/:workflowId/job-history', async (req, res, next) => {
             },
         });
 
-        // Get paginated executions
+        // Light query — NO outputData (the heavy field)
         const executions = await prisma.workflowExecution.findMany({
             where: {
                 workflowId: req.params.workflowId,
@@ -243,11 +243,55 @@ router.get('/:workflowId/job-history', async (req, res, next) => {
                     select: {
                         id: true, nodeId: true, nodeType: true,
                         status: true, startedAt: true, completedAt: true,
-                        error: true, outputData: true,
+                        error: true,
+                        // outputData intentionally excluded — too heavy for list view
                     },
                 },
             },
         });
+
+        // Separate lightweight query: only fetch outputData for media-producing nodes
+        const execIds = executions.map(e => e.id);
+        const MEDIA_NODE_TYPES = ['google-flow-image', 'google-flow-video'];
+        const mediaNodes = execIds.length > 0
+            ? await prisma.nodeExecution.findMany({
+                where: {
+                    executionId: { in: execIds },
+                    nodeType: { in: MEDIA_NODE_TYPES },
+                    status: 'completed',
+                },
+                select: { executionId: true, nodeType: true, outputData: true },
+            })
+            : [];
+
+        // Extract thumbnail URLs per execution
+        const thumbnailMap = new Map(); // executionId -> { thumbnailUrl, mediaCount }
+        for (const mn of mediaNodes) {
+            let output;
+            try { output = typeof mn.outputData === 'string' ? JSON.parse(mn.outputData) : mn.outputData; } catch { continue; }
+            if (!output) continue;
+
+            if (!thumbnailMap.has(mn.executionId)) {
+                thumbnailMap.set(mn.executionId, { urls: [], types: [] });
+            }
+            const entry = thumbnailMap.get(mn.executionId);
+
+            if (output.imageUrl) entry.urls.push({ url: output.imageUrl, type: 'image' });
+            if (output.videoUrl) entry.urls.push({ url: output.videoUrl, type: 'video' });
+            if (output.fileUrl && !output.imageUrl && !output.videoUrl) {
+                const ext = (output.fileName || output.fileUrl || '').split('.').pop()?.toLowerCase();
+                const isVideo = ['mp4', 'webm', 'mov'].includes(ext);
+                const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+                if (isVideo || isImage) entry.urls.push({ url: output.fileUrl, type: isVideo ? 'video' : 'image' });
+            }
+            for (const arrKey of ['allImages', 'savedImages']) {
+                if (Array.isArray(output[arrKey])) {
+                    for (const item of output[arrKey]) {
+                        if (item.imageUrl) entry.urls.push({ url: item.imageUrl, type: 'image' });
+                    }
+                }
+            }
+        }
 
         // Get job names
         const jobIds = [...new Set(executions.map(e => e.jobId).filter(Boolean))];
@@ -269,6 +313,7 @@ router.get('/:workflowId/job-history', async (req, res, next) => {
             executions: executions.map(e => {
                 const job = e.jobId ? jobMap.get(e.jobId) : null;
                 const batch = e.jobBatchId ? batchMap.get(e.jobBatchId) : null;
+                const media = thumbnailMap.get(e.id);
                 return {
                     id: e.id,
                     jobId: e.jobId,
@@ -280,9 +325,17 @@ router.get('/:workflowId/job-history', async (req, res, next) => {
                     startedAt: e.startedAt,
                     completedAt: e.completedAt,
                     error: e.error,
+                    // Lightweight: only media URLs, no full outputData
+                    mediaItems: media?.urls || [],
                     nodeExecutions: e.nodeExecutions.map(ne => ({
-                        ...ne,
-                        outputData: ne.outputData ? JSON.parse(ne.outputData) : null,
+                        id: ne.id,
+                        nodeId: ne.nodeId,
+                        nodeType: ne.nodeType,
+                        status: ne.status,
+                        startedAt: ne.startedAt,
+                        completedAt: ne.completedAt,
+                        error: ne.error,
+                        // outputData omitted — load on demand via detail endpoint
                     })),
                 };
             }),
