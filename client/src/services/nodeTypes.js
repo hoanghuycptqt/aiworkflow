@@ -121,6 +121,7 @@ export const NODE_TYPES = {
                 ],
                 default: '9:16',
             },
+            useStartFrame: { type: 'boolean', label: 'Use Start Frame from Upstream Image', description: 'Use generated image from Flow Image as video start frame', default: true },
             resolution: {
                 type: 'select', label: 'Resolution',
                 options: [

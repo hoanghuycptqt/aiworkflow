@@ -660,6 +660,12 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                     ],
                     default: '9:16',
                 },
+                useStartFrame: {
+                    type: 'boolean',
+                    label: 'Use Start Frame from Upstream Image',
+                    description: 'Use a generated image from Flow Image as the video start frame',
+                    default: true,
+                },
                 resolution: {
                     type: 'select',
                     label: 'Resolution',
@@ -707,46 +713,51 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
         // ─── Get start frame from upstream Flow Image ───
         let startFrameMediaId = null;
+        const useStartFrame = config.useStartFrame !== false; // default true
 
-        // Priority 1: Pick random image from Flow Image's allImages (which have mediaId)
-        if (input.allImages && input.allImages.length > 0) {
-            const randomIdx = Math.floor(Math.random() * input.allImages.length);
-            const picked = input.allImages[randomIdx];
-            if (picked.mediaId) {
-                startFrameMediaId = picked.mediaId;
-                console.log(`[FlowVideo] Picked random image #${randomIdx + 1}/${input.allImages.length}, mediaId: ${startFrameMediaId}`);
-            } else if (picked.imagePath || picked.fifeUrl) {
-                // Upload the image to get mediaId
-                let base64 = null;
-                if (picked.imagePath) {
-                    try { base64 = (await readFile(picked.imagePath)).toString('base64'); } catch (_) { }
-                }
-                if (!base64 && picked.fifeUrl) {
-                    try {
-                        const r = await fetch(picked.fifeUrl);
-                        base64 = Buffer.from(await r.arrayBuffer()).toString('base64');
-                    } catch (_) { }
-                }
-                if (base64) {
-                    startFrameMediaId = await uploadReferenceImage(token, projectId, base64);
-                    console.log(`[FlowVideo] Uploaded random image #${randomIdx + 1}, mediaId: ${startFrameMediaId}`);
+        if (useStartFrame) {
+            // Priority 1: Pick random image from Flow Image's allImages (which have mediaId)
+            if (input.allImages && input.allImages.length > 0) {
+                const randomIdx = Math.floor(Math.random() * input.allImages.length);
+                const picked = input.allImages[randomIdx];
+                if (picked.mediaId) {
+                    startFrameMediaId = picked.mediaId;
+                    console.log(`[FlowVideo] Picked random image #${randomIdx + 1}/${input.allImages.length}, mediaId: ${startFrameMediaId}`);
+                } else if (picked.imagePath || picked.fifeUrl) {
+                    // Upload the image to get mediaId
+                    let base64 = null;
+                    if (picked.imagePath) {
+                        try { base64 = (await readFile(picked.imagePath)).toString('base64'); } catch (_) { }
+                    }
+                    if (!base64 && picked.fifeUrl) {
+                        try {
+                            const r = await fetch(picked.fifeUrl);
+                            base64 = Buffer.from(await r.arrayBuffer()).toString('base64');
+                        } catch (_) { }
+                    }
+                    if (base64) {
+                        startFrameMediaId = await uploadReferenceImage(token, projectId, base64);
+                        console.log(`[FlowVideo] Uploaded random image #${randomIdx + 1}, mediaId: ${startFrameMediaId}`);
+                    }
                 }
             }
-        }
 
-        // Priority 2: Single image from upstream (legacy)
-        if (!startFrameMediaId && input.mediaId) {
-            startFrameMediaId = input.mediaId;
-            console.log('[FlowVideo] Using upstream mediaId:', startFrameMediaId);
-        }
+            // Priority 2: Single image from upstream (legacy)
+            if (!startFrameMediaId && input.mediaId) {
+                startFrameMediaId = input.mediaId;
+                console.log('[FlowVideo] Using upstream mediaId:', startFrameMediaId);
+            }
 
-        if (!startFrameMediaId && input.imageData) {
-            startFrameMediaId = await uploadReferenceImage(token, projectId, input.imageData);
-            console.log('[FlowVideo] Uploaded upstream base64 as start frame, mediaId:', startFrameMediaId);
-        }
+            if (!startFrameMediaId && input.imageData) {
+                startFrameMediaId = await uploadReferenceImage(token, projectId, input.imageData);
+                console.log('[FlowVideo] Uploaded upstream base64 as start frame, mediaId:', startFrameMediaId);
+            }
 
-        if (!startFrameMediaId) {
-            console.log('[FlowVideo] ⚠️ No start frame available — video will be text-only.');
+            if (!startFrameMediaId) {
+                console.log('[FlowVideo] ⚠️ No start frame available — video will be text-only.');
+            }
+        } else {
+            console.log('[FlowVideo] Start frame disabled by config — video will be text-only.');
         }
 
         // ─── Build request (from HAR capture) ───
