@@ -17,7 +17,7 @@ export const PROVIDER_MODELS = {
         'meta-llama/llama-3.2-3b-instruct:free',
     ],
     gemini: [
-        'gemini-2.5-flash',
+        'gemini-3-flash-preview',
         'gemini-3-pro-preview',
     ],
 };

@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import AdminDashboard from './AdminDashboard.jsx';
 import UserManagement from './UserManagement.jsx';
+import AdminSettings from './AdminSettings.jsx';
 
 const TABS = [
     { id: 'dashboard', label: '📊 Dashboard', icon: '📊' },
     { id: 'users', label: '👥 Users', icon: '👥' },
+    { id: 'settings', label: '⚙️ Settings', icon: '⚙️' },
 ];
 
 export default function AdminPage() {
@@ -30,6 +32,7 @@ export default function AdminPage() {
             <div className="admin-content">
                 {activeTab === 'dashboard' && <AdminDashboard />}
                 {activeTab === 'users' && <UserManagement />}
+                {activeTab === 'settings' && <AdminSettings />}
             </div>
         </div>
     );

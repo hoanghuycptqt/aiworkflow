@@ -29,6 +29,9 @@ jobs:
             # Apply database migrations
             cd server && npx prisma db push && cd ..
 
+            # Run data migration (Gemini model names)
+            cd server && node prisma/migrate-gemini-models.js && cd ..
+
             # Restart server & save process list for auto-start on reboot
             pm2 restart ecosystem.config.cjs --update-env
             pm2 save

@@ -10,7 +10,7 @@
  * - Create/run jobs from photos sent via Telegram
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { prisma } from '../index.js';
 import { runJobBatch, cancelBatch } from './job-runner.js';
 import { downloadTelegramPhoto, bot, getVideoDimensions } from './telegram-bot.js';
@@ -460,35 +460,45 @@ async function callGemini(messages) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
-        tools: [{ functionDeclarations }],
-        systemInstruction: SYSTEM_PROMPT,
-    });
+    const ai = new GoogleGenAI({ apiKey });
 
-    const chat = model.startChat({
-        history: messages.slice(0, -1)
-            .map(m => ({
-                role: m.role === 'assistant' ? 'model' : 'user',
-                parts: [{ text: m.content }],
-            }))
-            // Gemini requires history to start with 'user' — drop leading 'model' messages
-            .reduce((acc, msg) => {
-                if (acc.length === 0 && msg.role === 'model') return acc;
-                return [...acc, msg];
-            }, []),
+    // Read model from admin settings (DB), fallback to default
+    let selectedModel = 'gemini-3-flash-preview';
+    try {
+        const setting = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_model' } });
+        if (setting?.value) selectedModel = setting.value;
+    } catch { /* use default */ }
+
+    // Build history for chat (all messages except the last one)
+    const history = messages.slice(0, -1)
+        .map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }],
+        }))
+        // Gemini requires history to start with 'user' — drop leading 'model' messages
+        .reduce((acc, msg) => {
+            if (acc.length === 0 && msg.role === 'model') return acc;
+            return [...acc, msg];
+        }, []);
+
+    const chat = ai.chats.create({
+        model: selectedModel,
+        history,
+        config: {
+            tools: [{ functionDeclarations }],
+            systemInstruction: SYSTEM_PROMPT,
+        },
     });
 
     const lastMessage = messages[messages.length - 1];
-    const result = await chat.sendMessage(lastMessage.content);
-    const response = result.response;
-
-    const candidate = response.candidates?.[0];
-    if (!candidate) return { text: 'Xin lỗi, tôi không thể trả lời lúc này.', functionCalls: [] };
+    const response = await chat.sendMessage({ message: lastMessage.content });
 
     const functionCalls = [];
     const textParts = [];
+
+    // New SDK: response.candidates[0].content.parts for function calls
+    const candidate = response.candidates?.[0];
+    if (!candidate) return { text: 'Xin lỗi, tôi không thể trả lời lúc này.', functionCalls: [] };
 
     for (const part of candidate.content?.parts || []) {
         if (part.functionCall) {

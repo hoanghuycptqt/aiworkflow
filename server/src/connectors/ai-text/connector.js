@@ -235,11 +235,11 @@ export class AITextConnector extends BaseConnector {
     async _executeGemini(input, credentials, config) {
         const apiKey = credentials.token;
         const prompt = config.prompt || '';
-        const validModels = ['gemini-2.5-flash', 'gemini-3-pro-preview'];
-        let model = config.model || 'gemini-2.5-flash';
+        const validModels = ['gemini-3-flash-preview', 'gemini-3-pro-preview'];
+        let model = config.model || 'gemini-3-flash-preview';
         if (!validModels.includes(model)) {
-            console.log(`[AI-Text/Gemini] ⚠️ Model "${model}" not in valid list, falling back to gemini-2.5-flash`);
-            model = 'gemini-2.5-flash';
+            console.log(`[AI-Text/Gemini] ⚠️ Model "${model}" not in valid list, falling back to gemini-3-flash-preview`);
+            model = 'gemini-3-flash-preview';
         }
         const systemInstruction = config.systemInstruction || '';
         const temperature = parseFloat(config.temperature ?? 1.0);

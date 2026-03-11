@@ -11,7 +11,7 @@
         "db:push": "npx prisma db push"
     },
     "dependencies": {
-        "@google/generative-ai": "^0.24.1",
+        "@google/genai": "^1.44.0",
         "@prisma/client": "^6.4.1",
         "archiver": "^7.0.1",
         "bcryptjs": "^2.4.3",

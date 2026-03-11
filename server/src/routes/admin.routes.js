@@ -228,4 +228,55 @@ router.delete('/users/:id', async (req, res, next) => {
     }
 });
 
+// ─── Gemini Model Catalog ────────────────────────────────
+const GEMINI_MODELS = [
+    { group: 'Gemini 3 (Latest)', models: [
+        { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', desc: 'Advanced reasoning, coding, agentic' },
+        { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', desc: 'Frontier-class, cost-effective' },
+        { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite', desc: 'Lightweight, fast' },
+    ]},
+    { group: 'Gemini 2.5', models: [
+        { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Low-latency, high-volume, reasoning' },
+        { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', desc: 'Fastest, cost-efficient' },
+        { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Most advanced, deep reasoning' },
+    ]},
+    { group: 'Gemini 2.0 (Deprecated)', models: [
+        { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', desc: 'Previous gen workhorse' },
+        { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite', desc: 'Previous gen lightweight' },
+    ]},
+];
+
+// ─── Get Settings ────────────────────────────────────────
+router.get('/settings', async (req, res, next) => {
+    try {
+        const settings = await prisma.systemSetting.findMany();
+        const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
+        res.json({ settings: settingsMap, geminiModels: GEMINI_MODELS });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ─── Update Settings ─────────────────────────────────────
+router.put('/settings', async (req, res, next) => {
+    try {
+        const { settings } = req.body;
+        if (!settings || typeof settings !== 'object') {
+            return res.status(400).json({ error: 'Settings object required' });
+        }
+
+        for (const [key, value] of Object.entries(settings)) {
+            await prisma.systemSetting.upsert({
+                where: { key },
+                update: { value: String(value) },
+                create: { key, value: String(value) },
+            });
+        }
+
+        res.json({ message: 'Settings saved' });
+    } catch (err) {
+        next(err);
+    }
+});
+
 export default router;

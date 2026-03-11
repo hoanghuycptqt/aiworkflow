@@ -247,6 +247,18 @@ class ApiClient {
     async unlinkTelegram(linkId) {
         return this.request(`/telegram/unlink/${linkId}`, { method: 'DELETE' });
     }
+
+    // ─── Admin Settings ─────────────────────────────────
+    async getSettings() {
+        return this.request('/admin/settings');
+    }
+
+    async updateSettings(settings) {
+        return this.request('/admin/settings', {
+            method: 'PUT',
+            body: JSON.stringify({ settings }),
+        });
+    }
 }
 
 export const api = new ApiClient();
