@@ -4,9 +4,16 @@ on:
   push:
     branches: [main]
 
+# Prevent concurrent deploys
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -14,26 +21,38 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
           script: |
             cd /opt/vcw/app
 
             # Pull latest code
             git pull origin main
 
-            # Install dependencies (if package.json changed)
+            # Install dependencies
             npm run install:all
+
+            # Generate Prisma client & apply schema
+            cd server && npx prisma generate && npx prisma db push && cd ..
 
             # Build client
             cd client && npm run build && cd ..
 
-            # Apply database migrations
-            cd server && npx prisma db push && cd ..
-
-            # Run data migration (Gemini model names)
-            cd server && node prisma/migrate-gemini-models.js && cd ..
-
-            # Restart server & save process list for auto-start on reboot
+            # Restart server
             pm2 restart ecosystem.config.cjs --update-env
             pm2 save
 
+            # Health check
+            sleep 3
+            curl -sf https://thhflow.com/api/auth/me > /dev/null && echo "✅ Server is healthy" || echo "⚠️ Server may not be responding"
+
             echo "✅ Deploy complete!"
+
+      - name: Notify on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "⚠️ Deploy failed — check GitHub Actions logs"
