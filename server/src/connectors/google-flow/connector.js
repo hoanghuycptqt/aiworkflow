@@ -122,58 +122,73 @@ async function ensureFreshToken(credentials) {
 }
 
 // ─────────────────────────────────────────────────────────
-//  reCAPTCHA Token Auto-Fetch via Puppeteer
+//  reCAPTCHA Token Manager — Fresh token per API call
+//  Keeps a Puppeteer page alive to avoid relaunching browser
+//  every time. Each call to fetchRecaptchaToken() returns a
+//  FRESH token (tokens are single-use by Google).
 // ─────────────────────────────────────────────────────────
 
 const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
-const RECAPTCHA_CACHE_TTL = 90_000; // 90 seconds (tokens live ~2 min)
-let cachedRecaptchaToken = null;
-let cachedRecaptchaExpiry = 0;
+const RECAPTCHA_PAGE_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 min idle → close browser
+
+let _recaptchaPage = null;       // Persistent Puppeteer page
+let _recaptchaBrowser = null;    // Persistent browser instance
+let _recaptchaIdleTimer = null;  // Auto-close timer
+let _recaptchaReady = false;     // SDK loaded flag
+let _recaptchaInitPromise = null; // Prevents concurrent initializations
 
 /**
- * Fetch a fresh reCAPTCHA Enterprise token using Puppeteer.
- * Opens labs.google/fx/tools/flow/ with session cookies,
- * waits for the reCAPTCHA Enterprise SDK to load, then executes it.
- * Caches the token for 90 seconds to avoid frequent browser launches.
+ * Initialize (or reuse) the reCAPTCHA browser page.
+ * Launches browser, navigates to Flow page, waits for SDK.
  */
-async function fetchRecaptchaToken(sessionCookies) {
-    // Return cached token if still valid
-    if (cachedRecaptchaToken && Date.now() < cachedRecaptchaExpiry) {
-        console.log('[reCAPTCHA] Using cached token (expires in', Math.round((cachedRecaptchaExpiry - Date.now()) / 1000), 's)');
-        return cachedRecaptchaToken;
+async function _ensureRecaptchaPage(sessionCookies) {
+    // Already initialized and alive
+    if (_recaptchaPage && _recaptchaBrowser?.isConnected() && _recaptchaReady) {
+        return _recaptchaPage;
     }
 
-    if (!sessionCookies) {
-        console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
-        return '';
+    // Prevent concurrent initializations
+    if (_recaptchaInitPromise) {
+        await _recaptchaInitPromise;
+        if (_recaptchaPage && _recaptchaBrowser?.isConnected() && _recaptchaReady) {
+            return _recaptchaPage;
+        }
     }
 
-    console.log('[reCAPTCHA] Fetching fresh token via Puppeteer...');
-    let browser;
-    try {
+    _recaptchaInitPromise = (async () => {
+        // Clean up any stale browser
+        await _closeRecaptchaBrowser();
+
+        console.log('[reCAPTCHA] Launching persistent browser for token generation...');
         const result = await launchTempBrowser({ headless: 'new' });
-        browser = result.browser;
+        _recaptchaBrowser = result.browser;
 
-        const page = await browser.newPage();
+        // Auto-cleanup on unexpected disconnect
+        _recaptchaBrowser.on('disconnected', () => {
+            console.log('[reCAPTCHA] Browser disconnected unexpectedly');
+            _recaptchaPage = null;
+            _recaptchaBrowser = null;
+            _recaptchaReady = false;
+        });
 
-        // Set session cookies — parse carefully and filter invalid entries
+        const page = await _recaptchaBrowser.newPage();
+
+        // Parse and set session cookies
         const cookieParts = sessionCookies.split(';').map(c => c.trim()).filter(Boolean);
         const validCookies = [];
         for (const part of cookieParts) {
             const eqIdx = part.indexOf('=');
-            if (eqIdx <= 0) continue; // skip if no '=' or name is empty
+            if (eqIdx <= 0) continue;
             const name = part.substring(0, eqIdx).trim();
             const value = part.substring(eqIdx + 1).trim();
-            if (!name) continue; // skip empty cookie names
+            if (!name) continue;
             validCookies.push({ name, value });
         }
 
         if (validCookies.length === 0) {
-            console.warn('[reCAPTCHA] No valid cookies parsed from session cookies');
-            throw new Error('No valid cookies');
+            throw new Error('No valid cookies parsed from session cookies');
         }
 
-        // Set cookies for labs.google using URL-based method (avoids domain issues)
         const cookiesForPuppeteer = validCookies.flatMap(c => [
             { name: c.name, value: c.value, url: 'https://labs.google' },
             { name: c.name, value: c.value, url: 'https://www.google.com' },
@@ -193,15 +208,71 @@ async function fetchRecaptchaToken(sessionCookies) {
             { timeout: 15000 }
         );
 
-        // Execute reCAPTCHA to get token
+        _recaptchaPage = page;
+        _recaptchaReady = true;
+        console.log('[reCAPTCHA] ✅ Persistent page ready (SDK loaded)');
+    })();
+
+    try {
+        await _recaptchaInitPromise;
+    } finally {
+        _recaptchaInitPromise = null;
+    }
+
+    return _recaptchaPage;
+}
+
+/**
+ * Close the persistent reCAPTCHA browser.
+ */
+async function _closeRecaptchaBrowser() {
+    if (_recaptchaIdleTimer) {
+        clearTimeout(_recaptchaIdleTimer);
+        _recaptchaIdleTimer = null;
+    }
+    if (_recaptchaBrowser) {
+        try { await _recaptchaBrowser.close(); } catch { /* ok */ }
+    }
+    _recaptchaPage = null;
+    _recaptchaBrowser = null;
+    _recaptchaReady = false;
+}
+
+/**
+ * Reset the idle timer — browser auto-closes after 5 min of inactivity.
+ */
+function _resetRecaptchaIdleTimer() {
+    if (_recaptchaIdleTimer) clearTimeout(_recaptchaIdleTimer);
+    _recaptchaIdleTimer = setTimeout(async () => {
+        console.log('[reCAPTCHA] Idle timeout — closing persistent browser');
+        await _closeRecaptchaBrowser();
+    }, RECAPTCHA_PAGE_IDLE_TIMEOUT);
+}
+
+/**
+ * Fetch a FRESH reCAPTCHA Enterprise token.
+ * Each call returns a new single-use token (never reused).
+ * Keeps the browser page alive for efficiency.
+ */
+async function fetchRecaptchaToken(sessionCookies) {
+    if (!sessionCookies) {
+        console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
+        return '';
+    }
+
+    try {
+        const page = await _ensureRecaptchaPage(sessionCookies);
+
+        // Each call to execute() returns a FRESH single-use token
         const token = await page.evaluate(async (siteKey) => {
             return await grecaptcha.enterprise.execute(siteKey, { action: 'IMAGE_GENERATION' });
         }, RECAPTCHA_SITE_KEY);
 
+        // Reset idle timer on each successful call
+        _resetRecaptchaIdleTimer();
+
         if (token && token.length > 50) {
-            cachedRecaptchaToken = token;
-            cachedRecaptchaExpiry = Date.now() + RECAPTCHA_CACHE_TTL;
-            console.log(`[reCAPTCHA] ✅ Got token (${token.length} chars), cached for 90s`);
+            console.log(`[reCAPTCHA] ✅ Fresh token (${token.length} chars)`);
             return token;
         }
 
@@ -210,11 +281,9 @@ async function fetchRecaptchaToken(sessionCookies) {
 
     } catch (e) {
         console.error('[reCAPTCHA] Failed to fetch token:', e.message);
+        // Page may be dead — force cleanup so next call reinitializes
+        await _closeRecaptchaBrowser();
         return '';
-    } finally {
-        if (browser) {
-            try { await browser.close(); } catch { /* ok */ }
-        }
     }
 }
 
