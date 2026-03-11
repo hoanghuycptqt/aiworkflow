@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fetch from 'node-fetch';
 import https from 'https';
 import { prisma } from '../../index.js';
+import { launchTempBrowser } from '../../services/browser-manager.js';
 
 const API_BASE = 'https://aisandbox-pa.googleapis.com';
 const TOOL = 'PINHOLE';
@@ -120,6 +121,103 @@ async function ensureFreshToken(credentials) {
     }
 }
 
+// ─────────────────────────────────────────────────────────
+//  reCAPTCHA Token Auto-Fetch via Puppeteer
+// ─────────────────────────────────────────────────────────
+
+const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
+const RECAPTCHA_CACHE_TTL = 90_000; // 90 seconds (tokens live ~2 min)
+let cachedRecaptchaToken = null;
+let cachedRecaptchaExpiry = 0;
+
+/**
+ * Fetch a fresh reCAPTCHA Enterprise token using Puppeteer.
+ * Opens labs.google/fx/tools/flow/ with session cookies,
+ * waits for the reCAPTCHA Enterprise SDK to load, then executes it.
+ * Caches the token for 90 seconds to avoid frequent browser launches.
+ */
+async function fetchRecaptchaToken(sessionCookies) {
+    // Return cached token if still valid
+    if (cachedRecaptchaToken && Date.now() < cachedRecaptchaExpiry) {
+        console.log('[reCAPTCHA] Using cached token (expires in', Math.round((cachedRecaptchaExpiry - Date.now()) / 1000), 's)');
+        return cachedRecaptchaToken;
+    }
+
+    if (!sessionCookies) {
+        console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
+        return '';
+    }
+
+    console.log('[reCAPTCHA] Fetching fresh token via Puppeteer...');
+    let browser;
+    try {
+        const result = await launchTempBrowser({ headless: 'new' });
+        browser = result.browser;
+
+        const page = await browser.newPage();
+
+        // Set session cookies — parse carefully and filter invalid entries
+        const cookieParts = sessionCookies.split(';').map(c => c.trim()).filter(Boolean);
+        const validCookies = [];
+        for (const part of cookieParts) {
+            const eqIdx = part.indexOf('=');
+            if (eqIdx <= 0) continue; // skip if no '=' or name is empty
+            const name = part.substring(0, eqIdx).trim();
+            const value = part.substring(eqIdx + 1).trim();
+            if (!name) continue; // skip empty cookie names
+            validCookies.push({ name, value });
+        }
+
+        if (validCookies.length === 0) {
+            console.warn('[reCAPTCHA] No valid cookies parsed from session cookies');
+            throw new Error('No valid cookies');
+        }
+
+        // Set cookies for labs.google using URL-based method (avoids domain issues)
+        const cookiesForPuppeteer = validCookies.flatMap(c => [
+            { name: c.name, value: c.value, url: 'https://labs.google' },
+            { name: c.name, value: c.value, url: 'https://www.google.com' },
+        ]);
+        await page.setCookie(...cookiesForPuppeteer);
+        console.log(`[reCAPTCHA] Set ${validCookies.length} cookies`);
+
+        // Navigate to Flow page (loads reCAPTCHA Enterprise SDK)
+        await page.goto('https://labs.google/fx/tools/flow/', {
+            waitUntil: 'networkidle2',
+            timeout: 30000,
+        });
+
+        // Wait for grecaptcha.enterprise to be available
+        await page.waitForFunction(
+            () => typeof grecaptcha !== 'undefined' && typeof grecaptcha.enterprise !== 'undefined' && typeof grecaptcha.enterprise.execute === 'function',
+            { timeout: 15000 }
+        );
+
+        // Execute reCAPTCHA to get token
+        const token = await page.evaluate(async (siteKey) => {
+            return await grecaptcha.enterprise.execute(siteKey, { action: 'IMAGE_GENERATION' });
+        }, RECAPTCHA_SITE_KEY);
+
+        if (token && token.length > 50) {
+            cachedRecaptchaToken = token;
+            cachedRecaptchaExpiry = Date.now() + RECAPTCHA_CACHE_TTL;
+            console.log(`[reCAPTCHA] ✅ Got token (${token.length} chars), cached for 90s`);
+            return token;
+        }
+
+        console.warn('[reCAPTCHA] Token too short or empty:', token?.substring(0, 50));
+        return '';
+
+    } catch (e) {
+        console.error('[reCAPTCHA] Failed to fetch token:', e.message);
+        return '';
+    } finally {
+        if (browser) {
+            try { await browser.close(); } catch { /* ok */ }
+        }
+    }
+}
+
 // Model name mapping (UI label -> API value)
 const IMAGE_MODELS = {
     'banana2': 'NARWHAL',              // ✅ Nano Banana 2 — CONFIRMED
@@ -140,7 +238,7 @@ const ASPECT_RATIO_MAP = {
  */
 function buildHeaders(token) {
     return {
-        'Content-Type': 'application/json',
+        'Content-Type': 'text/plain;charset=UTF-8',
         'Authorization': `Bearer ${token}`,
         'Origin': 'https://labs.google',
         'Referer': 'https://labs.google/',
@@ -441,8 +539,9 @@ export class GoogleFlowImageConnector extends BaseConnector {
             }
         }
 
-        // Get reCAPTCHA token from credentials or config
-        const recaptchaToken = config.recaptchaToken || credentials.metadata?.recaptchaToken || '';
+        // Get fresh reCAPTCHA token (auto-fetch via Puppeteer)
+        const sessionCookies = credentials.metadata?.sessionCookies || '';
+        const recaptchaToken = await fetchRecaptchaToken(sessionCookies);
 
         // Generate images
         const results = await batchGenerateImages(token, projectId, {
@@ -464,7 +563,6 @@ export class GoogleFlowImageConnector extends BaseConnector {
 
         // Upscale if resolution is 2k or 4k
         const resolution = config.resolution || '1k';
-        const recaptchaTokenForUpscale = config.recaptchaToken || credentials.metadata?.recaptchaToken || '';
 
         const savedImages = [];
         for (const r of results) {
@@ -473,7 +571,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 if (resolution !== '1k' && r.mediaId) {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
-                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, recaptchaTokenForUpscale);
+                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, recaptchaToken);
                         if (upscaleResult.encodedImage) {
                             // Save upscaled base64 directly to disk
                             const filename = `gflow_${resolution}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
@@ -761,7 +859,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         }
 
         // ─── Build request (from HAR capture) ───
-        const recaptchaToken = config.recaptchaToken || credentials.metadata?.recaptchaToken || '';
+        const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '');
         const batchId = uuidv4();
 
         const request = {
@@ -867,7 +965,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         const resolution = config.resolution || '720p';
         if (resolution === '1080p') {
             console.log(`[FlowVideo] 🔄 Upscaling to 1080p...`);
-            const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio);
+            // Fetch fresh reCAPTCHA token for upscale (previous one may have expired during generation)
+            const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '');
+            const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken);
             if (upsampleResult.upsampledMediaId) {
                 const upsampledMediaId = upsampleResult.upsampledMediaId;
                 console.log(`[FlowVideo] Upscale submitted: ${upsampledMediaId}`);
@@ -923,7 +1023,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
      * Upscale a completed video from 720p to 1080p.
      * POST /v1/video:batchAsyncGenerateVideoUpsampleVideo
      */
-    async _upscaleVideo(token, projectId, mediaId, aspectRatio) {
+    async _upscaleVideo(token, projectId, mediaId, aspectRatio, recaptchaToken = '') {
         const url = `${API_BASE}/v1/video:batchAsyncGenerateVideoUpsampleVideo`;
         const sessionId = `;${Date.now()}`;
         const body = {
@@ -934,8 +1034,8 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                 userPaygateTier: 'PAYGATE_TIER_TWO',
                 sessionId,
                 recaptchaContext: {
-                    token: '',
                     applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
+                    ...(recaptchaToken && { token: recaptchaToken }),
                 },
             },
             requests: [{
