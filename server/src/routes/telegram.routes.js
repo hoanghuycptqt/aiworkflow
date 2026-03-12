@@ -118,6 +118,8 @@ router.post('/webhook', async (req, res) => {
         const { bot } = await import('../services/telegram-bot.js');
         if (bot) {
             await bot.handleUpdate(req.body);
+        } else {
+            console.warn('[Telegram] ⚠️ Webhook received but bot is null — update dropped');
         }
         res.sendStatus(200);
     } catch (err) {
