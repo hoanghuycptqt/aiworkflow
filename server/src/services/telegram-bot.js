@@ -213,6 +213,9 @@ export async function startBot() {
         if (mode === 'webhook') {
             const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
             if (webhookUrl) {
+                // Delete + re-set webhook to clear Telegram's backoff state
+                // after VPS downtime (accumulated timeouts cause delivery pause)
+                await bot.telegram.deleteWebhook({ drop_pending_updates: true });
                 await bot.telegram.setWebhook(webhookUrl);
                 console.log(`[Telegram] 🤖 Bot started (webhook: ${webhookUrl})`);
             } else {
