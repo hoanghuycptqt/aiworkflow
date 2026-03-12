@@ -193,6 +193,11 @@ export async function startBot() {
         }
     });
 
+    // ─── Unsupported media handlers (respond fast to avoid webhook timeout) ───
+    bot.on(['video', 'video_note', 'voice', 'audio', 'document', 'sticker', 'animation'], (ctx) => {
+        return ctx.reply('⚠️ Bot hiện chưa hỗ trợ loại nội dung này. Vui lòng gửi tin nhắn văn bản hoặc ảnh.');
+    });
+
     // ─── Error handler ───────────────────────────────────────
     bot.catch((err, ctx) => {
         console.error('[Telegram] Bot error:', err);
