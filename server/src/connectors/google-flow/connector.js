@@ -287,6 +287,28 @@ async function fetchRecaptchaToken(sessionCookies) {
     }
 }
 
+/**
+ * Clear a used reCAPTCHA token via Google's CLR endpoint.
+ * Matches Google Flow web behavior: Token → API call → CLR → next token.
+ */
+async function clearRecaptchaToken(usedToken) {
+    if (!usedToken) return;
+    try {
+        const res = await fetch('https://www.google.com/recaptcha/enterprise/clr', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-protobuf',
+                'Origin': 'https://labs.google',
+                'Referer': 'https://labs.google/',
+            },
+            body: usedToken,
+        });
+        console.log(`[reCAPTCHA] CLR sent (status=${res.status})`);
+    } catch (e) {
+        console.warn('[reCAPTCHA] CLR call failed:', e.message);
+    }
+}
+
 // Model name mapping (UI label -> API value)
 const IMAGE_MODELS = {
     'banana2': 'NARWHAL',              // ✅ Nano Banana 2 — CONFIRMED
@@ -353,20 +375,18 @@ async function uploadReferenceImage(token, projectId, imageBase64, mimeType = 'i
 }
 
 /**
- * Step 2: Batch generate images
- * Returns array of { name, fifeUrl } for generated images.
+ * Step 2: Generate a SINGLE image via batchGenerateImages API.
+ * Caller provides batchId + sessionId to group multiple calls.
+ * Returns array of { mediaId, fifeUrl, ... } (usually 1 item).
  */
-async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, count, referenceMediaIds, seed, recaptchaToken }) {
-    const batchId = uuidv4();
-    const sessionId = `;${Date.now()}`;
-
+async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, referenceMediaIds, seed, recaptchaToken, batchId, sessionId }) {
     // Build recaptcha context
     const recaptchaContext = {
         applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
         ...(recaptchaToken && { token: recaptchaToken }),
     };
 
-    // Build single request object
+    // Build single request object — 1 request = 1 image
     const request = {
         clientContext: {
             recaptchaContext,
@@ -390,9 +410,6 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         }));
     }
 
-    // Batch = count identical requests (each produces 1 image)
-    const requests = Array.from({ length: count || 1 }, () => ({ ...request }));
-
     const body = {
         clientContext: {
             recaptchaContext,
@@ -402,11 +419,10 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         },
         mediaGenerationContext: { batchId },
         useNewMedia: true,
-        requests,
+        requests: [request],  // Always 1 request per API call
     };
 
-    console.log(`[FlowImage] Generating ${count} image(s), model=${modelName}, ratio=${aspectRatio}...`);
-    console.log(`[FlowImage] Request body:`, JSON.stringify(body, null, 2));
+    console.log(`[FlowImage] Generating 1 image(s), model=${modelName}, ratio=${aspectRatio}, seed=${request.seed}...`);
 
     let res;
     const MAX_RETRIES = 2;
@@ -608,19 +624,35 @@ export class GoogleFlowImageConnector extends BaseConnector {
             }
         }
 
-        // Get fresh reCAPTCHA token (auto-fetch via Puppeteer)
+        // ── Batch generation: 1 API call per image, fresh reCAPTCHA each ──
         const sessionCookies = credentials.metadata?.sessionCookies || '';
-        const recaptchaToken = await fetchRecaptchaToken(sessionCookies);
+        const batchId = uuidv4();
+        const sessionId = `;${Date.now()}`;
+        const allResults = [];
 
-        // Generate images
-        const results = await batchGenerateImages(token, projectId, {
-            prompt,
-            modelName,
-            aspectRatio,
-            count,
-            referenceMediaIds,
-            recaptchaToken,
-        });
+        console.log(`[FlowImage] Starting batch of ${count} image(s), batchId=${batchId}`);
+
+        for (let i = 0; i < count; i++) {
+            // Fresh reCAPTCHA token for each API call
+            const recaptchaToken = await fetchRecaptchaToken(sessionCookies);
+
+            const result = await batchGenerateImages(token, projectId, {
+                prompt,
+                modelName,
+                aspectRatio,
+                referenceMediaIds,
+                recaptchaToken,
+                batchId,
+                sessionId,
+                seed: Math.floor(Math.random() * 2147483647),
+            });
+            allResults.push(...result);
+
+            // Clear the used token (matches Google Flow web behavior)
+            await clearRecaptchaToken(recaptchaToken);
+        }
+
+        const results = allResults;
 
         // Download and save images to job folder (or fallback)
         const uploadsDir = process.env.UPLOAD_DIR || './uploads';
@@ -636,13 +668,14 @@ export class GoogleFlowImageConnector extends BaseConnector {
         const savedImages = [];
         for (const r of results) {
             if (r.fifeUrl) {
-                // Upscale if needed — API returns base64 directly in encodedImage
+                // Upscale if needed — each upscale also gets a fresh reCAPTCHA token
                 if (resolution !== '1k' && r.mediaId) {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
-                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, recaptchaToken);
+                        const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies);
+                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha);
+                        await clearRecaptchaToken(upscaleRecaptcha);
                         if (upscaleResult.encodedImage) {
-                            // Save upscaled base64 directly to disk
                             const filename = `gflow_${resolution}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
                             const filepath = join(outputDir, filename);
                             await writeFile(filepath, Buffer.from(upscaleResult.encodedImage, 'base64'));
@@ -653,7 +686,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                                 mediaId: r.mediaId,
                                 dimensions: r.dimensions,
                             });
-                            continue; // Skip normal download
+                            continue;
                         } else {
                             console.warn(`[FlowImage] ⚠️ Upscale returned no encodedImage, downloading original`);
                         }
