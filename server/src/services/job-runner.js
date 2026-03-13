@@ -306,7 +306,25 @@ async function finalizeBatch(batchId, userId, completed, failed, total) {
 
             await notifyTelegramUser(userId, msg, mediaFiles);
         } else if (status === 'failed') {
-            await notifyTelegramUser(userId, `❌ *Batch thất bại*\n${failed}/${total} jobs lỗi.`);
+            // Collect error details from failed executions
+            const failedExecs = await prisma.workflowExecution.findMany({
+                where: { jobBatchId: batchId, status: 'failed' },
+                select: { error: true },
+                take: 3,
+            });
+            const errorDetails = failedExecs
+                .map(e => e.error)
+                .filter(Boolean)
+                .map(e => {
+                    // Extract the connector-level message from "Node X failed: <message>"
+                    const match = e.match(/failed:\s*(.+)$/);
+                    return match ? match[1] : e;
+                });
+            const uniqueErrors = [...new Set(errorDetails)];
+            const errorMsg = uniqueErrors.length > 0
+                ? `\n\n💬 ${uniqueErrors.join('\n💬 ')}`
+                : '';
+            await notifyTelegramUser(userId, `❌ *Batch thất bại*\n${failed}/${total} jobs lỗi.${errorMsg}`);
         }
     } catch (err) {
         // Telegram notification is best-effort, don't fail the batch

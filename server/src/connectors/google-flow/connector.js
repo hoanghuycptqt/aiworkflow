@@ -445,6 +445,10 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
             await new Promise(r => setTimeout(r, 3000)); // wait 3s before retry
             continue;
         }
+        // Detect content policy violation on input image
+        if (errText.includes('PUBLIC_ERROR_MINOR_INPUT_IMAGE')) {
+            throw new Error('⚠️ Ảnh bạn tải lên có nội dung không phù hợp hoặc không được hỗ trợ. Vui lòng thử ảnh khác.');
+        }
         throw new Error(`Generation failed (${res.status}): ${errText.substring(0, 400)}`);
     }
 
