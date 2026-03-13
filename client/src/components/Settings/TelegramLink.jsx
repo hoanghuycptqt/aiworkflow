@@ -38,6 +38,7 @@ export default function TelegramLink() {
     }
 
     async function unlinkAccount(linkId) {
+        if (!window.confirm('Are you sure you want to unlink this Telegram account?')) return;
         try {
             await api.unlinkTelegram(linkId);
             toast.success('Unlinked successfully');

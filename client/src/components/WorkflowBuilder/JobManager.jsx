@@ -234,9 +234,9 @@ export default function JobManager({ workflowId, onRunBatch }) {
                         </span>
                         <div style={{ display: 'flex', gap: 6 }}>
                             <button className="btn btn-sm" onClick={selectAll} title="Select All"
-                                style={{ fontSize: 11, padding: '2px 6px' }}>All</button>
+                                style={{ fontSize: 11, padding: '2px 8px' }}>All</button>
                             <button className="btn btn-sm" onClick={deselectAll} title="Deselect All"
-                                style={{ fontSize: 11, padding: '2px 6px' }}>None</button>
+                                style={{ fontSize: 11, padding: '2px 8px' }}>None</button>
                             <button className="btn btn-sm btn-primary" onClick={createJob}
                                 style={{ fontSize: 11, padding: '2px 8px' }}>+ Add</button>
                         </div>
@@ -520,6 +520,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                 {mode === 'parallel' && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Concurrency:</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>1</span>
                         <input
                             className="input"
                             type="range"
@@ -528,6 +529,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                             onChange={(e) => setConcurrency(parseInt(e.target.value))}
                             style={{ width: 80, accentColor: 'var(--accent)' }}
                         />
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>10</span>
                         <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, minWidth: 20 }}>
                             {concurrency}
                         </span>

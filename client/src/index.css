@@ -16,6 +16,7 @@
   --text-primary: #f0f0f5;
   --text-secondary: #a0a0b8;
   --text-muted: #6b6b80;
+  --text-placeholder: #8888a0;
   --text-accent: #818cf8;
 
   --border-primary: rgba(255, 255, 255, 0.06);
@@ -204,7 +205,16 @@ body {
 
 .input::placeholder,
 .textarea::placeholder {
+  color: var(--text-placeholder);
+}
+
+/* VV-13: Read-only / disabled inputs */
+.input[readonly],
+.input.input-readonly {
+  background: rgba(255, 255, 255, 0.02);
   color: var(--text-muted);
+  cursor: not-allowed;
+  border-style: dashed;
 }
 
 .textarea {
@@ -485,6 +495,10 @@ body {
   color: var(--accent-primary);
   text-decoration: none;
   font-weight: 500;
+  padding: 6px 4px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .auth-switch a:hover {
@@ -526,6 +540,10 @@ body {
   cursor: pointer;
   transition: all var(--transition-normal);
   position: relative;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .workflow-card:hover {
@@ -884,18 +902,43 @@ body {
   }
 }
 
-/* React Flow handles */
+/* React Flow handles — VV-12: larger hit area for touch */
 .react-flow__handle {
-  width: 10px !important;
-  height: 10px !important;
+  width: 12px !important;
+  height: 12px !important;
   background: var(--bg-tertiary) !important;
   border: 2px solid var(--text-muted) !important;
   transition: all var(--transition-fast);
 }
 
+.react-flow__handle::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+
 .react-flow__handle:hover {
   border-color: var(--accent-primary) !important;
   background: var(--accent-primary) !important;
+}
+
+/* React Flow minimap — VV-11 */
+.react-flow__minimap {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-primary) !important;
+  border-radius: var(--radius-md) !important;
+  overflow: hidden;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(129, 140, 248, 0.08) !important;
+  stroke: var(--accent-primary) !important;
+  stroke-width: 1 !important;
+}
+
+.react-flow__minimap-node {
+  fill: var(--bg-tertiary) !important;
+  stroke: var(--border-secondary) !important;
 }
 
 /* React Flow edges */
@@ -1417,7 +1460,7 @@ body {
 /* ─── Stat Cards ──────────── */
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 14px;
   margin-bottom: 24px;
 }
@@ -1705,8 +1748,8 @@ body {
   border-bottom: none;
 }
 
-.um-table tr:hover td {
-  background: var(--surface-glass);
+.um-table tbody tr:hover td {
+  background: rgba(129, 140, 248, 0.06);
 }
 
 .disabled-row td {
@@ -1740,11 +1783,12 @@ body {
 }
 
 .um-btn {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-primary);
+  border: 1px solid var(--border-secondary);
   background: transparent;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 14px;
   display: flex;
@@ -1754,13 +1798,15 @@ body {
 }
 
 .um-btn:hover {
-  background: var(--surface-glass-hover);
-  border-color: var(--border-secondary);
+  background: rgba(129, 140, 248, 0.12);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
 .um-btn-danger:hover {
   background: rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--error);
 }
 
 /* ─── Modal (admin) ──────── */
@@ -2121,6 +2167,7 @@ body {
 
   /* Bottom Sheet overlay */
   .bottom-sheet-overlay {
+    display: block;
     position: fixed;
     inset: 0;
     background: var(--bg-overlay);
@@ -2130,6 +2177,7 @@ body {
   }
 
   .bottom-sheet {
+    display: block;
     position: fixed;
     left: 0;
     right: 0;

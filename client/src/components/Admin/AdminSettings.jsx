@@ -49,7 +49,7 @@ export default function AdminSettings() {
             <div className="admin-card">
                 <h3><Icon name="bot" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Telegram Bot AI</h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>
-                    Chọn model Gemini cho Telegram bot AI assistant.
+                    Select the Gemini model for Telegram bot AI assistant.
                 </p>
 
                 <div className="settings-field">

@@ -358,7 +358,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
             <div className="config-panel-body">
                 <div className="form-group">
                     <label className="form-label">Node ID</label>
-                    <input className="input" type="text" value={node.id} readOnly style={{ opacity: 0.6 }} />
+                    <input className="input input-readonly" type="text" value={node.id} readOnly />
                 </div>
 
                 {Object.entries(schema).map(([key, fieldSchema]) => (
