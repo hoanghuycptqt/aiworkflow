@@ -185,15 +185,14 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   line-height: 1.5;
-  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* Smooth theme transition for key layout elements */
-.app-sidebar,
-.app-main,
-.auth-container,
-.auth-card {
-  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+/* Smooth theme transition — only active during theme switch (class added/removed by JS) */
+.theme-transitioning,
+.theme-transitioning *,
+.theme-transitioning *::before,
+.theme-transitioning *::after {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease !important;
 }
 
 /* Scrollbar */
@@ -232,7 +231,7 @@ body {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   white-space: nowrap;
   text-decoration: none;
 }
@@ -295,7 +294,7 @@ body {
   color: var(--text-primary);
   font-family: var(--font-family);
   font-size: 14px;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   outline: none;
 }
 
@@ -359,7 +358,7 @@ body {
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   padding: 24px;
-  transition: all var(--transition-normal);
+  transition: background-color var(--transition-normal), border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-normal), color var(--transition-normal), opacity var(--transition-normal);
 }
 
 .card:hover {
@@ -460,7 +459,7 @@ body {
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   cursor: pointer;
   border: none;
   background: none;
@@ -562,7 +561,7 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   z-index: 10;
 }
 
@@ -666,7 +665,7 @@ body {
   border-radius: var(--radius-lg);
   padding: 24px;
   cursor: pointer;
-  transition: all var(--transition-normal);
+  transition: background-color var(--transition-normal), border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-normal), color var(--transition-normal), opacity var(--transition-normal);
   position: relative;
   min-height: 160px;
   display: flex;
@@ -724,7 +723,7 @@ body {
   border-radius: var(--radius-lg);
   cursor: pointer;
   color: var(--text-muted);
-  transition: all var(--transition-normal);
+  transition: background-color var(--transition-normal), border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-normal), color var(--transition-normal), opacity var(--transition-normal);
 }
 
 .create-workflow-card:hover {
@@ -775,7 +774,7 @@ body {
   background: var(--surface-glass);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   font-size: 16px;
 }
 
@@ -858,7 +857,7 @@ body {
   padding: 10px 12px;
   border-radius: var(--radius-md);
   cursor: grab;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   margin-bottom: 4px;
   border: 1px solid transparent;
 }
@@ -956,7 +955,7 @@ body {
   border: 1.5px solid var(--border-primary);
   border-radius: var(--radius-md);
   min-width: 180px;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   overflow: hidden;
 }
 
@@ -1036,7 +1035,7 @@ body {
   height: 12px !important;
   background: var(--bg-tertiary) !important;
   border: 2px solid var(--text-muted) !important;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .react-flow__handle::after {
@@ -1103,7 +1102,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .credential-card:hover {
@@ -1156,7 +1155,7 @@ body {
   border: none;
   border-bottom: 2px solid transparent;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   margin-bottom: -2px;
   display: inline-flex;
   align-items: center;
@@ -1435,7 +1434,7 @@ body {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   flex-shrink: 0;
 }
 
@@ -1452,7 +1451,7 @@ body {
   height: 18px;
   border-radius: 50%;
   background: var(--text-secondary);
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .toggle.active .toggle-thumb {
@@ -1560,7 +1559,7 @@ body {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .admin-tab:hover {
@@ -1599,7 +1598,7 @@ body {
   border-radius: var(--radius-lg);
   padding: 20px;
   text-align: center;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .stat-card:hover {
@@ -1922,7 +1921,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .um-btn:hover {
@@ -2035,7 +2034,7 @@ body {
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   background: var(--bg-primary);
 }
 
@@ -2060,7 +2059,7 @@ body {
   height: 16px;
   border-radius: 50%;
   border: 2px solid var(--border-secondary);
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   position: relative;
 }
 

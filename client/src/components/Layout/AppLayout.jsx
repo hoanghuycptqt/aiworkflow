@@ -11,9 +11,11 @@ export default function AppLayout({ user, onLogout }) {
 
     function toggleTheme() {
         const next = theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.classList.add('theme-transitioning');
         document.documentElement.setAttribute('data-theme', next);
         localStorage.setItem('theme', next);
         setTheme(next);
+        setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 350);
     }
 
     // Auto-close sidebar on navigation
