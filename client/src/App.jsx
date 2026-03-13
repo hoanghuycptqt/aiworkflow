@@ -17,6 +17,25 @@ function App() {
 
   useEffect(() => {
     checkAuth();
+    // Theme init: localStorage > prefers-color-scheme > default dark
+    const saved = localStorage.getItem('theme');
+    if (saved) {
+      document.documentElement.setAttribute('data-theme', saved);
+    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+
+    // E2: Real-time system theme sync — listen for OS theme changes
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    function handleSystemThemeChange(e) {
+      // Only auto-sync if user hasn't explicitly chosen a theme
+      if (!localStorage.getItem('theme')) {
+        const systemTheme = e.matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', systemTheme);
+      }
+    }
+    mediaQuery.addEventListener('change', handleSystemThemeChange);
+    return () => mediaQuery.removeEventListener('change', handleSystemThemeChange);
   }, []);
 
   async function checkAuth() {
@@ -60,9 +79,9 @@ function App() {
         position="top-right"
         toastOptions={{
           style: {
-            background: '#1a1a2e',
-            color: '#f0f0f5',
-            border: '1px solid rgba(255,255,255,0.06)',
+            background: 'var(--bg-card)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-primary)',
             borderRadius: '10px',
             fontSize: '14px',
           },

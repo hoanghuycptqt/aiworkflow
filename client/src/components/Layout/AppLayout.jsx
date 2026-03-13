@@ -5,6 +5,16 @@ import Icon from '../../services/icons.jsx';
 export default function AppLayout({ user, onLogout }) {
     const location = useLocation();
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [theme, setTheme] = useState(
+        () => document.documentElement.getAttribute('data-theme') || 'dark'
+    );
+
+    function toggleTheme() {
+        const next = theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+        setTheme(next);
+    }
 
     // Auto-close sidebar on navigation
     useEffect(() => {
@@ -71,6 +81,10 @@ export default function AppLayout({ user, onLogout }) {
                             <div className="user-email">{user.email}</div>
                         </div>
                     </div>
+                    <button className="nav-item" onClick={toggleTheme} style={{ marginTop: 4 }} title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+                        <span className="nav-icon"><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} /></span>
+                        {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+                    </button>
                     <button className="nav-item" onClick={onLogout} style={{ marginTop: 4 }}>
                         <span className="nav-icon"><Icon name="logout" size={18} /></span>
                         Logout

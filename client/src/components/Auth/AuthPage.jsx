@@ -10,8 +10,18 @@ export default function AuthPage({ onLogin }) {
     const [verificationSent, setVerificationSent] = useState(false);
     const [verifyStatus, setVerifyStatus] = useState(null); // null | 'success' | 'error'
     const [unverifiedEmail, setUnverifiedEmail] = useState('');
+    const [theme, setTheme] = useState(
+        () => document.documentElement.getAttribute('data-theme') || 'dark'
+    );
     const googleBtnRef = useRef(null);
     const googleInitRef = useRef(false);
+
+    function toggleTheme() {
+        const next = theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+        setTheme(next);
+    }
 
     // Initialize Google Sign-In
     useEffect(() => {
@@ -30,7 +40,7 @@ export default function AuthPage({ onLogin }) {
             });
             if (googleBtnRef.current) {
                 window.google.accounts.id.renderButton(googleBtnRef.current, {
-                    theme: 'filled_black',
+                    theme: theme === 'light' ? 'outline' : 'filled_black',
                     size: 'large',
                     width: '100%',
                     text: 'signin_with',
@@ -40,6 +50,20 @@ export default function AuthPage({ onLogin }) {
         }
         initGoogle();
     }, []);
+
+    // Re-render Google button when theme changes
+    useEffect(() => {
+        if (!googleInitRef.current || !window.google?.accounts?.id || !googleBtnRef.current) return;
+        // Clear and re-render with new theme
+        googleBtnRef.current.innerHTML = '';
+        window.google.accounts.id.renderButton(googleBtnRef.current, {
+            theme: theme === 'light' ? 'outline' : 'filled_black',
+            size: 'large',
+            width: '100%',
+            text: 'signin_with',
+            shape: 'rectangular',
+        });
+    }, [theme]);
 
     async function handleGoogleResponse(response) {
         try {
@@ -173,6 +197,13 @@ export default function AuthPage({ onLogin }) {
 
     return (
         <div className="auth-container">
+            <button
+                className="auth-theme-toggle"
+                onClick={toggleTheme}
+                title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+                <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
+            </button>
             <div className="auth-card">
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                     <img src="/icon.png" alt="THHFlow" style={{ width: 56, height: 56 }} />

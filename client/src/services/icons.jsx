@@ -13,7 +13,8 @@ import {
     ArrowLeft, Paperclip, RefreshCw, FileUp, Link, Send,
     Mail, MailCheck, AlertTriangle, Bot, Smartphone, Image,
     Loader2, ChevronRight, CircleX, CircleAlert, CirclePause,
-    SkipForward, Monitor, ListOrdered, Sparkles, KeyRound
+    SkipForward, Monitor, ListOrdered, Sparkles, KeyRound,
+    Sun, Moon
 } from 'lucide-react';
 
 // Map string names to Lucide components
@@ -92,6 +93,10 @@ const ICON_MAP = {
     'circle-alert': CircleAlert,
     'circle-pause': CirclePause,
     'skip-forward': SkipForward,
+
+    // Theme
+    'sun': Sun,
+    'moon': Moon,
 };
 
 /**

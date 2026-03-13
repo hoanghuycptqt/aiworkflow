@@ -68,6 +68,100 @@
   --z-toast: 800;
 }
 
+/* ─── Light Mode Override ──────────────────────────── */
+[data-theme="light"] {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #f1f5f9;
+  --bg-tertiary: #e2e8f0;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-input: #ffffff;
+  --bg-overlay: rgba(0, 0, 0, 0.25);
+
+  --surface-glass: rgba(0, 0, 0, 0.02);
+  --surface-glass-hover: rgba(0, 0, 0, 0.04);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --text-placeholder: #94a3b8;
+  --text-accent: #6366f1;
+
+  --border-primary: rgba(0, 0, 0, 0.08);
+  --border-secondary: rgba(0, 0, 0, 0.12);
+  --border-active: rgba(99, 102, 241, 0.4);
+
+  --accent-primary: #6366f1;
+  --accent-secondary: #4f46e5;
+  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 50%, #4338ca 100%);
+  --accent-glow: 0 0 20px rgba(99, 102, 241, 0.1);
+
+  --success: #059669;
+  --success-bg: rgba(5, 150, 105, 0.08);
+  --warning: #d97706;
+  --warning-bg: rgba(217, 119, 6, 0.08);
+  --error: #dc2626;
+  --error-bg: rgba(220, 38, 38, 0.08);
+  --info: #2563eb;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.06);
+}
+
+/* React Flow light overrides */
+[data-theme="light"] .react-flow__background {
+  background: var(--bg-primary) !important;
+}
+
+[data-theme="light"] .react-flow__handle {
+  background: #e2e8f0 !important;
+  border-color: #94a3b8 !important;
+}
+
+[data-theme="light"] .react-flow__handle:hover {
+  border-color: var(--accent-primary) !important;
+  background: var(--accent-primary) !important;
+}
+
+[data-theme="light"] .react-flow__edge-path {
+  stroke: #94a3b8 !important;
+}
+
+[data-theme="light"] .react-flow__minimap {
+  background: #f1f5f9 !important;
+  border: 1.5px solid rgba(0, 0, 0, 0.15) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  border-radius: 6px !important;
+}
+
+[data-theme="light"] .react-flow__minimap-mask {
+  fill: rgba(99, 102, 241, 0.06) !important;
+  stroke: var(--accent-primary) !important;
+}
+
+[data-theme="light"] .react-flow__minimap-node {
+  fill: #e2e8f0 !important;
+  stroke: rgba(0, 0, 0, 0.1) !important;
+}
+
+[data-theme="light"] .react-flow__controls {
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+[data-theme="light"] .react-flow__controls-button {
+  background: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+  fill: #475569 !important;
+}
+
+[data-theme="light"] .react-flow__controls-button:hover {
+  background: #f1f5f9 !important;
+}
+
 *,
 *::before,
 *::after {
@@ -91,6 +185,15 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   line-height: 1.5;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Smooth theme transition for key layout elements */
+.app-sidebar,
+.app-main,
+.auth-container,
+.auth-card {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 /* Scrollbar */
@@ -442,6 +545,31 @@ body {
   height: 100vh;
   background: var(--bg-primary);
   padding: 20px;
+  position: relative;
+}
+
+.auth-theme-toggle {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border-secondary);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  z-index: 10;
+}
+
+.auth-theme-toggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
 }
 
 .auth-card {
