@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
+import { SkeletonStat } from '../Shared/SkeletonLoader.jsx';
 
 export default function AdminDashboard() {
     const [data, setData] = useState(null);
@@ -19,7 +21,7 @@ export default function AdminDashboard() {
         setLoading(false);
     }
 
-    if (loading) return <div className="admin-loading"><div className="loading-spinner" /></div>;
+    if (loading) return <div className="admin-dashboard" style={{ padding: 24 }}><SkeletonStat count={4} /></div>;
     if (!data) return <div className="admin-error">Failed to load dashboard</div>;
 
     const { stats, chart, recentExecutions, recentUsers } = data;
@@ -29,17 +31,17 @@ export default function AdminDashboard() {
         <div className="admin-dashboard">
             {/* Stat Cards */}
             <div className="stat-cards">
-                <StatCard label="Total Users" value={stats.totalUsers} icon="👥" color="#6366f1" />
-                <StatCard label="Active Users" value={stats.activeUsers} icon="✅" color="#22c55e" />
-                <StatCard label="Workflows" value={stats.totalWorkflows} icon="⚡" color="#f59e0b" />
-                <StatCard label="Jobs Today" value={stats.jobsToday} icon="🎬" color="#3b82f6" />
-                <StatCard label="Completed" value={stats.jobsCompleted} icon="✔️" color="#10b981" />
-                <StatCard label="Success Rate" value={`${stats.successRate}%`} icon="📈" color="#8b5cf6" />
+                <StatCard label="Total Users" value={stats.totalUsers} icon="users" color="#6366f1" />
+                <StatCard label="Active Users" value={stats.activeUsers} icon="check-circle" color="#22c55e" />
+                <StatCard label="Workflows" value={stats.totalWorkflows} icon="zap" color="#f59e0b" />
+                <StatCard label="Jobs Today" value={stats.jobsToday} icon="clapperboard" color="#3b82f6" />
+                <StatCard label="Completed" value={stats.jobsCompleted} icon="circle-check" color="#10b981" />
+                <StatCard label="Success Rate" value={`${stats.successRate}%`} icon="trending-up" color="#8b5cf6" />
             </div>
 
             {/* Jobs Chart */}
             <div className="admin-card">
-                <h3>📊 Jobs (Last 7 Days)</h3>
+                <h3><Icon name="bar-chart" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Jobs (Last 7 Days)</h3>
                 <div className="chart-container">
                     {chart.map((day, i) => (
                         <div key={i} className="chart-bar-wrapper">
@@ -57,7 +59,7 @@ export default function AdminDashboard() {
             {/* Two columns: Recent Activity + New Users */}
             <div className="admin-grid-2">
                 <div className="admin-card">
-                    <h3>🕐 Recent Activity</h3>
+                    <h3><Icon name="clock" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Recent Activity</h3>
                     <div className="activity-list">
                         {recentExecutions.length === 0 && <p className="empty-text">No recent activity</p>}
                         {recentExecutions.map(exec => (
@@ -76,7 +78,7 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="admin-card">
-                    <h3>🆕 New Users</h3>
+                    <h3><Icon name="user-plus" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} /> New Users</h3>
                     <div className="activity-list">
                         {recentUsers.map(user => (
                             <div key={user.id} className="activity-item">
@@ -98,7 +100,7 @@ export default function AdminDashboard() {
 function StatCard({ label, value, icon, color }) {
     return (
         <div className="stat-card" style={{ borderTop: `3px solid ${color}` }}>
-            <div className="stat-icon">{icon}</div>
+            <div className="stat-icon"><Icon name={icon} size={24} color={color} /></div>
             <div className="stat-value">{value}</div>
             <div className="stat-label">{label}</div>
         </div>

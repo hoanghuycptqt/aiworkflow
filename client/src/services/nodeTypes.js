@@ -26,7 +26,7 @@ export const NODE_TYPES = {
     'file-upload': {
         type: 'file-upload',
         label: 'File Upload',
-        icon: '📤',
+        icon: 'upload',
         category: 'utility',
         color: '#6366f1',
         description: 'Upload and provide files as input',
@@ -39,7 +39,7 @@ export const NODE_TYPES = {
     'ai-text': {
         type: 'ai-text',
         label: 'AI Text',
-        icon: '🔀',
+        icon: 'shuffle',
         category: 'ai',
         color: '#4285f4',
         description: 'AI text generation & image analysis (supports OpenRouter & Google Gemini)',
@@ -62,7 +62,7 @@ export const NODE_TYPES = {
     'google-flow-image': {
         type: 'google-flow-image',
         label: 'Flow — Image',
-        icon: '🎨',
+        icon: 'palette',
         category: 'ai',
         color: '#f59e0b',
         description: 'Generate images with Google Flow (uses uploaded image as reference)',
@@ -97,7 +97,7 @@ export const NODE_TYPES = {
     'google-flow-video': {
         type: 'google-flow-video',
         label: 'Flow — Video',
-        icon: '🎬',
+        icon: 'clapperboard',
         category: 'ai',
         color: '#ef4444',
         description: 'Generate videos with Google Flow (auto-uses Flow Image output as start frame)',
@@ -139,7 +139,7 @@ export const NODE_TYPES = {
     'chatgpt-note': {
         type: 'chatgpt-note',
         label: 'ChatGPT Note',
-        icon: '💬',
+        icon: 'message-square',
         category: 'ai',
         color: '#10a37f',
         description: 'Send messages to ChatGPT via direct API (supports Custom GPTs & image input)',
@@ -166,7 +166,7 @@ export const NODE_TYPES = {
     'file-download': {
         type: 'file-download',
         label: 'File Download',
-        icon: '📥',
+        icon: 'download',
         category: 'utility',
         color: '#8b5cf6',
         description: 'Download and save output files',
@@ -180,7 +180,7 @@ export const NODE_TYPES = {
     'text-template': {
         type: 'text-template',
         label: 'Text Template',
-        icon: '📝',
+        icon: 'file-edit',
         category: 'utility',
         color: '#06b6d4',
         description: 'Create text using templates',
@@ -194,7 +194,7 @@ export const NODE_TYPES = {
     'delay': {
         type: 'delay',
         label: 'Delay',
-        icon: '⏱️',
+        icon: 'timer',
         category: 'utility',
         color: '#64748b',
         description: 'Wait before continuing',
@@ -207,7 +207,7 @@ export const NODE_TYPES = {
     'text-extractor': {
         type: 'text-extractor',
         label: 'Text Extractor',
-        icon: '✂️',
+        icon: 'scissors',
         category: 'utility',
         color: '#f472b6',
         description: 'Extract Image & Video prompts from AI output',
@@ -221,8 +221,8 @@ export const NODE_TYPES = {
 };
 
 export const NODE_CATEGORIES = [
-    { id: 'ai', label: 'AI Services', icon: '🧠' },
-    { id: 'utility', label: 'Utilities', icon: '🔧' },
+    { id: 'ai', label: 'AI Services', icon: 'brain' },
+    { id: 'utility', label: 'Utilities', icon: 'wrench' },
 ];
 
 export function getNodeType(type) {

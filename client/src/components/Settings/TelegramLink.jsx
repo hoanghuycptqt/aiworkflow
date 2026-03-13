@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
 import toast from 'react-hot-toast';
 
 /**
@@ -53,7 +54,7 @@ export default function TelegramLink() {
             marginTop: 24,
         }}>
             <h3 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>
-                🤖 Telegram Bot
+                <Icon name="bot" size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Telegram Bot
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
                 Link your Telegram account to receive job notifications, create jobs, and manage workflows via chat.
@@ -76,7 +77,7 @@ export default function TelegramLink() {
                     marginBottom: 16,
                 }}
             >
-                {loading ? '⏳ Generating...' : '📱 Link Telegram Account'}
+                {loading ? <><Icon name="loader" size={14} className="loading-spinner" style={{ marginRight: 4 }} /> Generating...</> : <><Icon name="smartphone" size={14} style={{ marginRight: 4 }} /> Link Telegram Account</>}
             </button>
 
             {/* Deep Link Display */}
@@ -106,10 +107,10 @@ export default function TelegramLink() {
                             fontWeight: 500,
                         }}
                     >
-                        🔗 Open in Telegram (@{linkData.botUsername})
+                        <Icon name="link" size={14} style={{ marginRight: 4 }} /> Open in Telegram (@{linkData.botUsername})
                     </a>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
-                        ⏱ Link expires: {new Date(linkData.expiresAt).toLocaleTimeString()}
+                        <Icon name="timer" size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Link expires: {new Date(linkData.expiresAt).toLocaleTimeString()}
                     </div>
                 </div>
             )}
@@ -133,7 +134,7 @@ export default function TelegramLink() {
                         }}>
                             <div>
                                 <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>
-                                    💬 {acc.label || 'Telegram'}
+                                    <Icon name="message-square" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> {acc.label || 'Telegram'}
                                 </span>
                                 <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>
                                     Chat ID: {acc.chatId}

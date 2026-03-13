@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api, SERVER } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
 import toast from 'react-hot-toast';
 
 export default function AuthPage({ onLogin }) {
@@ -126,7 +127,7 @@ export default function AuthPage({ onLogin }) {
         return (
             <div className="auth-container">
                 <div className="auth-card" style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 48, marginBottom: 16 }}>✉️</div>
+                    <div style={{ fontSize: 48, marginBottom: 16 }}><Icon name="mail" size={48} color="var(--accent-primary)" /></div>
                     <h1 style={{ background: 'none', WebkitTextFillColor: 'var(--text-primary)', fontSize: 22 }}>
                         Check your email
                     </h1>
@@ -155,7 +156,7 @@ export default function AuthPage({ onLogin }) {
         return (
             <div className="auth-container">
                 <div className="auth-card" style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 48, marginBottom: 16 }}>✅</div>
+                    <div style={{ fontSize: 48, marginBottom: 16 }}><Icon name="mail-check" size={48} color="var(--success)" /></div>
                     <h1 style={{ background: 'none', WebkitTextFillColor: 'var(--text-primary)', fontSize: 22 }}>
                         Email verified!
                     </h1>
@@ -236,7 +237,7 @@ export default function AuthPage({ onLogin }) {
                 {unverifiedEmail && (
                     <div style={{ marginTop: 16, padding: 12, background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: 8, textAlign: 'center' }}>
                         <p style={{ fontSize: 13, color: '#f59e0b', marginBottom: 8 }}>
-                            ⚠️ Email not verified yet
+                            <Icon name="alert-triangle" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Email not verified yet
                         </p>
                         <button className="btn btn-secondary" onClick={handleResendVerification} style={{ fontSize: 12 }}>
                             Resend verification email

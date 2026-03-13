@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
 import toast from 'react-hot-toast';
 
 export default function AdminSettings() {
@@ -46,7 +47,7 @@ export default function AdminSettings() {
     return (
         <div className="admin-settings">
             <div className="admin-card">
-                <h3>🤖 Telegram Bot AI</h3>
+                <h3><Icon name="bot" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Telegram Bot AI</h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>
                     Chọn model Gemini cho Telegram bot AI assistant.
                 </p>
@@ -92,7 +93,7 @@ export default function AdminSettings() {
                     disabled={saving}
                     style={{ marginTop: 20, width: '100%' }}
                 >
-                    {saving ? 'Saving...' : '💾 Save Settings'}
+                    {saving ? 'Saving...' : <><Icon name="save" size={14} style={{ marginRight: 4 }} /> Save Settings</>}
                 </button>
             </div>
         </div>

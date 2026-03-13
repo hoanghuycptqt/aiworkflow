@@ -2,11 +2,12 @@ import { useState } from 'react';
 import AdminDashboard from './AdminDashboard.jsx';
 import UserManagement from './UserManagement.jsx';
 import AdminSettings from './AdminSettings.jsx';
+import Icon from '../../services/icons.jsx';
 
 const TABS = [
-    { id: 'dashboard', label: '📊 Dashboard', icon: '📊' },
-    { id: 'users', label: '👥 Users', icon: '👥' },
-    { id: 'settings', label: '⚙️ Settings', icon: '⚙️' },
+    { id: 'dashboard', label: 'Dashboard', icon: 'bar-chart' },
+    { id: 'users', label: 'Users', icon: 'users' },
+    { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
 export default function AdminPage() {
@@ -15,7 +16,7 @@ export default function AdminPage() {
     return (
         <div className="admin-page">
             <div className="admin-header">
-                <h1>⚙️ Admin Panel</h1>
+                <h1><Icon name="settings" size={22} style={{ marginRight: 8, verticalAlign: 'middle' }} /> Admin Panel</h1>
                 <div className="admin-tabs">
                     {TABS.map(tab => (
                         <button
@@ -23,6 +24,7 @@ export default function AdminPage() {
                             className={`admin-tab ${activeTab === tab.id ? 'active' : ''}`}
                             onClick={() => setActiveTab(tab.id)}
                         >
+                            <Icon name={tab.icon} size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />
                             {tab.label}
                         </button>
                     ))}

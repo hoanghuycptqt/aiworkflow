@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
 import toast from 'react-hot-toast';
 
 const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
@@ -229,7 +230,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                         justifyContent: 'space-between',
                     }}>
                         <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                            📋 Jobs ({jobs.length})
+                            <Icon name="list-ordered" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Jobs ({jobs.length})
                         </span>
                         <div style={{ display: 'flex', gap: 6 }}>
                             <button className="btn btn-sm" onClick={selectAll} title="Select All"
@@ -249,7 +250,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                                 color: 'var(--text-muted)',
                                 fontSize: 13,
                             }}>
-                                <div style={{ fontSize: 32, marginBottom: 12 }}>📦</div>
+                                <div style={{ fontSize: 32, marginBottom: 12 }}><Icon name="package" size={32} color="var(--text-muted)" /></div>
                                 No jobs yet. Click <strong>+ Add</strong> to create one.
                             </div>
                         ) : (
@@ -309,7 +310,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                                                 justifyContent: 'center',
                                                 fontSize: 16,
                                                 flexShrink: 0,
-                                            }}>📷</div>
+                                            }}><Icon name="camera" size={16} color="var(--text-muted)" /></div>
                                         )}
 
                                         {/* Info */}
@@ -334,10 +335,10 @@ export default function JobManager({ workflowId, onRunBatch }) {
                                         <div style={{ display: 'flex', gap: 2 }}>
                                             <button className="btn btn-sm btn-icon"
                                                 onClick={(e) => { e.stopPropagation(); duplicateJob(job.id); }}
-                                                title="Duplicate" style={{ fontSize: 11, padding: '2px 4px' }}>📋</button>
+                                                title="Duplicate" style={{ fontSize: 11, padding: '2px 4px' }}><Icon name="copy" size={12} /></button>
                                             <button className="btn btn-sm btn-icon btn-danger"
                                                 onClick={(e) => { e.stopPropagation(); deleteJob(job.id); }}
-                                                title="Delete" style={{ fontSize: 11, padding: '2px 4px' }}>🗑️</button>
+                                                title="Delete" style={{ fontSize: 11, padding: '2px 4px' }}><Icon name="trash" size={12} /></button>
                                         </div>
                                     </div>
                                 );
@@ -357,13 +358,13 @@ export default function JobManager({ workflowId, onRunBatch }) {
                             height: '100%',
                             color: 'var(--text-muted)',
                         }}>
-                            <div style={{ fontSize: 48, marginBottom: 12 }}>👈</div>
+                            <div style={{ fontSize: 48, marginBottom: 12 }}><Icon name="arrow-left" size={48} color="var(--text-muted)" /></div>
                             <div style={{ fontSize: 14 }}>Select a job to configure</div>
                         </div>
                     ) : (
                         <div style={{ maxWidth: 600 }}>
                             <h3 style={{ margin: '0 0 16px', color: 'var(--text-primary)', fontSize: 16 }}>
-                                ✏️ Edit Job
+                                <Icon name="pencil" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Edit Job
                             </h3>
 
                             {/* Job Name */}
@@ -429,7 +430,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                                         </div>
                                     ) : (
                                         <div>
-                                            <div style={{ fontSize: 28, marginBottom: 6 }}>📁</div>
+                                            <div style={{ fontSize: 28, marginBottom: 6 }}><Icon name="folder-open" size={28} color="var(--text-muted)" /></div>
                                             <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 500 }}>
                                                 Click to browse or drag & drop
                                             </div>
@@ -481,7 +482,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                                             ))}
                                         </div>
                                         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
-                                            📎 {(selectedJob.inputData?.filePaths || []).length} image(s) attached
+                                            <Icon name="paperclip" size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} /> {(selectedJob.inputData?.filePaths || []).length} image(s) attached
                                         </div>
                                     </div>
                                 )}
@@ -507,12 +508,12 @@ export default function JobManager({ workflowId, onRunBatch }) {
                         className={`btn btn-sm ${mode === 'parallel' ? 'btn-primary' : ''}`}
                         onClick={() => setMode('parallel')}
                         style={{ fontSize: 12, padding: '4px 10px' }}
-                    >⚡ Parallel</button>
+                    ><Icon name="zap" size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Parallel</button>
                     <button
                         className={`btn btn-sm ${mode === 'sequential' ? 'btn-primary' : ''}`}
                         onClick={() => setMode('sequential')}
                         style={{ fontSize: 12, padding: '4px 10px' }}
-                    >📋 Sequential</button>
+                    ><Icon name="list-ordered" size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Sequential</button>
                 </div>
 
                 {/* Concurrency (only for parallel) */}
@@ -547,7 +548,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                     disabled={selectedCount === 0}
                     style={{ fontSize: 13, padding: '6px 16px' }}
                 >
-                    ▶ Run {selectedCount > 0 ? `${selectedCount} Job${selectedCount > 1 ? 's' : ''}` : 'Jobs'}
+                    <Icon name="play" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Run {selectedCount > 0 ? `${selectedCount} Job${selectedCount > 1 ? 's' : ''}` : 'Jobs'}
                 </button>
             </div>
         </div>

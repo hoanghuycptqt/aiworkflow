@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../../services/api.js';
 import { onJobUpdate, onExecutionUpdate } from '../../services/socket.js';
+import Icon from '../../services/icons.jsx';
 import toast from 'react-hot-toast';
 
 const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
@@ -53,8 +54,8 @@ export default function JobMonitor({ workflowId }) {
                 const key = `batch:${data.batchId}:${data.status}`;
                 if (!notifiedRef.current.has(key)) {
                     notifiedRef.current.add(key);
-                    const emoji = data.status === 'completed' ? '🎉' : data.status === 'partial' ? '⚠️' : '❌';
-                    toast(`${emoji} Batch ${data.status}: ${data.completedJobs}/${data.totalJobs} completed`, { duration: 5000 });
+                    const label = data.status === 'completed' ? 'Batch completed' : data.status === 'partial' ? 'Batch partial' : 'Batch failed';
+                    toast(`${label}: ${data.completedJobs}/${data.totalJobs} completed`, { duration: 5000 });
                 }
                 loadHistory();
             }
@@ -189,7 +190,7 @@ export default function JobMonitor({ workflowId }) {
     if (executions.length === 0) {
         return (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
-                <div style={{ fontSize: 48, marginBottom: 12 }}>📂</div>
+                <div style={{ fontSize: 48, marginBottom: 12 }}><Icon name="folder-open" size={48} color="var(--text-muted)" /></div>
                 <div style={{ fontSize: 14 }}>No execution history yet. Run some jobs first!</div>
             </div>
         );
@@ -206,16 +207,9 @@ export default function JobMonitor({ workflowId }) {
             background: 'var(--bg-primary)',
         }}>
             {/* Header */}
-            <div style={{
-                padding: '10px 20px',
-                borderBottom: '1px solid var(--border-primary)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                background: 'var(--bg-tertiary)',
-            }}>
+            <div className="history-header">
                 <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
-                    📜 Job History
+                    <Icon name="clock" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Job History
                 </span>
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                     {executions.length} execution{executions.length !== 1 ? 's' : ''}
@@ -224,11 +218,11 @@ export default function JobMonitor({ workflowId }) {
                     <span style={{
                         fontSize: 11, padding: '2px 8px', borderRadius: 4,
                         background: 'rgba(99,102,241,0.15)', color: '#818cf8', fontWeight: 500,
-                    }}>⚡ {runningCount} running</span>
+                    }}><Icon name="zap" size={11} style={{ marginRight: 2 }} /> {runningCount} running</span>
                 )}
                 <div style={{ flex: 1 }} />
                 <button className="btn btn-sm" onClick={loadHistory}
-                    style={{ fontSize: 11, padding: '4px 10px' }}>🔄 Refresh</button>
+                    style={{ fontSize: 11, padding: '4px 10px' }}><Icon name="refresh" size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Refresh</button>
             </div>
 
             {/* Job Cards */}
@@ -275,7 +269,7 @@ export default function JobMonitor({ workflowId }) {
                                                 background: '#111', flexShrink: 0,
                                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                                                 fontSize: 22, border: '1px solid var(--border-primary)',
-                                            }}>🎬</div>
+                                            }}><Icon name="clapperboard" size={22} /></div>
                                         ) : (
                                             <img src={outputMedia[0].url} alt="" loading="lazy" style={{
                                                 width: 56, height: 56, borderRadius: 6,
@@ -290,7 +284,7 @@ export default function JobMonitor({ workflowId }) {
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                                             fontSize: 20, border: '1px solid var(--border-primary)',
                                             color: 'var(--text-muted)',
-                                        }}>{exec.status === 'running' ? '⚡' : '📄'}</div>
+                                        }}><Icon name={exec.status === 'running' ? 'zap' : 'file-text'} size={20} color="var(--text-muted)" /></div>
                                     )}
 
                                     <StatusBadge status={exec.status} />
@@ -305,7 +299,7 @@ export default function JobMonitor({ workflowId }) {
                                             fontSize: 11, color: 'var(--accent)',
                                             background: 'rgba(99,102,241,0.1)',
                                             padding: '2px 8px', borderRadius: 4,
-                                        }}>🔄 {exec.currentNode}</span>
+                                        }}><Icon name="refresh" size={11} style={{ marginRight: 2 }} /> {exec.currentNode}</span>
                                     )}
 
                                     <div style={{ flex: 1 }} />
@@ -322,7 +316,7 @@ export default function JobMonitor({ workflowId }) {
 
                                     {totalMedia > 0 && (
                                         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                            📎 {totalMedia}
+                                            <Icon name="paperclip" size={11} style={{ marginRight: 2 }} /> {totalMedia}
                                         </span>
                                     )}
 
@@ -358,7 +352,7 @@ export default function JobMonitor({ workflowId }) {
                                         }}
                                         onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
                                         onMouseLeave={(e) => e.currentTarget.style.opacity = '0.5'}
-                                    >🗑️</button>
+                                    ><Icon name="trash" size={13} /></button>
 
                                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                                         {isExpanded ? '▼' : '▶'}
@@ -377,14 +371,14 @@ export default function JobMonitor({ workflowId }) {
                                                     justifyContent: 'space-between', marginBottom: 10,
                                                 }}>
                                                     <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                                                        📤 Output Media ({outputMedia.length})
+                                                        <Icon name="file-up" size={13} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Output Media ({outputMedia.length})
                                                     </span>
                                                     {exec.batchId && (
                                                         <button
                                                             className="btn btn-sm"
                                                             onClick={(e) => { e.stopPropagation(); downloadJob(exec.batchId, exec.id); }}
                                                             style={{ fontSize: 11, padding: '2px 8px' }}
-                                                        >📥 Download</button>
+                                                        ><Icon name="download" size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Download</button>
                                                     )}
                                                 </div>
                                                 <div style={{
@@ -503,7 +497,7 @@ export default function JobMonitor({ workflowId }) {
                                 opacity: loadingMore ? 0.6 : 1,
                             }}
                         >
-                            {loadingMore ? '⏳ Loading...' : `📜 Load More (${executions.length}/${totalCount})`}
+                            {loadingMore ? 'Loading...' : `Load More (${executions.length}/${totalCount})`}
                         </button>
                     </div>
                 )}
@@ -539,7 +533,7 @@ export default function JobMonitor({ workflowId }) {
                             textAlign: 'center',
                         }}
                     >
-                        <div style={{ fontSize: 32, marginBottom: 12 }}>🗑️</div>
+                        <div style={{ fontSize: 32, marginBottom: 12 }}><Icon name="trash" size={32} color="#ef4444" /></div>
                         <div style={{ fontSize: 14, color: 'var(--text-primary)', marginBottom: 6, fontWeight: 600 }}>
                             Delete this execution?
                         </div>
@@ -793,7 +787,7 @@ function GalleryLightbox({ items, initialIndex, onClose }) {
                                     width: '100%', height: '100%',
                                     background: '#111', display: 'flex',
                                     alignItems: 'center', justifyContent: 'center', fontSize: 16,
-                                }}>🎬</div>
+                                }}>▶</div>
                             ) : (
                                 <img src={item.url} alt=""
                                     style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -881,7 +875,7 @@ function MediaPreview({ media, onClick }) {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)',
                 fontSize: 24, border: '1px solid var(--border-primary)', cursor: 'pointer',
-            }}>{media.type === 'video' ? '🎬' : '🖼️'}</div>
+            }}><Icon name={media.type === 'video' ? 'clapperboard' : 'image'} size={24} color="var(--text-muted)" /></div>
         );
     }
 
@@ -904,7 +898,7 @@ function MediaPreview({ media, onClick }) {
                     position: 'absolute', top: 4, left: 4,
                     fontSize: 9, padding: '1px 5px', borderRadius: 3,
                     background: 'rgba(0,0,0,0.7)', color: '#fff',
-                }}>🎬 {media.nodeType}</span>
+                }}><Icon name="clapperboard" size={9} style={{ marginRight: 2 }} /> {media.nodeType}</span>
             </div>
         );
     }
@@ -922,7 +916,7 @@ function MediaPreview({ media, onClick }) {
                 position: 'absolute', top: 4, left: 4,
                 fontSize: 9, padding: '1px 5px', borderRadius: 3,
                 background: 'rgba(0,0,0,0.7)', color: '#fff',
-            }}>🖼️ {media.nodeType}</span>
+            }}><Icon name="image" size={9} style={{ marginRight: 2 }} /> {media.nodeType}</span>
         </div>
     );
 }
@@ -930,13 +924,13 @@ function MediaPreview({ media, onClick }) {
 // ─── Shared UI Components ──────────────────────────────────────
 function StatusBadge({ status }) {
     const styles = {
-        pending: { bg: 'rgba(156,163,175,0.15)', color: '#9ca3af', icon: '⏳' },
-        running: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', icon: '⚡' },
-        completed: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', icon: '✅' },
-        failed: { bg: 'rgba(239,68,68,0.15)', color: '#ef4444', icon: '❌' },
-        cancelled: { bg: 'rgba(234,179,8,0.15)', color: '#eab308', icon: '⛔' },
-        paused: { bg: 'rgba(234,179,8,0.15)', color: '#eab308', icon: '⏸️' },
-        partial: { bg: 'rgba(234,179,8,0.15)', color: '#eab308', icon: '⚠️' },
+        pending: { bg: 'rgba(156,163,175,0.15)', color: '#9ca3af', iconName: 'clock' },
+        running: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', iconName: 'zap' },
+        completed: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', iconName: 'check-circle' },
+        failed: { bg: 'rgba(239,68,68,0.15)', color: '#ef4444', iconName: 'circle-x' },
+        cancelled: { bg: 'rgba(234,179,8,0.15)', color: '#eab308', iconName: 'ban' },
+        paused: { bg: 'rgba(234,179,8,0.15)', color: '#eab308', iconName: 'circle-pause' },
+        partial: { bg: 'rgba(234,179,8,0.15)', color: '#eab308', iconName: 'circle-alert' },
     };
     const s = styles[status] || styles.pending;
 
@@ -944,25 +938,18 @@ function StatusBadge({ status }) {
         <span style={{
             fontSize: 11, padding: '2px 8px', borderRadius: 4,
             background: s.bg, color: s.color, fontWeight: 500,
-        }}>{s.icon} {status}</span>
+        }}><Icon name={s.iconName} size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} /> {status}</span>
     );
 }
 
 function StatusIcon({ status }) {
     if (status === 'running') {
-        return (
-            <span style={{
-                fontSize: 13,
-                display: 'inline-block',
-                animation: 'spin 1s linear infinite',
-            }}>
-                🔄
-                <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-            </span>
-        );
+        return <Icon name="refresh" size={13} className="loading-spinner" style={{ color: 'var(--accent)' }} />;
     }
-    const icons = { pending: '⏳', completed: '✅', failed: '❌', skipped: '⏭️' };
-    return <span style={{ fontSize: 13 }}>{icons[status] || '⏳'}</span>;
+    const iconNames = { pending: 'clock', completed: 'check-circle', failed: 'circle-x', skipped: 'skip-forward' };
+    const name = iconNames[status] || 'clock';
+    const colors = { completed: '#22c55e', failed: '#ef4444', skipped: '#eab308' };
+    return <Icon name={name} size={13} color={colors[status] || 'var(--text-muted)'} />;
 }
 
 function DurationTimer({ startedAt, completedAt }) {

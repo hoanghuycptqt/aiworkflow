@@ -18,6 +18,7 @@ import CustomNode from './CustomNode.jsx';
 import NodeConfigPanel from './NodeConfigPanel.jsx';
 import JobManager from './JobManager.jsx';
 import JobMonitor from './JobMonitor.jsx';
+import Icon from '../../services/icons.jsx';
 import toast from 'react-hot-toast';
 
 const nodeComponentTypes = {
@@ -56,6 +57,7 @@ function WorkflowBuilderInner() {
     const [activeTab, setActiveTab] = useState('canvas');
     const [jobCount, setJobCount] = useState(0);
     const [historyKey, setHistoryKey] = useState(0); // bump to force refresh
+    const [showMobilePalette, setShowMobilePalette] = useState(false);
 
     // Load workflow
     useEffect(() => {
@@ -88,7 +90,7 @@ function WorkflowBuilderInner() {
             if (data.status) {
                 setExecutionStatus(data.status);
                 if (data.status === 'completed') {
-                    toast.success('Workflow completed! 🎉');
+                    toast.success('Workflow completed!');
                 } else if (data.status === 'failed') {
                     toast.error(`Workflow failed: ${data.error || 'Unknown error'}`);
                 }
@@ -189,6 +191,32 @@ function WorkflowBuilderInner() {
         [reactFlowInstance, setNodes],
     );
 
+    // Mobile: tap to add node at viewport center
+    function addNodeAtCenter(nodeType) {
+        const typeDef = getNodeType(nodeType);
+        if (!typeDef || !reactFlowInstance) return;
+
+        const { x, y, zoom } = reactFlowInstance.getViewport();
+        const centerX = (-x + window.innerWidth / 2) / zoom;
+        const centerY = (-y + window.innerHeight / 2) / zoom;
+
+        const newNode = {
+            id: `node_${nodeIdCounter++}`,
+            type: 'custom',
+            position: { x: centerX - 80, y: centerY - 30 },
+            data: {
+                type: nodeType,
+                label: typeDef.label,
+                icon: typeDef.icon,
+                color: typeDef.color,
+                config: {},
+            },
+        };
+
+        setNodes((nds) => [...nds, newNode]);
+        setShowMobilePalette(false);
+    }
+
     function updateNodeConfig(nodeId, config) {
         setNodes((nds) =>
             nds.map((n) =>
@@ -241,7 +269,7 @@ function WorkflowBuilderInner() {
 
     function getNodeIcon(nodeId) {
         const node = nodes.find((n) => n.id === nodeId);
-        return node?.data?.icon || '📦';
+        return node?.data?.icon || 'package';
     }
 
     function formatOutput(output) {
@@ -295,7 +323,7 @@ function WorkflowBuilderInner() {
                     />
                     {executionStatus && (
                         <span className={`badge badge-${executionStatus === 'running' ? 'warning' : executionStatus === 'completed' ? 'success' : executionStatus === 'failed' ? 'error' : 'info'}`}>
-                            {executionStatus === 'running' && '⚡ '}
+                            {executionStatus === 'running' && <><Icon name="zap" size={12} /> </>}
                             {executionStatus}
                         </span>
                     )}
@@ -303,48 +331,37 @@ function WorkflowBuilderInner() {
                 <div className="builder-header-actions">
                     {hasResults && activeTab === 'canvas' && (
                         <button className="btn btn-sm" onClick={() => setShowResults(!showResults)}>
-                            {showResults ? '🔽 Hide Results' : '🔼 Show Results'}
+                            <Icon name={showResults ? 'chevron-down' : 'chevron-up'} size={14} /> {showResults ? 'Hide Results' : 'Show Results'}
                         </button>
                     )}
                     <button className="btn btn-sm" onClick={saveWorkflow} disabled={saving}>
-                        {saving ? <span className="loading-spinner" /> : '💾'} Save
+                        {saving ? <span className="loading-spinner" /> : <Icon name="save" size={14} />} Save
                     </button>
                     <button className="btn btn-sm btn-primary" onClick={() => setShowRunModal(true)}>
-                        ▶ Quick Run
+                        <Icon name="play" size={14} /> Quick Run
                     </button>
                 </div>
             </div>
 
             {/* Tab bar */}
-            <div style={{
-                display: 'flex',
-                borderBottom: '2px solid var(--border-primary)',
-                background: 'var(--bg-tertiary)',
-                padding: '0 16px',
-            }}>
+            <div className="tab-bar">
                 {['canvas', 'jobs', 'history'].map((tab) => {
                     const labels = {
-                        canvas: '🎨 Canvas',
-                        jobs: `📋 Jobs${jobCount > 0 ? ` (${jobCount})` : ''}`,
-                        history: '📜 History',
+                        canvas: 'Canvas',
+                        jobs: `Jobs${jobCount > 0 ? ` (${jobCount})` : ''}`,
+                        history: 'History',
+                    };
+                    const icons = {
+                        canvas: 'palette',
+                        jobs: 'list-ordered',
+                        history: 'clock',
                     };
                     return (
                         <button
                             key={tab}
+                            className={`tab-item${activeTab === tab ? ' active' : ''}`}
                             onClick={() => setActiveTab(tab)}
-                            style={{
-                                padding: '10px 20px',
-                                fontSize: 13,
-                                fontWeight: activeTab === tab ? 600 : 400,
-                                color: activeTab === tab ? 'var(--accent)' : 'var(--text-muted)',
-                                background: 'transparent',
-                                border: 'none',
-                                borderBottom: activeTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
-                                cursor: 'pointer',
-                                transition: 'all 0.15s',
-                                marginBottom: -2,
-                            }}
-                        >{labels[tab]}</button>
+                        ><Icon name={icons[tab]} size={14} />{labels[tab]}</button>
                     );
                 })}
             </div>
@@ -358,7 +375,7 @@ function WorkflowBuilderInner() {
                             {NODE_CATEGORIES.map((cat) => (
                                 <div key={cat.id} className="palette-section">
                                     <div className="palette-section-title">
-                                        {cat.icon} {cat.label}
+                                        <Icon name={cat.icon} size={14} /> {cat.label}
                                     </div>
                                     {Object.values(NODE_TYPES)
                                         .filter((nt) => nt.category === cat.id)
@@ -373,7 +390,7 @@ function WorkflowBuilderInner() {
                                                 }}
                                             >
                                                 <div className="palette-node-icon" style={{ background: `${nt.color}15`, color: nt.color }}>
-                                                    {nt.icon}
+                                                    <Icon name={nt.icon} size={18} />
                                                 </div>
                                                 <div className="palette-node-info">
                                                     <div className="palette-node-name">{nt.label}</div>
@@ -427,6 +444,51 @@ function WorkflowBuilderInner() {
                             />
                         )}
                     </div>
+
+                    {/* Mobile FAB — add node */}
+                    <button className="mobile-fab" onClick={() => setShowMobilePalette(true)} aria-label="Add Node">
+                        <Icon name="plus" size={24} />
+                    </button>
+
+                    {/* Mobile bottom sheet — node palette */}
+                    {showMobilePalette && (
+                        <>
+                            <div className="bottom-sheet-overlay" onClick={() => setShowMobilePalette(false)} />
+                            <div className="bottom-sheet">
+                                <div className="bottom-sheet-handle" />
+                                <div className="bottom-sheet-header">
+                                    <h3>Add Node</h3>
+                                    <button className="btn btn-sm" onClick={() => setShowMobilePalette(false)}>
+                                        <Icon name="x" size={16} />
+                                    </button>
+                                </div>
+                                {NODE_CATEGORIES.map((cat) => (
+                                    <div key={cat.id} className="palette-section">
+                                        <div className="palette-section-title">
+                                            <Icon name={cat.icon} size={14} /> {cat.label}
+                                        </div>
+                                        {Object.values(NODE_TYPES)
+                                            .filter((nt) => nt.category === cat.id)
+                                            .map((nt) => (
+                                                <div
+                                                    key={nt.type}
+                                                    className="palette-node"
+                                                    onClick={() => addNodeAtCenter(nt.type)}
+                                                >
+                                                    <div className="palette-node-icon" style={{ background: `${nt.color}15`, color: nt.color }}>
+                                                        <Icon name={nt.icon} size={18} />
+                                                    </div>
+                                                    <div className="palette-node-info">
+                                                        <div className="palette-node-name">{nt.label}</div>
+                                                        <div className="palette-node-desc">{nt.description}</div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                    </div>
+                                ))}
+                            </div>
+                        </>
+                    )}
                 </>
             )}
 
@@ -452,24 +514,10 @@ function WorkflowBuilderInner() {
 
             {/* Execution Results Panel */}
             {showResults && (
-                <div style={{
-                    flex: '0 0 auto',
-                    maxHeight: '45vh',
-                    borderTop: '2px solid var(--border-primary)',
-                    background: 'var(--bg-secondary)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                }}>
-                    <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '10px 16px',
-                        borderBottom: '1px solid var(--border-primary)',
-                        background: 'var(--bg-tertiary)',
-                    }}>
+                <div className="results-panel" style={{ flex: '0 0 auto', maxHeight: '45vh' }}>
+                    <div className="results-panel-header">
                         <h3 style={{ margin: 0, fontSize: 14, color: 'var(--text-primary)' }}>
-                            📋 Execution Results
+                            Execution Results
                             {executionStatus === 'running' && <span className="loading-spinner" style={{ width: 14, height: 14, marginLeft: 8 }} />}
                         </h3>
                         <button
@@ -478,14 +526,10 @@ function WorkflowBuilderInner() {
                             style={{ fontSize: 12, padding: '2px 8px' }}
                         >✕</button>
                     </div>
-                    <div style={{
-                        flex: 1,
-                        overflowY: 'auto',
-                        padding: '12px 16px',
-                    }}>
+                    <div className="results-panel-body">
                         {Object.keys(nodeOutputs).length === 0 ? (
                             <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 20, fontSize: 13 }}>
-                                {executionStatus === 'running' ? '⏳ Waiting for node outputs...' : 'No results yet. Run the workflow to see outputs here.'}
+                                {executionStatus === 'running' ? 'Waiting for node outputs...' : 'No results yet. Run the workflow to see outputs here.'}
                             </div>
                         ) : (
                             Object.entries(nodeOutputs).map(([nodeId, output]) => (
@@ -509,7 +553,7 @@ function WorkflowBuilderInner() {
                                         }}
                                     >
                                         <span style={{ fontSize: 12 }}>{expandedNodes[nodeId] ? '▼' : '▶'}</span>
-                                        <span>{getNodeIcon(nodeId)}</span>
+                                        <span><Icon name={getNodeIcon(nodeId)} size={14} /></span>
                                         <strong style={{ fontSize: 13, color: 'var(--text-primary)' }}>
                                             {getNodeLabel(nodeId)}
                                         </strong>
@@ -523,7 +567,7 @@ function WorkflowBuilderInner() {
                                             background: output._error ? 'var(--error)' : 'var(--success)',
                                             color: '#fff',
                                         }}>
-                                            {output._error ? '❌ Error' : '✅ Done'}
+                                            {output._error ? 'Error' : 'Done'}
                                         </span>
                                     </div>
                                     {expandedNodes[nodeId] && (
@@ -545,7 +589,7 @@ function WorkflowBuilderInner() {
                                             </pre>
                                             {output.model && (
                                                 <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-                                                    🤖 Model: {output.model}
+                                                    Model: {output.model}
                                                 </div>
                                             )}
                                         </div>
@@ -561,7 +605,7 @@ function WorkflowBuilderInner() {
             {showRunModal && (
                 <div className="modal-overlay" onClick={() => setShowRunModal(false)}>
                     <div className="modal" onClick={(e) => e.stopPropagation()}>
-                        <h2>▶ Run Workflow</h2>
+                        <h2><Icon name="play" size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Run Workflow</h2>
                         <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 16 }}>
                             Execute this workflow with one or more parallel instances.
                         </p>
@@ -579,7 +623,7 @@ function WorkflowBuilderInner() {
                         <div className="modal-actions">
                             <button className="btn" onClick={() => setShowRunModal(false)}>Cancel</button>
                             <button className="btn btn-primary" onClick={runWorkflow}>
-                                ▶ Run {instanceCount > 1 ? `${instanceCount} Instances` : 'Workflow'}
+                                <Icon name="play" size={14} style={{ marginRight: 4 }} /> Run {instanceCount > 1 ? `${instanceCount} Instances` : 'Workflow'}
                             </button>
                         </div>
                     </div>

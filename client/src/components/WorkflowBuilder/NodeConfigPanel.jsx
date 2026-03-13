@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { getNodeType, PROVIDER_MODELS } from '../../services/nodeTypes.js';
 import { api } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
 
 const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
 
@@ -214,7 +215,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                         </select>
                         {filtered.length === 0 && (
                             <span className="form-hint" style={{ color: 'var(--warning)', marginTop: 6, display: 'block' }}>
-                                ⚠️ No credentials found. <a href="/credentials" style={{ color: 'var(--accent)' }}>Add one in Credentials page</a>
+                                 <Icon name="alert-triangle" size={14} color="var(--warning)" style={{ marginRight: 4 }} /> No credentials found. <a href="/credentials" style={{ color: 'var(--accent)' }}>Add one in Credentials page</a>
                             </span>
                         )}
                     </div>
@@ -270,7 +271,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                                 </div>
                             ) : (
                                 <div>
-                                    <div style={{ fontSize: 28, marginBottom: 6 }}>📁</div>
+                                    <div style={{ fontSize: 28, marginBottom: 6 }}><Icon name="folder-open" size={28} color="var(--text-muted)" /></div>
                                     <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 500 }}>
                                         Click to browse or drag & drop
                                     </div>
@@ -325,7 +326,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                                     ))}
                                 </div>
                                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-                                    📎 {uploadPreviews.length} image{uploadPreviews.length > 1 ? 's' : ''} uploaded
+                                    <Icon name="paperclip" size={12} style={{ marginRight: 4 }} /> {uploadPreviews.length} image{uploadPreviews.length > 1 ? 's' : ''} uploaded
                                 </div>
                             </div>
                         )}
@@ -348,7 +349,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
         <div className="config-panel">
             <div className="config-panel-header">
                 <h3>
-                    <span>{typeDef.icon}</span>
+                    <Icon name={typeDef.icon} size={16} color={typeDef.color} />
                     {typeDef.label}
                 </h3>
                 <button className="btn btn-sm btn-icon" onClick={onClose}>✕</button>
@@ -376,7 +377,7 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
 
             <div className="config-panel-footer">
                 <button className="btn btn-danger btn-sm" onClick={onDelete} style={{ width: '100%' }}>
-                    🗑️ Delete Node
+                    <Icon name="trash" size={14} style={{ marginRight: 4 }} /> Delete Node
                 </button>
             </div>
         </div>

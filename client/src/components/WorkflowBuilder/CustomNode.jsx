@@ -1,5 +1,6 @@
 import { Handle, Position } from '@xyflow/react';
 import { getNodeType } from '../../services/nodeTypes.js';
+import Icon from '../../services/icons.jsx';
 
 export default function CustomNode({ data, selected }) {
     const typeDef = getNodeType(data.type);
@@ -13,7 +14,7 @@ export default function CustomNode({ data, selected }) {
             )}
 
             <div className="custom-node-header" style={{ borderBottomColor: `${data.color}20` }}>
-                <span className="custom-node-icon">{data.icon}</span>
+                <span className="custom-node-icon"><Icon name={data.icon} size={16} color={data.color} /></span>
                 <span className="custom-node-label">{data.label}</span>
                 {data.status && (
                     <div className={`custom-node-status ${data.status}`} />

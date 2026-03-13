@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
+import ConfirmModal from '../Shared/ConfirmModal.jsx';
 import toast from 'react-hot-toast';
 import TelegramLink from '../Settings/TelegramLink.jsx';
 
 const PROVIDERS = [
-    { id: 'openrouter', label: 'OpenRouter', icon: '🔀', description: 'AI via OpenRouter — supports Gemini, Llama, DeepSeek & more' },
-    { id: 'gemini', label: 'Google Gemini', icon: '✨', description: 'Official Google Gemini API — Gemini 3 Flash & Pro' },
-    { id: 'google-flow', label: 'Google Flow', icon: '🎬', description: 'Auth token for Google Flow (labs.google/fx)' },
-    { id: 'chatgpt', label: 'ChatGPT', icon: '💬', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },
+    { id: 'openrouter', label: 'OpenRouter', icon: 'shuffle', description: 'AI via OpenRouter — supports Gemini, Llama, DeepSeek & more' },
+    { id: 'gemini', label: 'Google Gemini', icon: 'sparkles', description: 'Official Google Gemini API — Gemini 3 Flash & Pro' },
+    { id: 'google-flow', label: 'Google Flow', icon: 'clapperboard', description: 'Auth token for Google Flow (labs.google/fx)' },
+    { id: 'chatgpt', label: 'ChatGPT', icon: 'message-square', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },
 ];
 
 export default function CredentialsPage() {
@@ -17,6 +19,7 @@ export default function CredentialsPage() {
     const [editingId, setEditingId] = useState(null);
     const [form, setForm] = useState({ provider: 'openrouter', label: '', token: '', metadata: {} });
     const [refreshing, setRefreshing] = useState(null); // credentialId being refreshed
+    const [deleteTarget, setDeleteTarget] = useState(null);
     const [tokenStatus, setTokenStatus] = useState({}); // { credentialId: { valid, expiresInHuman } }
 
     const checkTokenStatus = async (credId, provider) => {
@@ -38,7 +41,7 @@ export default function CredentialsPage() {
                 body: JSON.stringify({ credentialId: credId }),
             });
             if (res.success) {
-                toast.success(`✅ Credentials updated! Expires: ${res.expiresAt ? new Date(res.expiresAt).toLocaleString('vi-VN') : 'N/A'}`);
+                toast.success(`Credentials updated! Expires: ${res.expiresAt ? new Date(res.expiresAt).toLocaleString('vi-VN') : 'N/A'}`);
                 // Immediately show as active (no need for slow re-check)
                 const expiresIn = res.expiresAt ? Math.floor((new Date(res.expiresAt) - Date.now()) / 1000) : 0;
                 const hours = Math.floor(expiresIn / 3600);
@@ -54,7 +57,7 @@ export default function CredentialsPage() {
                 loadCredentials();
             }
         } catch (err) {
-            toast.error(`❌ Refresh failed: ${err.message}`);
+            toast.error(`Refresh failed: ${err.message}`);
         } finally {
             setRefreshing(null);
         }
@@ -69,7 +72,7 @@ export default function CredentialsPage() {
                 body: JSON.stringify({ credentialId: credId }),
             });
             if (res.success) {
-                toast.success(`✅ Google Flow credentials updated! Expires: ${res.expiresAt ? new Date(res.expiresAt).toLocaleString('vi-VN') : 'N/A'}`);
+                toast.success(`Google Flow credentials updated! Expires: ${res.expiresAt ? new Date(res.expiresAt).toLocaleString('vi-VN') : 'N/A'}`);
                 const expiresIn = res.expiresAt ? Math.floor((new Date(res.expiresAt) - Date.now()) / 1000) : 0;
                 const hours = Math.floor(expiresIn / 3600);
                 const mins = Math.floor((expiresIn % 3600) / 60);
@@ -84,7 +87,7 @@ export default function CredentialsPage() {
                 loadCredentials();
             }
         } catch (err) {
-            toast.error(`❌ Refresh failed: ${err.message}`);
+            toast.error(`Refresh failed: ${err.message}`);
         } finally {
             setRefreshing(null);
         }
@@ -148,14 +151,19 @@ export default function CredentialsPage() {
     }
 
     async function deleteCredential(id) {
-        if (!confirm('Delete this credential?')) return;
+        setDeleteTarget(id);
+    }
+
+    async function confirmDeleteCredential() {
+        if (!deleteTarget) return;
         try {
-            await api.deleteCredential(id);
-            setCredentials((c) => c.filter((cr) => cr.id !== id));
+            await api.deleteCredential(deleteTarget);
+            setCredentials((c) => c.filter((cr) => cr.id !== deleteTarget));
             toast.success('Credential deleted');
         } catch (err) {
             toast.error(err.message);
         }
+        setDeleteTarget(null);
     }
 
     function openEdit(cred) {
@@ -165,7 +173,7 @@ export default function CredentialsPage() {
     }
 
     function getProviderInfo(providerId) {
-        return PROVIDERS.find((p) => p.id === providerId) || { icon: '⚙️', label: providerId };
+        return PROVIDERS.find((p) => p.id === providerId) || { icon: 'settings', label: providerId };
     }
 
     if (loading) {
@@ -194,7 +202,7 @@ export default function CredentialsPage() {
 
             {credentials.length === 0 ? (
                 <div className="empty-state">
-                    <div className="empty-state-icon">🔑</div>
+                    <div className="empty-state-icon"><Icon name="key" size={48} color="var(--text-muted)" /></div>
                     <h3>No Credentials Yet</h3>
                     <p>Add your OpenRouter API key or Google Flow token to start using AI nodes in your workflows.</p>
                 </div>
@@ -206,41 +214,40 @@ export default function CredentialsPage() {
                         return (
                             <div key={cred.id} className="credential-card">
                                 <div className="credential-info">
-                                    <div className="credential-provider-icon">{provider.icon}</div>
+                                    <div className="credential-provider-icon"><Icon name={provider.icon} size={20} /></div>
                                     <div className="credential-detail">
                                         <h4>{cred.label}</h4>
                                         <p>{provider.label} · Added {new Date(cred.createdAt).toLocaleDateString('vi-VN')}</p>
                                         {cred.provider === 'chatgpt' && (
-                                            <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.6 }}>
+                                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                                                 {status ? (
-                                                    <span style={{ color: status.tokenValid ? '#4ade80' : '#f87171', fontWeight: 500 }}>
-                                                        {status.tokenValid ? '🍪 Cookies: ✅ Valid' : '🍪 Cookies: ❌ Expired'}
+                                                    <span className={`badge ${status.tokenValid ? 'badge-success' : 'badge-error'}`}>
+                                                        {status.tokenValid ? 'Cookies: Valid' : 'Cookies: Expired'}
                                                     </span>
                                                 ) : cred.metadata?.cookies ? (
-                                                    <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>⏳ Checking cookies...</span>
+                                                    <span className="badge badge-info">Checking cookies...</span>
                                                 ) : (
-                                                    <span style={{ color: '#f87171', fontWeight: 500 }}>🍪 Cookies: ❌ Missing</span>
+                                                    <span className="badge badge-error">Cookies: Missing</span>
                                                 )}
                                             </div>
                                         )}
                                         {cred.provider === 'google-flow' && status && (
-                                            <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.6 }}>
-                                                <span style={{ color: status.tokenValid ? '#4ade80' : '#f87171', fontWeight: 500 }}>
-                                                    {status.tokenValid ? `🔑 Token: ✅ ${status.expiresInHuman || 'Valid'}` : '🔑 Token: ❌ Invalid'}
+                                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                                                <span className={`badge ${status.tokenValid ? 'badge-success' : 'badge-error'}`}>
+                                                    {status.tokenValid ? `Token: ${status.expiresInHuman || 'Valid'}` : 'Token: Invalid'}
                                                 </span>
-                                                <br />
-                                                <span style={{ color: status.hasSession ? '#4ade80' : '#f87171', fontWeight: 500 }}>
-                                                    {status.hasSession ? '🍪 Session: ✅ Valid' : '🍪 Session: ❌ Expired'}
+                                                <span className={`badge ${status.hasSession ? 'badge-success' : 'badge-error'}`}>
+                                                    {status.hasSession ? 'Session: Valid' : 'Session: Expired'}
                                                 </span>
                                                 {cred.metadata?.lastRefreshed && (
-                                                    <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>
-                                                        · Refreshed: {new Date(cred.metadata.lastRefreshed).toLocaleString('vi-VN')}
+                                                    <span className="badge badge-info">
+                                                        Refreshed: {new Date(cred.metadata.lastRefreshed).toLocaleString('vi-VN')}
                                                     </span>
                                                 )}
                                             </div>
                                         )}
                                         {(cred.provider === 'chatgpt' || cred.provider === 'google-flow') && !status && (
-                                            <p style={{ fontSize: 12, marginTop: 4, color: 'var(--text-muted)' }}>⏳ Checking status...</p>
+                                            <div style={{ marginTop: 6 }}><span className="badge badge-info">Checking status...</span></div>
                                         )}
                                     </div>
                                 </div>
@@ -259,7 +266,7 @@ export default function CredentialsPage() {
                                             onClick={() => handleRefreshGoogleFlow(cred.id)}
                                             disabled={refreshing === cred.id}
                                         >
-                                            {refreshing === cred.id ? '⏳ Refreshing...' : '🔄 Auto Refresh'}
+                                            {refreshing === cred.id ? 'Refreshing...' : 'Auto Refresh'}
                                         </button>
                                     )}
                                     <button className="btn btn-sm" onClick={() => openEdit(cred)}>Edit</button>
@@ -313,7 +320,7 @@ export default function CredentialsPage() {
                                         onChange={(e) => setForm({ ...form, token: e.target.value })}
                                     />
                                     <span className="form-hint">
-                                        🔑 Get your free API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>openrouter.ai/keys</a>
+                                        Get your free API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>openrouter.ai/keys</a>
                                     </span>
                                 </div>
                             ) : form.provider === 'gemini' ? (
@@ -327,22 +334,22 @@ export default function CredentialsPage() {
                                         onChange={(e) => setForm({ ...form, token: e.target.value })}
                                     />
                                     <span className="form-hint">
-                                        🔑 Get your API key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>aistudio.google.com/apikey</a>
+                                        Get your API key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>aistudio.google.com/apikey</a>
                                     </span>
                                 </div>
                             ) : form.provider === 'chatgpt' ? (
                                 <>
                                     <div className="form-group">
-                                        <label className="form-label">Browser Cookies 🍪 <span style={{ color: '#f87171', fontSize: 11 }}>(required)</span></label>
+                                        <label className="form-label">Browser Cookies <span style={{ color: '#f87171', fontSize: 11 }}>(required)</span></label>
                                         <textarea
                                             className="textarea"
-                                            placeholder={'Paste ALL cookies from chatgpt.com here...\n\n📝 How to get:\n1. Open chatgpt.com → F12 → Application tab\n2. Click Cookies → chatgpt.com (left sidebar)\n3. Select all rows → Right click → Copy all\n\nOr via Network tab:\n1. Click any request to backend-api/\n2. In Headers → find "Cookie:" → copy full value'}
+                                            placeholder={'Paste ALL cookies from chatgpt.com here...\n\nHow to get:\n1. Open chatgpt.com → F12 → Application tab\n2. Click Cookies → chatgpt.com (left sidebar)\n3. Select all rows → Right click → Copy all\n\nOr via Network tab:\n1. Click any request to backend-api/\n2. In Headers → find "Cookie:" → copy full value'}
                                             value={form.metadata?.cookies || ''}
                                             onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, cookies: e.target.value } })}
                                             style={{ minHeight: 140, fontSize: 11 }}
                                         />
                                         <span className="form-hint">
-                                            ⚠️ Must paste ALL cookies (including cf_clearance, oai-sc, session-token, etc.). Do NOT shorten.
+                                            Must paste ALL cookies (including cf_clearance, oai-sc, session-token, etc.). Do NOT shorten.
                                         </span>
                                     </div>
                                     <div className="form-group">
@@ -365,7 +372,7 @@ export default function CredentialsPage() {
                                         <label className="form-label">Bearer Token</label>
                                         <textarea
                                             className="textarea"
-                                            placeholder={'Paste your Google Flow token here...\n\n📝 How to get: Open Google Flow → F12 → Network tab → find API request → copy Authorization header'}
+                                            placeholder={'Paste your Google Flow token here...\n\nHow to get: Open Google Flow → F12 → Network tab → find API request → copy Authorization header'}
                                             value={form.token}
                                             onChange={(e) => setForm({ ...form, token: e.target.value })}
                                             style={{ minHeight: 120 }}
@@ -375,10 +382,10 @@ export default function CredentialsPage() {
                                         </span>
                                     </div>
                                     <div className="form-group">
-                                        <label className="form-label">Session Cookies 🍪</label>
+                                        <label className="form-label">Session Cookies</label>
                                         <textarea
                                             className="textarea"
-                                            placeholder={'Paste cookies from labs.google here...\n\n📝 How to get:\n1. Open labs.google/fx → F12 → Network tab\n2. Click any request to aisandbox-pa.googleapis.com\n3. In Headers → find "Cookie:" → copy full value'}
+                                            placeholder={'Paste cookies from labs.google here...\n\nHow to get:\n1. Open labs.google/fx → F12 → Network tab\n2. Click any request to aisandbox-pa.googleapis.com\n3. In Headers → find "Cookie:" → copy full value'}
                                             value={form.metadata?.sessionCookies || ''}
                                             onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, sessionCookies: e.target.value } })}
                                             style={{ minHeight: 100, fontSize: 11 }}
@@ -403,6 +410,17 @@ export default function CredentialsPage() {
 
             {/* Telegram Integration */}
             <TelegramLink />
+
+            {deleteTarget && (
+                <ConfirmModal
+                    title="Delete Credential?"
+                    message="This will permanently remove this credential. Workflows using it will stop working."
+                    confirmLabel="Delete"
+                    variant="danger"
+                    onConfirm={confirmDeleteCredential}
+                    onCancel={() => setDeleteTarget(null)}
+                />
+            )}
         </div>
     );
 }

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../services/api.js';
+import Icon from '../../services/icons.jsx';
+import ConfirmModal from '../Shared/ConfirmModal.jsx';
 import toast from 'react-hot-toast';
 
 export default function UserManagement() {
@@ -10,6 +12,7 @@ export default function UserManagement() {
     const [roleFilter, setRoleFilter] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
     const [modal, setModal] = useState(null); // null | { mode: 'create' | 'edit' | 'password', user? }
+    const [deleteTarget, setDeleteTarget] = useState(null);
     const [form, setForm] = useState({ name: '', email: '', password: '', role: 'user' });
 
     useEffect(() => {
@@ -89,25 +92,31 @@ export default function UserManagement() {
     }
 
     async function deleteUser(user) {
-        if (!confirm(`Delete "${user.name}" permanently? All their data will be lost.`)) return;
+        setDeleteTarget(user);
+    }
+
+    async function confirmDeleteUser() {
+        if (!deleteTarget) return;
         try {
-            await api.request(`/admin/users/${user.id}`, { method: 'DELETE' });
+            await api.request(`/admin/users/${deleteTarget.id}`, { method: 'DELETE' });
             toast.success('User deleted');
             loadUsers();
         } catch (err) {
             toast.error(err.message || 'Failed');
         }
+        setDeleteTarget(null);
     }
 
     if (loading) return <div className="admin-loading"><div className="loading-spinner" /></div>;
 
     return (
+        <>
         <div className="user-management">
             {/* Toolbar */}
             <div className="um-toolbar">
                 <input
                     type="text"
-                    placeholder="🔍 Search by name or email..."
+                    placeholder="Search by name or email..."
                     value={search}
                     onChange={e => setSearch(e.target.value)}
                     className="um-search"
@@ -163,12 +172,12 @@ export default function UserManagement() {
                                 <td className="um-date">{formatDate(user.createdAt)}</td>
                                 <td>
                                     <div className="um-actions">
-                                        <button className="um-btn" title="Edit" onClick={() => openEdit(user)}>✏️</button>
-                                        <button className="um-btn" title="Reset Password" onClick={() => openResetPassword(user)}>🔑</button>
+                                        <button className="um-btn" title="Edit" onClick={() => openEdit(user)}><Icon name="pencil" size={14} /></button>
+                                        <button className="um-btn" title="Reset Password" onClick={() => openResetPassword(user)}><Icon name="key-round" size={14} /></button>
                                         <button className="um-btn" title={user.isActive ? 'Disable' : 'Enable'} onClick={() => toggleActive(user)}>
-                                            {user.isActive ? '🚫' : '✅'}
+                                            <Icon name={user.isActive ? 'ban' : 'shield-check'} size={14} />
                                         </button>
-                                        <button className="um-btn um-btn-danger" title="Delete" onClick={() => deleteUser(user)}>🗑️</button>
+                                        <button className="um-btn um-btn-danger" title="Delete" onClick={() => deleteUser(user)}><Icon name="trash" size={14} /></button>
                                     </div>
                                 </td>
                             </tr>
@@ -182,9 +191,9 @@ export default function UserManagement() {
                 <div className="modal-overlay" onClick={() => setModal(null)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()}>
                         <h3>
-                            {modal.mode === 'create' ? '➕ Create User' :
-                                modal.mode === 'edit' ? `✏️ Edit ${modal.user.name}` :
-                                    `🔑 Reset Password — ${modal.user.name}`}
+                            {modal.mode === 'create' ? 'Create User' :
+                                modal.mode === 'edit' ? `Edit ${modal.user.name}` :
+                                    `Reset Password — ${modal.user.name}`}
                         </h3>
                         <form onSubmit={handleSubmit}>
                             {modal.mode !== 'password' && (
@@ -226,6 +235,18 @@ export default function UserManagement() {
                 </div>
             )}
         </div>
+
+            {deleteTarget && (
+                <ConfirmModal
+                    title={`Delete "${deleteTarget.name}"?`}
+                    message="This will permanently remove the user and all their data."
+                    confirmLabel="Delete"
+                    variant="danger"
+                    onConfirm={confirmDeleteUser}
+                    onCancel={() => setDeleteTarget(null)}
+                />
+            )}
+        </>
     );
 }
 
