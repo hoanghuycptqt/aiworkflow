@@ -360,6 +360,9 @@ async function uploadReferenceImage(token, projectId, imageBase64, mimeType = 'i
 
     if (!res.ok) {
         const errText = await res.text();
+        if (res.status === 401) {
+            throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
+        }
         throw new Error(`Upload failed (${res.status}): ${errText.substring(0, 400)}`);
     }
 
@@ -448,6 +451,9 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         // Detect content policy violation on input image
         if (errText.includes('PUBLIC_ERROR_MINOR_INPUT_IMAGE')) {
             throw new Error('⚠️ Ảnh bạn tải lên có nội dung không phù hợp hoặc không được hỗ trợ. Vui lòng thử ảnh khác.');
+        }
+        if (res.status === 401) {
+            throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
         }
         throw new Error(`Generation failed (${res.status}): ${errText.substring(0, 400)}`);
     }
@@ -784,6 +790,9 @@ export class GoogleFlowImageConnector extends BaseConnector {
 
         if (!res.ok) {
             const text = await res.text();
+            if (res.status === 401) {
+                throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
+            }
             throw new Error(`Image upscale failed (${res.status}): ${text.substring(0, 300)}`);
         }
 
@@ -1028,6 +1037,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                 console.log(`[FlowVideo] ⚠️ Server error ${res.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
                 await new Promise(r => setTimeout(r, 3000));
                 continue;
+            }
+            if (res.status === 401) {
+                throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
             }
             throw new Error(`Video generation failed (${res.status}): ${errText.substring(0, 400)}`);
         }
