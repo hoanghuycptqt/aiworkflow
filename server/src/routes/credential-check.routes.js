@@ -119,6 +119,49 @@ router.post('/token', async (req, res) => {
             });
             tokenValid = testRes.status !== 401 && testRes.status !== 403;
             console.log(`[CredCheck] Google Flow API test: status=${testRes.status}, valid=${tokenValid}`);
+
+            // Auto-refresh: if token expired but session cookies exist, try to get a fresh token
+            if (!tokenValid && meta.sessionCookies && meta.sessionCookies.length > 50) {
+                console.log(`[CredCheck] Token expired, attempting auto-refresh via session API...`);
+                try {
+                    const sessionRes = await fetch('https://labs.google/fx/api/auth/session', {
+                        method: 'GET',
+                        headers: {
+                            'Accept': '*/*',
+                            'Content-Type': 'application/json',
+                            'Cookie': meta.sessionCookies,
+                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+                            'Referer': 'https://labs.google/fx/vi/tools/flow/',
+                        },
+                    });
+                    if (sessionRes.ok) {
+                        const sessionData = await sessionRes.json();
+                        if (sessionData.access_token) {
+                            // Save the fresh token to DB
+                            await prisma.credential.update({
+                                where: { id: credential.id },
+                                data: {
+                                    token: sessionData.access_token,
+                                    metadata: JSON.stringify({
+                                        ...meta,
+                                        lastRefreshed: new Date().toISOString(),
+                                        tokenExpiresAt: sessionData.expires || null,
+                                    }),
+                                },
+                            });
+                            tokenValid = true;
+                            if (sessionData.expires) {
+                                expiresIn = Math.floor((new Date(sessionData.expires).getTime() - Date.now()) / 1000);
+                            }
+                            console.log(`[CredCheck] ✅ Auto-refreshed google-flow token!`);
+                        }
+                    } else {
+                        console.log(`[CredCheck] Session API returned ${sessionRes.status} — cookies may be expired`);
+                    }
+                } catch (refreshErr) {
+                    console.log(`[CredCheck] Auto-refresh failed: ${refreshErr.message}`);
+                }
+            }
         } catch (e) {
             console.log(`[CredCheck] Google Flow API test failed: ${e.message}`);
             tokenValid = false;

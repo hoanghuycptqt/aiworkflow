@@ -8,6 +8,7 @@
 import { Telegraf } from 'telegraf';
 import { prisma, io } from '../index.js';
 import { handleMessage, handlePhoto } from './telegram-ai.js';
+import { pendingInputRequests } from './google-login-agent.js';
 import { mkdir } from 'fs/promises';
 import { join, extname } from 'path';
 import { createWriteStream } from 'fs';
@@ -185,6 +186,15 @@ export async function startBot() {
     // ─── Text message handler ────────────────────────────────
     bot.on('text', async (ctx) => {
         if (!ctx.userId) return;
+
+        // Check if login agent is waiting for this user's input (2FA)
+        const chatId = String(ctx.chat.id);
+        const pendingReq = pendingInputRequests.get(chatId);
+        if (pendingReq) {
+            pendingReq.resolve(ctx.message.text.trim());
+            return; // Don't pass to AI handler
+        }
+
         try {
             await handleMessage(ctx);
         } catch (err) {

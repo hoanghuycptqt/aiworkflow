@@ -140,6 +140,16 @@ httpServer.listen(PORT, async () => {
   } catch (err) {
     console.error('[Telegram] Failed to start bot:', err.message);
   }
+
+  // Start Cookie Harvester cron (auto-refresh Google Flow cookies)
+  try {
+    const profileDir = `${uploadDir}/.google-profiles`;
+    await mkdir(profileDir, { recursive: true });
+    const { startHarvestCron } = await import('./services/cookie-harvester.js');
+    startHarvestCron();
+  } catch (err) {
+    console.error('[CookieHarvester] Failed to start:', err.message);
+  }
 });
 
 // Graceful shutdown

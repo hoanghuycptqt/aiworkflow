@@ -14,6 +14,8 @@ import { GoogleGenAI } from '@google/genai';
 import { prisma } from '../index.js';
 import { runJobBatch, cancelBatch } from './job-runner.js';
 import { downloadTelegramPhoto, bot, getVideoDimensions } from './telegram-bot.js';
+import { loginGoogleFlow } from './google-login-agent.js';
+import { harvestForSpecificUser } from './cookie-harvester.js';
 import { existsSync } from 'fs';
 
 // ─── Transient State (per-chat, non-persistent) ──────────
@@ -150,6 +152,22 @@ const functionDeclarations = [
                 executionId: { type: 'string', description: 'The workflow execution ID to resend media from' },
             },
             required: ['executionId'],
+        },
+    },
+    {
+        name: 'login_google_flow',
+        description: 'Login to Google Flow to get fresh cookies and access token. Use when user asks to login, setup, or connect Google Flow. Requires a google-account credential with email/password saved in the system.',
+        parameters: {
+            type: 'object',
+            properties: {},
+        },
+    },
+    {
+        name: 'refresh_google_cookies',
+        description: 'Refresh Google Flow cookies from the persistent Chrome session without re-login. Use when user asks to refresh cookies, check Google Flow status, or renew tokens.',
+        parameters: {
+            type: 'object',
+            properties: {},
         },
     },
 ];
@@ -421,6 +439,42 @@ async function executeFunction(name, args, userId, chatId) {
             }
 
             return `✅ Đã gửi ${sent}/${mediaFiles.length} media files.`;
+        }
+
+        case 'login_google_flow': {
+            // Find google-account credential for this user
+            const googleAccount = await prisma.credential.findFirst({
+                where: { userId, provider: 'google-account' },
+            });
+            if (!googleAccount) {
+                return '❌ Chưa có Google Account credential. Vui lòng thêm tại Web UI → Credentials → Add Credential → Google Account.';
+            }
+
+            // Create send function for this chat
+            const sendFn = async (msg) => {
+                try {
+                    await bot.telegram.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(() =>
+                        bot.telegram.sendMessage(chatId, msg)
+                    );
+                } catch { /* ok */ }
+            };
+
+            // Run login (this is async and may take a while)
+            const loginResult = await loginGoogleFlow(userId, googleAccount.id, chatId, sendFn);
+            return loginResult.success
+                ? `✅ Login Google Flow thành công!`
+                : `❌ Login thất bại: ${loginResult.message}`;
+        }
+
+        case 'refresh_google_cookies': {
+            const result = await harvestForSpecificUser(userId);
+            if (result.success) {
+                return '✅ Cookie Google Flow đã được refresh thành công!';
+            }
+            if (result.message?.includes('No Google Account')) {
+                return '❌ Chưa có Google Account credential. Vui lòng thêm tại Web UI → Credentials.';
+            }
+            return `❌ Refresh thất bại: ${result.message || result.reason || 'Unknown error'}`;
         }
 
         default:

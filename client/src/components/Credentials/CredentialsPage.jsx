@@ -9,6 +9,7 @@ const PROVIDERS = [
     { id: 'openrouter', label: 'OpenRouter', icon: 'shuffle', description: 'AI via OpenRouter — supports Gemini, Llama, DeepSeek & more' },
     { id: 'gemini', label: 'Google Gemini', icon: 'sparkles', description: 'Official Google Gemini API — Gemini 3 Flash & Pro' },
     { id: 'google-flow', label: 'Google Flow', icon: 'clapperboard', description: 'Auth token for Google Flow (labs.google/fx)' },
+    { id: 'google-account', label: 'Google Account', icon: 'user', description: 'Email & password for auto-login Google Flow via Telegram bot' },
     { id: 'chatgpt', label: 'ChatGPT', icon: 'message-square', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },
 ];
 
@@ -127,6 +128,20 @@ export default function CredentialsPage() {
             // Auto-set placeholder token since ChatGPT uses cookies only
             if (!form.token.trim()) {
                 form.token = 'cookies-only';
+            }
+        } else if (form.provider === 'google-account') {
+            // Google Account: require email and password in metadata
+            if (!form.metadata?.email?.trim()) {
+                toast.error('Google email is required');
+                return;
+            }
+            if (!form.metadata?.password?.trim()) {
+                toast.error('Google password is required');
+                return;
+            }
+            // Auto-set placeholder token
+            if (!form.token.trim()) {
+                form.token = 'google-account-auto';
             }
         } else if (!form.token.trim()) {
             toast.error('Token is required');
@@ -363,6 +378,32 @@ export default function CredentialsPage() {
                                         />
                                         <span className="form-hint">
                                             Optional — found in oai-device-id header. Auto-generated if left empty.
+                                        </span>
+                                    </div>
+                                </>
+                            ) : form.provider === 'google-account' ? (
+                                <>
+                                    <div className="form-group">
+                                        <label className="form-label">Google Email</label>
+                                        <input
+                                            className="input"
+                                            type="email"
+                                            placeholder="your-email@gmail.com"
+                                            value={form.metadata?.email || ''}
+                                            onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, email: e.target.value } })}
+                                        />
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">Google Password</label>
+                                        <input
+                                            className="input"
+                                            type="password"
+                                            placeholder="Your Google password"
+                                            value={form.metadata?.password || ''}
+                                            onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, password: e.target.value } })}
+                                        />
+                                        <span className="form-hint">
+                                            Password is stored encrypted. Used by the auto-login bot to login to Google Flow.
                                         </span>
                                     </div>
                                 </>
