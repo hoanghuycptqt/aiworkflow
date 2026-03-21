@@ -177,11 +177,19 @@ async function launchPersistentChrome(userId) {
         '--no-first-run',
         '--no-default-browser-check',
         '--window-size=1280,900',
+        '--disable-blink-features=AutomationControlled', // Prevent navigator.webdriver = true
     ];
 
-    // On Linux (VPS), need --no-sandbox and may need display
+    // On Linux (VPS), need --no-sandbox and anti-detection flags for Xvfb
     if (process.platform === 'linux') {
-        args.push('--no-sandbox', '--disable-dev-shm-usage');
+        args.push(
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--lang=en-US,en',
+            '--start-maximized',
+        );
         if (!process.env.DISPLAY) {
             process.env.DISPLAY = ':99';
         }
@@ -218,8 +226,70 @@ async function launchPersistentChrome(userId) {
         throw new Error('Chrome failed to start within 15 seconds');
     }
 
+    // Inject stealth scripts to bypass automation detection
+    // This runs on every new page/navigation (like puppeteer-extra-plugin-stealth)
+    const pages = await browser.pages();
+    for (const p of pages) {
+        await injectStealthScripts(p);
+    }
+    // Also inject for any new pages created later
+    browser.on('targetcreated', async (target) => {
+        if (target.type() === 'page') {
+            try {
+                const newPage = await target.page();
+                if (newPage) await injectStealthScripts(newPage);
+            } catch { /* ok */ }
+        }
+    });
+
     console.log(`[GoogleLogin] ✅ Chrome launched natively & connected via CDP (port: ${debugPort}, profile: ${profileDir})`);
     return { browser, chromeProcess, debugPort };
+}
+
+/**
+ * Inject stealth scripts to mask automation markers.
+ * Equivalent to puppeteer-extra-plugin-stealth for native Chrome.
+ */
+async function injectStealthScripts(page) {
+    await page.evaluateOnNewDocument(() => {
+        // 1. Override navigator.webdriver
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+        // 2. Override navigator.plugins (Chrome normally has plugins)
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [
+                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+            ],
+        });
+
+        // 3. Override navigator.languages
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en', 'vi'] });
+
+        // 4. Fix chrome.runtime (present in real Chrome, missing in automation)
+        if (!window.chrome) window.chrome = {};
+        if (!window.chrome.runtime) window.chrome.runtime = { connect: () => {}, sendMessage: () => {} };
+
+        // 5. Override permissions API
+        const originalQuery = window.navigator.permissions?.query;
+        if (originalQuery) {
+            window.navigator.permissions.query = (parameters) =>
+                parameters.name === 'notifications'
+                    ? Promise.resolve({ state: Notification.permission })
+                    : originalQuery(parameters);
+        }
+
+        // 6. Mask WebGL vendor/renderer (avoid "SwiftShader" on headless)
+        const getParameter = WebGLRenderingContext?.prototype?.getParameter;
+        if (getParameter) {
+            WebGLRenderingContext.prototype.getParameter = function(param) {
+                if (param === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
+                if (param === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
+                return getParameter.call(this, param);
+            };
+        }
+    });
 }
 
 /**
