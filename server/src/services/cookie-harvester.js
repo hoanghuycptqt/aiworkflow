@@ -182,12 +182,8 @@ export function startHarvestCron() {
 
     console.log(`[CookieHarvester] 🕐 Cron started — will run every ${HARVEST_INTERVAL_MS / 3600000}h`);
 
-    // Run first harvest after 30 seconds (let server finish booting)
-    setTimeout(() => {
-        harvestAllUsers().catch(e =>
-            console.error('[CookieHarvester] Initial harvest error:', e.message)
-        );
-    }, 30000);
+    // Only run on cron schedule, NOT on server start
+    // (Avoids launching Chrome on every restart; CredCheck auto-refreshes tokens via session API)
 
     // Then run every 18 hours
     harvestTimer = setInterval(() => {

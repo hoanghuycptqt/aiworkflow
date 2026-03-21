@@ -226,70 +226,124 @@ async function launchPersistentChrome(userId) {
         throw new Error('Chrome failed to start within 15 seconds');
     }
 
-    // Inject stealth scripts to bypass automation detection
-    // This runs on every new page/navigation (like puppeteer-extra-plugin-stealth)
-    const pages = await browser.pages();
-    for (const p of pages) {
-        await injectStealthScripts(p);
-    }
-    // Also inject for any new pages created later
-    browser.on('targetcreated', async (target) => {
-        if (target.type() === 'page') {
-            try {
-                const newPage = await target.page();
-                if (newPage) await injectStealthScripts(newPage);
-            } catch { /* ok */ }
-        }
+    // Inject stealth scripts to bypass automation detection via CDP
+    // Using CDP directly is more reliable than evaluateOnNewDocument via puppeteer.connect
+    const cdpSession = await browser.target().createCDPSession();
+    await cdpSession.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: STEALTH_SCRIPT,
     });
+    await cdpSession.detach();
 
     console.log(`[GoogleLogin] ✅ Chrome launched natively & connected via CDP (port: ${debugPort}, profile: ${profileDir})`);
     return { browser, chromeProcess, debugPort };
 }
 
-/**
- * Inject stealth scripts to mask automation markers.
- * Equivalent to puppeteer-extra-plugin-stealth for native Chrome.
- */
-async function injectStealthScripts(page) {
-    await page.evaluateOnNewDocument(() => {
-        // 1. Override navigator.webdriver
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+// Realistic macOS Chrome User-Agent
+const STEALTH_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.159 Safari/537.36';
 
-        // 2. Override navigator.plugins (Chrome normally has plugins)
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [
-                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-                { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-            ],
-        });
+// Stealth script injected before every page load
+const STEALTH_SCRIPT = `
+    // 1. Override navigator.webdriver
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
 
-        // 3. Override navigator.languages
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en', 'vi'] });
-
-        // 4. Fix chrome.runtime (present in real Chrome, missing in automation)
-        if (!window.chrome) window.chrome = {};
-        if (!window.chrome.runtime) window.chrome.runtime = { connect: () => {}, sendMessage: () => {} };
-
-        // 5. Override permissions API
-        const originalQuery = window.navigator.permissions?.query;
-        if (originalQuery) {
-            window.navigator.permissions.query = (parameters) =>
-                parameters.name === 'notifications'
-                    ? Promise.resolve({ state: Notification.permission })
-                    : originalQuery(parameters);
-        }
-
-        // 6. Mask WebGL vendor/renderer (avoid "SwiftShader" on headless)
-        const getParameter = WebGLRenderingContext?.prototype?.getParameter;
-        if (getParameter) {
-            WebGLRenderingContext.prototype.getParameter = function(param) {
-                if (param === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
-                if (param === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
-                return getParameter.call(this, param);
-            };
-        }
+    // 2. Override navigator.plugins (Chrome normally has plugins)
+    Object.defineProperty(navigator, 'plugins', {
+        get: () => {
+            const arr = [
+                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
+                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
+                { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 1 },
+            ];
+            arr.item = (i) => arr[i];
+            arr.namedItem = (name) => arr.find(p => p.name === name);
+            arr.refresh = () => {};
+            return arr;
+        },
     });
+
+    // 3. Override navigator.languages and navigator.platform
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en', 'vi'] });
+    Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+
+    // 4. Fix chrome.runtime (present in real Chrome, missing in automation)
+    if (!window.chrome) window.chrome = {};
+    if (!window.chrome.runtime) {
+        window.chrome.runtime = {
+            connect: () => {},
+            sendMessage: () => {},
+            id: undefined,
+        };
+    }
+
+    // 5. Override permissions API
+    const originalQuery = window.navigator.permissions?.query;
+    if (originalQuery) {
+        window.navigator.permissions.query = (parameters) =>
+            parameters.name === 'notifications'
+                ? Promise.resolve({ state: Notification.permission })
+                : originalQuery(parameters);
+    }
+
+    // 6. Mask WebGL vendor/renderer (avoid "SwiftShader" on headless)
+    const getParam = WebGLRenderingContext?.prototype?.getParameter;
+    if (getParam) {
+        WebGLRenderingContext.prototype.getParameter = function(param) {
+            if (param === 37445) return 'Intel Inc.';
+            if (param === 37446) return 'Intel Iris OpenGL Engine';
+            return getParam.call(this, param);
+        };
+    }
+    const getParam2 = WebGL2RenderingContext?.prototype?.getParameter;
+    if (getParam2) {
+        WebGL2RenderingContext.prototype.getParameter = function(param) {
+            if (param === 37445) return 'Intel Inc.';
+            if (param === 37446) return 'Intel Iris OpenGL Engine';
+            return getParam2.call(this, param);
+        };
+    }
+
+    // 7. Override navigator.userAgentData
+    if (navigator.userAgentData) {
+        Object.defineProperty(navigator, 'userAgentData', {
+            get: () => ({
+                brands: [
+                    { brand: 'Google Chrome', version: '145' },
+                    { brand: 'Chromium', version: '145' },
+                    { brand: 'Not=A?Brand', version: '24' },
+                ],
+                mobile: false,
+                platform: 'macOS',
+                getHighEntropyValues: () => Promise.resolve({
+                    architecture: 'x86',
+                    model: '',
+                    platform: 'macOS',
+                    platformVersion: '15.0.0',
+                    uaFullVersion: '145.0.7632.159',
+                }),
+            }),
+        });
+    }
+`;
+
+/**
+ * Prepare a page with stealth settings before navigation.
+ * Call this on every new page BEFORE page.goto().
+ */
+async function prepareStealthPage(page) {
+    // Set realistic User-Agent via CDP (affects HTTP headers AND JS navigator.userAgent)
+    const client = await page.target().createCDPSession();
+    await client.send('Network.setUserAgentOverride', {
+        userAgent: STEALTH_UA,
+        platform: 'MacIntel',
+        acceptLanguage: 'en-US,en;q=0.9,vi;q=0.8',
+    });
+    await client.detach();
+
+    // Also inject stealth script on this specific page
+    await page.evaluateOnNewDocument(new Function(STEALTH_SCRIPT));
+
+    // Set realistic viewport
+    await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
 }
 
 /**
@@ -706,6 +760,7 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
 
         // Always create a new page (old pages may be detached after server restart)
         const page = await browser.newPage();
+        await prepareStealthPage(page); // Stealth: UA, viewport, scripts BEFORE navigation
         await page.setDefaultNavigationTimeout(PAGE_LOAD_TIMEOUT);
 
         // 4. Navigate to Google Flow
@@ -970,6 +1025,7 @@ export async function refreshCookies(userId, sendTelegram = null) {
 
         // Always create a new page (old pages may be detached after server restart)
         const page = await browser.newPage();
+        await prepareStealthPage(page); // Stealth: UA, viewport, scripts BEFORE navigation
 
         // Navigate to Google Flow
         console.log(`[CookieRefresh] Navigating to ${GOOGLE_FLOW_URL}`);
