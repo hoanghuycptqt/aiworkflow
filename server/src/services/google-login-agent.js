@@ -379,20 +379,15 @@ const STEALTH_SCRIPT = `
  * Call this on every new page BEFORE page.goto().
  */
 async function prepareStealthPage(page) {
-    // Set realistic User-Agent via CDP (affects HTTP headers AND JS navigator.userAgent)
-    const client = await page.target().createCDPSession();
-    await client.send('Network.setUserAgentOverride', {
-        userAgent: STEALTH_UA,
-        platform: 'MacIntel',
-        acceptLanguage: 'en-US,en;q=0.9,vi;q=0.8',
-    });
-    await client.detach();
+    // NOTE: Removed ALL stealth overrides (UA, platform, plugins, etc.)
+    // Google was detecting the MISMATCH between spoofed macOS UA and real Linux
+    // TCP/TLS fingerprint, causing /v3/signin/rejected. Test without ANY stealth
+    // passed successfully on VPS.
+    // The --disable-blink-features=AutomationControlled flag in Chrome args
+    // already handles navigator.webdriver=false at the browser level.
 
-    // Also inject stealth script on this specific page
-    await page.evaluateOnNewDocument(new Function(STEALTH_SCRIPT));
-
-    // Set realistic viewport
-    await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
+    // Only set viewport for consistent screenshot sizes
+    await page.setViewport({ width: 1280, height: 900 });
 }
 
 /**
