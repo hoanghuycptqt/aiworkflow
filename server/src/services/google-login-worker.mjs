@@ -84,14 +84,19 @@ async function run() {
     });
     await delay(2000, 3000);
 
-    // Check if already signed in (has session token)
-    const existingCookies = await page.cookies();
-    const hasSession = existingCookies.some(c => c.name.includes('session-token'));
-    if (hasSession) {
-        process.stderr.write('[Worker] Already have session token! Skipping login.\n');
+    // Check if already signed in via CDP (catches HttpOnly cookies)
+    const cdp = await page.createCDPSession();
+    const { cookies: allCookies } = await cdp.send('Network.getAllCookies');
+    await cdp.detach();
+    const sessionToken = allCookies.find(c => 
+        c.name === '__Secure-next-auth.session-token' && c.domain.includes('labs.google')
+    );
+    if (sessionToken) {
+        process.stderr.write(`[Worker] ✅ Already signed in! Session token found (HttpOnly). Skipping login.\n`);
         browser.disconnect();
         return { success: true, url: page.url(), port: debugPort, alreadyLoggedIn: true };
     }
+    process.stderr.write('[Worker] No session token found. Need to sign in.\n');
 
     // ========================================
     // STEP 2: Find and click Sign In on labs.google
@@ -335,16 +340,20 @@ async function run() {
         }
     }
 
-    // Check for session token
-    const finalCookies = await page.cookies();
-    const sessionToken = finalCookies.find(c => c.name.includes('session-token'));
-    process.stderr.write(`[Worker] Session token: ${sessionToken ? 'FOUND' : 'NOT FOUND'}\n`);
+    // Check for session token via CDP (HttpOnly)
+    const cdp2 = await page.createCDPSession();
+    const { cookies: finalAllCookies } = await cdp2.send('Network.getAllCookies');
+    await cdp2.detach();
+    const finalSessionToken = finalAllCookies.find(c => 
+        c.name === '__Secure-next-auth.session-token' && c.domain.includes('labs.google')
+    );
+    process.stderr.write(`[Worker] Session token: ${finalSessionToken ? 'FOUND' : 'NOT FOUND'}\n`);
 
     // Leave Chrome running
     browser.disconnect();
 
-    if (sessionToken || page.url().includes('labs.google')) {
-        return { success: true, url: page.url(), port: debugPort, hasSession: !!sessionToken };
+    if (finalSessionToken || page.url().includes('labs.google')) {
+        return { success: true, url: page.url(), port: debugPort, hasSession: !!finalSessionToken };
     }
 
     chrome.kill();
