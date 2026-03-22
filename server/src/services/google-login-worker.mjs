@@ -171,26 +171,24 @@ async function run() {
                    t.includes('confirm that it') || t.includes('xác nhận');
         }).catch(() => false);
         if (has2FA) {
-            // Read the number or challenge info from the page
-            const twoFAInfo = await page.evaluate(() => {
+            // Read full challenge text from the page (not just one number)
+            const twoFAText = await page.evaluate(() => {
                 const body = document.body?.innerText || '';
-                // Google shows a number like "78" that user needs to tap
-                const numberMatch = body.match(/(\d{2,3})/);
-                return {
-                    bodyText: body.substring(0, 500),
-                    number: numberMatch ? numberMatch[1] : null,
-                };
-            }).catch(() => ({ bodyText: '', number: null }));
+                // Clean: remove nav/footer lines, keep meaningful challenge text
+                return body.split('\n')
+                    .map(l => l.trim())
+                    .filter(l => l.length > 0 && l.length < 200)
+                    .filter(l => !l.includes('English') && !l.includes('Help') && 
+                                !l.includes('Privacy') && !l.includes('Terms'))
+                    .join('\n');
+            }).catch(() => '');
 
             // Save screenshot for debugging
             await page.screenshot({ path: '/tmp/google-2fa.png' }).catch(() => {});
 
-            // Output 2FA info via stderr — agent reads this in real-time
-            const msg = twoFAInfo.number
-                ? `2FA_NUMBER:${twoFAInfo.number}`
-                : `2FA_TEXT:${twoFAInfo.bodyText.substring(0, 200)}`;
-            process.stderr.write(`${msg}\n`);
-            process.stderr.write(`[Worker] 2FA detected. Number: ${twoFAInfo.number || 'N/A'}. Waiting 120s...\n`);
+            // Send full text to agent — it will forward to Telegram
+            process.stderr.write(`2FA_TEXT:${twoFAText.substring(0, 400)}\n`);
+            process.stderr.write(`[Worker] 2FA detected. Waiting 120s...\n`);
 
             // Poll for up to 120 seconds for user to approve
             let twoFAApproved = false;
