@@ -346,23 +346,28 @@ async function run() {
                 await new Promise(r => setTimeout(r, 5000)); // explicit 5s wait
                 let pollUrl = '';
                 try { pollUrl = page.url(); } catch { pollUrl = 'ERROR'; }
-                process.stderr.write(`[Worker] 2FA-poll ${pollIdx+1}/24 url=${pollUrl.substring(0, 90)}\n`);
                 
-                // Check if user approved — URL changed away from challenge
-                if (pollUrl.includes('consent') || pollUrl.includes('myaccount.google') || 
-                    pollUrl.includes('labs.google') || pollUrl.includes('callback')) {
+                // Extract just the pathname to avoid matching query string params
+                // (e.g. redirect_uri=...callback/google was causing false matches)
+                let pollPath = '';
+                try { pollPath = new URL(pollUrl).pathname; } catch { pollPath = pollUrl; }
+                process.stderr.write(`[Worker] 2FA-poll ${pollIdx+1}/24 path=${pollPath}\n`);
+                
+                // Success: URL path changed to consent, myaccount, or labs.google
+                if (pollPath.includes('/consent') || pollUrl.includes('myaccount.google.com') || 
+                    pollUrl.includes('labs.google')) {
                     process.stderr.write('[Worker] ✅ 2FA approved! URL changed.\n');
                     twoFAApproved = true;
                     break;
                 }
-                // Also check: URL no longer contains challenge AND no longer contains signin
-                if (!pollUrl.includes('/challenge/') && !pollUrl.includes('/signin/')) {
-                    process.stderr.write('[Worker] ✅ 2FA approved! Left signin pages.\n');
+                // Success: URL path no longer on challenge or signin pages
+                if (!pollPath.includes('/challenge/') && !pollPath.includes('/signin/')) {
+                    process.stderr.write(`[Worker] ✅ 2FA approved! Left signin pages. path=${pollPath}\n`);
                     twoFAApproved = true;
                     break;
                 }
-                // Check for rejection
-                if (pollUrl.includes('rejected')) {
+                // Failure: Google rejected
+                if (pollPath.includes('rejected')) {
                     process.stderr.write('[Worker] ❌ 2FA rejected by Google.\n');
                     browser.disconnect();
                     chrome.kill();
