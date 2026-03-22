@@ -15,6 +15,7 @@ import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { GoogleGenAI } from '@google/genai';
 import { prisma } from '../index.js';
+import path from 'path';
 import { join } from 'path';
 import { mkdir } from 'fs/promises';
 import { spawn, execFile } from 'child_process';
