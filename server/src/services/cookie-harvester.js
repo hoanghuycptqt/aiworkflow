@@ -1,17 +1,18 @@
 /**
- * Cookie Harvester — Smart cron service
+ * Cookie Harvester — Smart per-user cron service
  *
- * Refreshes Google Flow cookies based on tokenExpiresAt from DB.
- * - On server start: check if expired → refresh immediately, else schedule
- * - After refresh: read new tokenExpiresAt → schedule next run
- * - Handles VPS shutdown (1:30AM-8:00AM): on restart, detects expired → refresh
+ * Each user has their own timer based on tokenExpiresAt.
+ * Two layers of protection:
+ *   Layer 1: Per-user setTimeout at tokenExpiresAt + 1 min
+ *   Layer 2: Before opening Chrome, check DB — skip if cookie still valid
  *
  * Flow per user:
- *   1. Launch Chrome with user's persistent profile
- *   2. Navigate to Google Flow → get fresh cookies
- *   3. Call session API → get access_token
- *   4. Save cookies + token to DB
- *   5. Schedule next refresh at tokenExpiresAt + 1 min
+ *   1. Check DB: if cookie not expired yet → skip (no Chrome)
+ *   2. Launch Chrome with user's persistent profile
+ *   3. Navigate to Google Flow → get fresh cookies
+ *   4. Call session API → get access_token
+ *   5. Save cookies + token to DB
+ *   6. Schedule next refresh at new tokenExpiresAt + 1 min
  */
 
 import { prisma } from '../index.js';
@@ -22,8 +23,8 @@ const REFRESH_DELAY_MS = 60 * 1000; // 1 min after expiry
 const USER_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max per user
 const FALLBACK_INTERVAL_MS = 18 * 60 * 60 * 1000; // 18h fallback if no expiry info
 
-let harvestTimer = null;
-let isRunning = false;
+// Per-user timers: Map<userId, timerId>
+const userTimers = new Map();
 let cronStarted = false;
 
 /**
@@ -48,12 +49,45 @@ function createSendFn(userId) {
 }
 
 /**
+ * Layer 2: Check if user's cookie is actually expired before opening Chrome.
+ * Returns true if expired (needs refresh), false if still valid.
+ */
+async function isCookieExpired(userId) {
+    const cred = await prisma.credential.findFirst({
+        where: { userId, provider: 'google-flow' },
+        select: { metadata: true },
+    });
+
+    if (!cred) return true; // No credential → needs setup
+
+    try {
+        const meta = JSON.parse(cred.metadata || '{}');
+        if (!meta.tokenExpiresAt) return true; // No expiry info → refresh
+
+        const expiresAt = new Date(meta.tokenExpiresAt).getTime();
+        const now = Date.now();
+
+        if (expiresAt > now) {
+            const remainMin = Math.round((expiresAt - now) / 60000);
+            console.log(`[CookieHarvester] User ${userId.substring(0, 8)}: cookie still valid (${remainMin}m remaining) — skipping`);
+            return false;
+        }
+
+        const agoMin = Math.round((now - expiresAt) / 60000);
+        console.log(`[CookieHarvester] User ${userId.substring(0, 8)}: cookie expired ${agoMin}m ago — needs refresh`);
+        return true;
+    } catch {
+        return true; // Parse error → refresh to be safe
+    }
+}
+
+/**
  * Process a single user's cookie refresh.
  */
 async function harvestForUser(userId, googleAccountCredentialId) {
     const sendTelegram = createSendFn(userId);
 
-    console.log(`[CookieHarvester] Processing user: ${userId}`);
+    console.log(`[CookieHarvester] Processing user: ${userId.substring(0, 8)}`);
 
     // Step 1: Try simple refresh (just open Chrome with saved profile)
     const refreshResult = await Promise.race([
@@ -64,17 +98,17 @@ async function harvestForUser(userId, googleAccountCredentialId) {
     ]);
 
     if (refreshResult.success) {
-        console.log(`[CookieHarvester] ✅ User ${userId}: Cookie refreshed successfully`);
+        console.log(`[CookieHarvester] ✅ User ${userId.substring(0, 8)}: Cookie refreshed successfully`);
         return { userId, success: true, action: 'refresh' };
     }
 
     // Step 2: If needs re-login, try auto login
     if (refreshResult.needsRelogin) {
-        console.log(`[CookieHarvester] ⚠️ User ${userId}: Needs re-login, attempting auto login...`);
+        console.log(`[CookieHarvester] ⚠️ User ${userId.substring(0, 8)}: Needs re-login, attempting auto login...`);
 
         const chatId = await getTelegramChatId(userId);
         if (!chatId) {
-            console.warn(`[CookieHarvester] No Telegram link for user ${userId} — cannot do 2FA, skipping`);
+            console.warn(`[CookieHarvester] No Telegram link for user ${userId.substring(0, 8)} — cannot do 2FA, skipping`);
             await sendTelegram('⚠️ Cookie Google Flow đã hết hạn. Cần re-login nhưng không thể vì chưa liên kết Telegram.');
             return { userId, success: false, action: 'no_telegram', reason: refreshResult.message };
         }
@@ -90,73 +124,54 @@ async function harvestForUser(userId, googleAccountCredentialId) {
             ]);
 
             if (loginResult.success) {
-                console.log(`[CookieHarvester] ✅ User ${userId}: Re-login successful`);
+                console.log(`[CookieHarvester] ✅ User ${userId.substring(0, 8)}: Re-login successful`);
                 return { userId, success: true, action: 'relogin' };
             } else {
-                console.log(`[CookieHarvester] ❌ User ${userId}: Re-login failed: ${loginResult.message}`);
+                console.log(`[CookieHarvester] ❌ User ${userId.substring(0, 8)}: Re-login failed: ${loginResult.message}`);
                 return { userId, success: false, action: 'relogin_failed', reason: loginResult.message };
             }
         } catch (e) {
-            console.error(`[CookieHarvester] ❌ User ${userId}: Re-login error: ${e.message}`);
+            console.error(`[CookieHarvester] ❌ User ${userId.substring(0, 8)}: Re-login error: ${e.message}`);
             await sendTelegram(`❌ Tự động đăng nhập thất bại: ${e.message}. Vui lòng thử lại bằng lệnh "login google flow".`);
             return { userId, success: false, action: 'relogin_error', reason: e.message };
         }
     }
 
-    // Step 3: Other failure (network error, etc.)
-    console.log(`[CookieHarvester] ❌ User ${userId}: Refresh failed: ${refreshResult.message}`);
+    // Step 3: Other failure
+    console.log(`[CookieHarvester] ❌ User ${userId.substring(0, 8)}: Refresh failed: ${refreshResult.message}`);
     return { userId, success: false, action: 'refresh_failed', reason: refreshResult.message };
 }
 
 /**
- * Harvest cookies for ALL users with google-account credentials.
- * Runs sequentially to avoid resource contention.
+ * Harvest for ALL users (used by manual trigger).
  */
 export async function harvestAllUsers() {
-    if (isRunning) {
-        console.log('[CookieHarvester] Already running, skipping...');
+    const googleAccounts = await prisma.credential.findMany({
+        where: { provider: 'google-account' },
+        select: { id: true, userId: true },
+    });
+
+    if (googleAccounts.length === 0) {
+        console.log('[CookieHarvester] No google-account credentials found.');
         return [];
     }
 
-    isRunning = true;
-    console.log('[CookieHarvester] ═══════════════════════════════════');
-    console.log('[CookieHarvester] Starting cookie harvest for all users...');
-
-    try {
-        // Find all users with google-account credentials
-        const googleAccounts = await prisma.credential.findMany({
-            where: { provider: 'google-account' },
-            select: { id: true, userId: true, label: true },
-        });
-
-        if (googleAccounts.length === 0) {
-            console.log('[CookieHarvester] No google-account credentials found. Nothing to do.');
-            return [];
-        }
-
-        console.log(`[CookieHarvester] Found ${googleAccounts.length} user(s) with Google Account credentials`);
-
-        const results = [];
-        for (const account of googleAccounts) {
-            try {
-                const result = await harvestForUser(account.userId, account.id);
-                results.push(result);
-            } catch (e) {
-                console.error(`[CookieHarvester] Unhandled error for user ${account.userId}: ${e.message}`);
-                results.push({ userId: account.userId, success: false, action: 'error', reason: e.message });
+    const results = [];
+    for (const account of googleAccounts) {
+        try {
+            const expired = await isCookieExpired(account.userId);
+            if (!expired) {
+                results.push({ userId: account.userId, success: true, action: 'skipped_valid' });
+                continue;
             }
+            const result = await harvestForUser(account.userId, account.id);
+            results.push(result);
+        } catch (e) {
+            console.error(`[CookieHarvester] Error for user ${account.userId.substring(0, 8)}: ${e.message}`);
+            results.push({ userId: account.userId, success: false, action: 'error', reason: e.message });
         }
-
-        // Summary
-        const successCount = results.filter(r => r.success).length;
-        console.log(`[CookieHarvester] ═══════════════════════════════════`);
-        console.log(`[CookieHarvester] Done! ${successCount}/${results.length} users refreshed successfully.`);
-
-        return results;
-
-    } finally {
-        isRunning = false;
     }
+    return results;
 }
 
 /**
@@ -176,80 +191,82 @@ export async function harvestForSpecificUser(userId) {
 }
 
 /**
- * Get the earliest tokenExpiresAt from all google-flow credentials.
+ * Get tokenExpiresAt for a specific user.
  */
-async function getEarliestExpiry() {
-    const credentials = await prisma.credential.findMany({
-        where: { provider: 'google-flow' },
+async function getUserExpiry(userId) {
+    const cred = await prisma.credential.findFirst({
+        where: { userId, provider: 'google-flow' },
         select: { metadata: true },
     });
-
-    let earliest = null;
-    for (const cred of credentials) {
-        try {
-            const meta = JSON.parse(cred.metadata || '{}');
-            if (meta.tokenExpiresAt) {
-                const expiry = new Date(meta.tokenExpiresAt);
-                if (!earliest || expiry < earliest) {
-                    earliest = expiry;
-                }
-            }
-        } catch { /* skip invalid metadata */ }
-    }
-
-    return earliest;
+    if (!cred) return null;
+    try {
+        const meta = JSON.parse(cred.metadata || '{}');
+        return meta.tokenExpiresAt ? new Date(meta.tokenExpiresAt) : null;
+    } catch { return null; }
 }
 
 /**
- * Schedule the next harvest based on tokenExpiresAt.
- * - If already expired → run immediately
- * - If not expired → schedule for expiresAt + 1 min
- * - If no expiry info → fallback to 18h interval
+ * Schedule refresh for a single user.
+ * Layer 1: setTimeout at tokenExpiresAt + 1 min
+ * Layer 2: before refresh, isCookieExpired() check
  */
-async function scheduleNextHarvest() {
-    // Clear any existing timer
-    if (harvestTimer) {
-        clearTimeout(harvestTimer);
-        harvestTimer = null;
+async function scheduleForUser(userId, googleAccountCredentialId) {
+    // Clear existing timer for this user
+    if (userTimers.has(userId)) {
+        clearTimeout(userTimers.get(userId));
+        userTimers.delete(userId);
     }
 
-    const earliest = await getEarliestExpiry();
+    const expiry = await getUserExpiry(userId);
     const now = Date.now();
 
     let delayMs;
     let reason;
 
-    if (!earliest) {
-        // No google-flow credentials yet — use fallback interval
+    if (!expiry) {
         delayMs = FALLBACK_INTERVAL_MS;
-        reason = `no expiry info, fallback ${FALLBACK_INTERVAL_MS / 3600000}h`;
-    } else if (earliest.getTime() <= now) {
-        // Already expired — run in 10 seconds (give server time to stabilize)
-        delayMs = 10 * 1000;
-        reason = `expired ${Math.round((now - earliest.getTime()) / 60000)}m ago → refreshing soon`;
+        reason = `no expiry info → fallback ${FALLBACK_INTERVAL_MS / 3600000}h`;
+    } else if (expiry.getTime() <= now) {
+        delayMs = 10 * 1000; // 10s for startup stabilization
+        const agoMin = Math.round((now - expiry.getTime()) / 60000);
+        reason = `expired ${agoMin}m ago → refreshing soon`;
     } else {
-        // Not expired — schedule for expiresAt + 1 min
-        delayMs = earliest.getTime() - now + REFRESH_DELAY_MS;
-        reason = `expires at ${earliest.toISOString()} → refresh in ${Math.round(delayMs / 60000)}m`;
+        delayMs = expiry.getTime() - now + REFRESH_DELAY_MS;
+        const inMin = Math.round(delayMs / 60000);
+        reason = `expires ${expiry.toISOString()} → refresh in ${inMin}m`;
     }
 
     const nextRun = new Date(now + delayMs);
-    console.log(`[CookieHarvester] ⏰ Next harvest: ${nextRun.toISOString()} (${reason})`);
+    console.log(`[CookieHarvester] ⏰ User ${userId.substring(0, 8)}: next refresh at ${nextRun.toISOString()} (${reason})`);
 
-    harvestTimer = setTimeout(async () => {
+    const timerId = setTimeout(async () => {
+        userTimers.delete(userId);
         try {
-            await harvestAllUsers();
+            // Layer 2: double-check if actually expired
+            const expired = await isCookieExpired(userId);
+            if (!expired) {
+                console.log(`[CookieHarvester] User ${userId.substring(0, 8)}: cookie renewed externally — rescheduling`);
+                await scheduleForUser(userId, googleAccountCredentialId);
+                return;
+            }
+
+            // Actually refresh
+            console.log(`[CookieHarvester] ═══ Harvesting user ${userId.substring(0, 8)} ═══`);
+            await harvestForUser(userId, googleAccountCredentialId);
         } catch (e) {
-            console.error('[CookieHarvester] Harvest error:', e.message);
+            console.error(`[CookieHarvester] Harvest error for ${userId.substring(0, 8)}: ${e.message}`);
         }
-        // After harvest, schedule the next one
-        await scheduleNextHarvest();
+
+        // Reschedule for next expiry
+        await scheduleForUser(userId, googleAccountCredentialId);
     }, delayMs);
+
+    userTimers.set(userId, timerId);
 }
 
 /**
- * Start the smart cron.
- * Reads tokenExpiresAt from DB and schedules accordingly.
+ * Start the smart per-user cron.
+ * Reads all users with google-account credentials and schedules each independently.
  */
 export async function startHarvestCron() {
     if (cronStarted) {
@@ -258,19 +275,41 @@ export async function startHarvestCron() {
     }
 
     cronStarted = true;
-    console.log('[CookieHarvester] 🕐 Smart cron started — scheduling based on tokenExpiresAt');
+    console.log('[CookieHarvester] 🕐 Smart per-user cron started');
 
-    await scheduleNextHarvest();
+    try {
+        const googleAccounts = await prisma.credential.findMany({
+            where: { provider: 'google-account' },
+            select: { id: true, userId: true },
+        });
+
+        if (googleAccounts.length === 0) {
+            console.log('[CookieHarvester] No google-account credentials. Will check again in 18h.');
+            setTimeout(() => {
+                cronStarted = false;
+                startHarvestCron();
+            }, FALLBACK_INTERVAL_MS);
+            return;
+        }
+
+        console.log(`[CookieHarvester] Scheduling ${googleAccounts.length} user(s)...`);
+
+        for (const account of googleAccounts) {
+            await scheduleForUser(account.userId, account.id);
+        }
+    } catch (e) {
+        console.error('[CookieHarvester] Startup error:', e.message);
+    }
 }
 
 /**
- * Stop the cron timer.
+ * Stop all user timers.
  */
 export function stopHarvestCron() {
-    if (harvestTimer) {
-        clearTimeout(harvestTimer);
-        harvestTimer = null;
-        cronStarted = false;
-        console.log('[CookieHarvester] Cron stopped');
+    for (const [userId, timerId] of userTimers) {
+        clearTimeout(timerId);
     }
+    userTimers.clear();
+    cronStarted = false;
+    console.log('[CookieHarvester] All user timers stopped');
 }
