@@ -268,6 +268,9 @@ const STEALTH_SCRIPT = `
             id: undefined,
         };
     }
+    // Remove chrome.csi and chrome.loadTimes if they look fake
+    if (!window.chrome.csi) window.chrome.csi = function() { return {}; };
+    if (!window.chrome.loadTimes) window.chrome.loadTimes = function() { return {}; };
 
     // 5. Override permissions API
     const originalQuery = window.navigator.permissions?.query;
@@ -315,6 +318,58 @@ const STEALTH_SCRIPT = `
                     uaFullVersion: '145.0.7632.159',
                 }),
             }),
+        });
+    }
+
+    // 8. ★ CRITICAL: Remove cdc_ variables (CDP detection markers)
+    // When Chrome DevTools Protocol connects, it injects variables like
+    // cdc_adoQpoasnfa76pfcZLmcfl_Array, cdc_adoQpoasnfa76pfcZLmcfl_Promise etc.
+    // Google scans for these to detect automated browsers.
+    const removeCdcProps = () => {
+        for (const key of Object.keys(document)) {
+            if (key.startsWith('cdc_') || key.startsWith('__webdriver') || key.startsWith('$cdc_')) {
+                delete document[key];
+            }
+        }
+        for (const key of Object.keys(window)) {
+            if (key.startsWith('cdc_') || key.startsWith('__webdriver') || key.startsWith('$cdc_')) {
+                delete window[key];
+            }
+        }
+    };
+    removeCdcProps();
+    // Keep removing as they may be re-injected
+    const cdcInterval = setInterval(removeCdcProps, 50);
+    setTimeout(() => clearInterval(cdcInterval), 10000);
+
+    // 9. document.hasFocus() — headless often returns false
+    Document.prototype.hasFocus = function() { return true; };
+
+    // 10. Screen properties matching viewport
+    Object.defineProperty(screen, 'width', { get: () => 1280 });
+    Object.defineProperty(screen, 'height', { get: () => 900 });
+    Object.defineProperty(screen, 'availWidth', { get: () => 1280 });
+    Object.defineProperty(screen, 'availHeight', { get: () => 900 });
+    Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+    Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+
+    // 11. Mask window.outerWidth/outerHeight (0 in headless)
+    if (window.outerWidth === 0) {
+        Object.defineProperty(window, 'outerWidth', { get: () => 1280 });
+        Object.defineProperty(window, 'outerHeight', { get: () => 900 });
+    }
+
+    // 12. Remove Puppeteer from Error stack traces
+    const origGetStack = Object.getOwnPropertyDescriptor(Error.prototype, 'stack');
+    if (origGetStack && origGetStack.get) {
+        Object.defineProperty(Error.prototype, 'stack', {
+            get: function() {
+                const stack = origGetStack.get.call(this);
+                if (typeof stack === 'string') {
+                    return stack.replace(/puppeteer/gi, 'chrome').replace(/pptr:/gi, 'chrome:');
+                }
+                return stack;
+            }
         });
     }
 `;
@@ -888,6 +943,13 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
 
                 case 'error': {
                     const errMsg = analysis.userMessage || analysis.description || 'Unknown error';
+                    // Save error screenshot for debugging
+                    try {
+                        const errScreenshot = await page.screenshot({ type: 'png', fullPage: true });
+                        const errPath = path.join('uploads', `google-login-error-${Date.now()}.png`);
+                        await fs.writeFile(errPath, errScreenshot);
+                        console.log(`[GoogleLogin] ⚠️ Error screenshot saved: ${errPath}`);
+                    } catch { /* ok */ }
                     throw new Error(`Login agent error: ${errMsg}`);
                 }
             }
