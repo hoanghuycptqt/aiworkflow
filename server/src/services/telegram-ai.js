@@ -170,6 +170,14 @@ const functionDeclarations = [
             properties: {},
         },
     },
+    {
+        name: 'check_token_status',
+        description: 'Check how much time is left on the Google Flow cookie/token. Use when user asks about token expiry, cookie status, remaining time, or credential health.',
+        parameters: {
+            type: 'object',
+            properties: {},
+        },
+    },
 ];
 
 // ─── Function Executor ───────────────────────────────────
@@ -468,13 +476,44 @@ async function executeFunction(name, args, userId, chatId) {
 
         case 'refresh_google_cookies': {
             const result = await harvestForSpecificUser(userId);
-            if (result.success) {
-                return '✅ Cookie Google Flow đã được refresh thành công!';
+            return result.success
+                ? `✅ ${result.action === 'relogin' ? 'Re-login' : 'Refresh'} thành công!`
+                : `❌ Refresh thất bại: ${result.reason || 'Unknown error'}`;
+        }
+
+        case 'check_token_status': {
+            const flowCreds = await prisma.credential.findMany({
+                where: { userId, provider: 'google-flow' },
+                select: { id: true, label: true, metadata: true, updatedAt: true },
+            });
+            if (flowCreds.length === 0) {
+                return '❌ Chưa có Google Flow credential nào.';
             }
-            if (result.message?.includes('No Google Account')) {
-                return '❌ Chưa có Google Account credential. Vui lòng thêm tại Web UI → Credentials.';
+            const lines = [];
+            for (const cred of flowCreds) {
+                const meta = cred.metadata ? JSON.parse(cred.metadata) : {};
+                const email = meta.userEmail || 'N/A';
+                const expiresAt = meta.tokenExpiresAt ? new Date(meta.tokenExpiresAt) : null;
+                const lastRefreshed = meta.lastRefreshed ? new Date(meta.lastRefreshed) : null;
+                const now = Date.now();
+                if (expiresAt) {
+                    const remainMs = expiresAt.getTime() - now;
+                    if (remainMs > 0) {
+                        const h = Math.floor(remainMs / 3600000);
+                        const m = Math.floor((remainMs % 3600000) / 60000);
+                        lines.push(`✅ ${email}: còn ${h}h ${m}m (hết hạn ${expiresAt.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })})`);
+                    } else {
+                        const ago = Math.floor(-remainMs / 60000);
+                        lines.push(`❌ ${email}: đã hết hạn ${ago} phút trước`);
+                    }
+                } else {
+                    lines.push(`⚠️ ${email}: không có thông tin hết hạn`);
+                }
+                if (lastRefreshed) {
+                    lines.push(`   🔄 Refresh lần cuối: ${lastRefreshed.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}`);
+                }
             }
-            return `❌ Refresh thất bại: ${result.message || result.reason || 'Unknown error'}`;
+            return lines.join('\n');
         }
 
         default:
