@@ -910,13 +910,82 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         // Worker already logged in successfully. loginSuccess = true.
         const loginSuccess = true;
 
-        // 6. Navigate to Google Flow page to ensure NextAuth cookies are present
-        console.log('[GoogleLogin] Navigating to Google Flow to ensure cookies are set...');
-        const currentUrl = page.url();
-        if (!currentUrl.includes('labs.google/fx')) {
+        // 6. Trigger NextAuth OAuth sign-in on labs.google
+        // Just being logged into Google isn't enough — labs.google needs its own NextAuth session.
+        // Navigate to NextAuth's Google sign-in endpoint → auto-approves via existing Google auth → creates session token.
+        console.log('[GoogleLogin] Triggering NextAuth OAuth sign-in on labs.google...');
+
+        // First, navigate to labs.google to get CSRF token
+        await page.goto('https://labs.google/fx', { waitUntil: 'networkidle2', timeout: PAGE_LOAD_TIMEOUT });
+        await randomDelay(2000, 3000);
+
+        // Check if already signed in (has session token)
+        let currentCookies = await page.evaluate(() => document.cookie);
+        if (currentCookies.includes('next-auth.session-token')) {
+            console.log('[GoogleLogin] Already have NextAuth session token!');
+        } else {
+            console.log('[GoogleLogin] No session token yet. Clicking sign-in...');
+            
+            // Try to find and click a sign-in button on the page
+            const signInClicked = await page.evaluate(() => {
+                const btns = [...document.querySelectorAll('a, button')];
+                const signInBtn = btns.find(b => 
+                    b.textContent.includes('Sign in') || b.textContent.includes('Đăng nhập') ||
+                    b.textContent.includes('Get started') || b.textContent.includes('Bắt đầu') ||
+                    b.href?.includes('signin') || b.href?.includes('auth')
+                );
+                if (signInBtn) { signInBtn.click(); return true; }
+                return false;
+            }).catch(() => false);
+
+            if (signInClicked) {
+                console.log('[GoogleLogin] Clicked sign-in button, waiting for OAuth redirect...');
+                await randomDelay(5000, 8000);
+            } else {
+                // Direct navigation to NextAuth sign-in
+                console.log('[GoogleLogin] No sign-in button found. Navigating to NextAuth signin endpoint...');
+                try {
+                    await page.goto('https://labs.google/fx/api/auth/signin/google', {
+                        waitUntil: 'networkidle2',
+                        timeout: PAGE_LOAD_TIMEOUT,
+                    });
+                } catch (e) {
+                    console.log(`[GoogleLogin] NextAuth signin navigation: ${e.message}`);
+                }
+                await randomDelay(3000, 5000);
+            }
+
+            // Handle any Google consent/approval page that appears
+            for (let i = 0; i < 5; i++) {
+                const url = page.url();
+                console.log(`[GoogleLogin] Post-signin URL: ${url}`);
+                
+                if (url.includes('labs.google')) break; // Back on labs.google = done
+                
+                // Auto-approve any Google OAuth consent
+                const approved = await page.evaluate(() => {
+                    const btns = [...document.querySelectorAll('button')];
+                    const approveBtn = btns.find(b =>
+                        b.textContent.includes('Allow') || b.textContent.includes('Continue') ||
+                        b.textContent.includes('Cho phép') || b.textContent.includes('Tiếp tục') ||
+                        b.textContent.includes('Next') || b.textContent.includes('Tiếp theo')
+                    );
+                    if (approveBtn) { approveBtn.click(); return true; }
+                    return false;
+                }).catch(() => false);
+
+                if (approved) {
+                    console.log('[GoogleLogin] Clicked approval button');
+                    await randomDelay(3000, 5000);
+                } else {
+                    await randomDelay(2000, 3000);
+                }
+            }
+
+            // Final navigation to the tools page
             await page.goto(GOOGLE_FLOW_URL, { waitUntil: 'networkidle2', timeout: PAGE_LOAD_TIMEOUT });
+            await randomDelay(3000, 5000);
         }
-        await randomDelay(3000, 5000); // Wait for cookies to settle
 
         // 7. Extract cookies
         console.log('[GoogleLogin] Extracting cookies via CDP...');
