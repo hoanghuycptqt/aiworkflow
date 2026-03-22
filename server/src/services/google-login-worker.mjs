@@ -75,10 +75,10 @@ async function run() {
     await page.setViewport({ width: 1280, height: 900 });
 
     // ========================================
-    // STEP 1: Navigate to labs.google/fx
+    // STEP 1: Navigate to Google Flow tool page
     // ========================================
-    process.stderr.write('[Worker] Navigating to labs.google/fx...\n');
-    await page.goto('https://labs.google/fx', {
+    process.stderr.write('[Worker] Navigating to labs.google/fx/vi/tools/flow...\n');
+    await page.goto('https://labs.google/fx/vi/tools/flow/', {
         waitUntil: 'networkidle2',
         timeout: 30000,
     });
@@ -332,8 +332,8 @@ async function run() {
     if (!loginDone && !finalUrl.includes('labs.google')) {
         // One more try: if we ended up on myaccount.google, navigate to labs.google
         if (finalUrl.includes('myaccount.google') || finalUrl.includes('google.com')) {
-            process.stderr.write('[Worker] On Google, navigating to labs.google/fx...\n');
-            await page.goto('https://labs.google/fx', { waitUntil: 'networkidle2', timeout: 30000 });
+            process.stderr.write('[Worker] On Google, navigating to labs.google/fx/vi/tools/flow...\n');
+            await page.goto('https://labs.google/fx/vi/tools/flow/', { waitUntil: 'networkidle2', timeout: 30000 });
             await delay(3000, 5000);
         }
     }
