@@ -838,18 +838,40 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
             }, 180000);
 
             // Stream stderr in real-time for 2FA messages
-            child.stderr.on('data', (data) => {
+            child.stderr.on('data', async (data) => {
                 const text = data.toString();
                 console.log(`[GoogleLogin] Worker: ${text.trim()}`);
                 
-                // Check for 2FA number — forward to Telegram immediately
+                // Check for 2FA screenshot — use Gemini Vision to read it
                 for (const line of text.split('\n')) {
-                    if (line.startsWith('2FA_NUMBER:')) {
-                        const number = line.replace('2FA_NUMBER:', '').trim();
-                        sendTelegram(`🔐 Google yêu cầu xác minh 2 bước.\n\n📱 Nhấn số **${number}** trên điện thoại của bạn.\n\n⏰ Bạn có 2 phút để xác nhận.`);
-                    } else if (line.startsWith('2FA_TEXT:')) {
-                        const info = line.replace('2FA_TEXT:', '').trim();
-                        sendTelegram(`🔐 Google yêu cầu xác minh 2 bước.\n\n${info}\n\n⏰ Vui lòng xác nhận trên điện thoại trong 2 phút.`);
+                    if (line.startsWith('2FA_SCREENSHOT:')) {
+                        const screenshotPath = line.replace('2FA_SCREENSHOT:', '').trim();
+                        try {
+                            // Read screenshot and send to Gemini Vision
+                            const fs = await import('fs');
+                            const imgBuffer = fs.readFileSync(screenshotPath);
+                            const base64 = imgBuffer.toString('base64');
+                            
+                            const apiKey = process.env.GEMINI_API_KEY;
+                            const ai = new GoogleGenAI({ apiKey });
+                            const response = await ai.models.generateContent({
+                                model: model || 'gemini-2.0-flash',
+                                contents: [{
+                                    role: 'user',
+                                    parts: [
+                                        { inlineData: { mimeType: 'image/png', data: base64 } },
+                                        { text: 'Đây là trang xác minh 2 bước của Google. Hãy cho tôi biết:\n1. Số cần nhấn trên điện thoại (số lớn hiển thị trên màn hình)\n2. Hướng dẫn ngắn gọn bằng tiếng Việt\nTrả lời ngắn gọn, rõ ràng.' }
+                                    ]
+                                }]
+                            });
+                            
+                            const geminiText = response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                            console.log(`[GoogleLogin] Gemini 2FA analysis: ${geminiText}`);
+                            await sendTelegram(`🔐 Google yêu cầu xác minh 2 bước:\n\n${geminiText}\n\n⏰ Bạn có 2 phút để xác nhận.`);
+                        } catch (e) {
+                            console.error(`[GoogleLogin] Gemini 2FA error: ${e.message}`);
+                            await sendTelegram(`🔐 Google yêu cầu xác minh 2 bước.\n\n📸 Không đọc được số. Kiểm tra screenshot tại ${screenshotPath}\n\n⏰ Vui lòng xác nhận trên điện thoại trong 2 phút.`);
+                        }
                     }
                 }
             });

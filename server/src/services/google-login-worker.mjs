@@ -171,32 +171,10 @@ async function run() {
                    t.includes('confirm that it') || t.includes('xác nhận');
         }).catch(() => false);
         if (has2FA) {
-            // Read full challenge text — Google uses split panels, innerText may miss content
-            const twoFAText = await page.evaluate(() => {
-                // Strategy: collect ALL text from all elements, then deduplicate
-                const seen = new Set();
-                const texts = [];
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                let node;
-                while (node = walker.nextNode()) {
-                    const text = node.textContent.trim();
-                    if (text && text.length > 1 && text.length < 200 && !seen.has(text)) {
-                        seen.add(text);
-                        texts.push(text);
-                    }
-                }
-                return texts
-                    .filter(t => !t.includes('English') && !t.includes('Help') && 
-                                !t.includes('Privacy') && !t.includes('Terms'))
-                    .join('\n');
-            }).catch(() => '');
-
-            // Save screenshot for debugging
+            // Save screenshot — agent uses Gemini Vision to read it
             await page.screenshot({ path: '/tmp/google-2fa.png' }).catch(() => {});
-
-            // Send full text to agent — it will forward to Telegram
-            process.stderr.write(`2FA_TEXT:${twoFAText.substring(0, 400)}\n`);
-            process.stderr.write(`[Worker] 2FA detected. Waiting 120s...\n`);
+            process.stderr.write(`2FA_SCREENSHOT:/tmp/google-2fa.png\n`);
+            process.stderr.write(`[Worker] 2FA detected. Screenshot saved. Waiting 120s...\n`);
 
             // Poll for up to 120 seconds for user to approve
             let twoFAApproved = false;
