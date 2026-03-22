@@ -815,186 +815,148 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         await prepareStealthPage(page); // Stealth: UA, viewport, scripts BEFORE navigation
         await page.setDefaultNavigationTimeout(PAGE_LOAD_TIMEOUT);
 
-        // 4. First login at Google directly (NOT via OAuth flow which gets blocked)
-        // OAuth flows (/v3/signin with flowName=GeneralOAuthFlow) trigger Google's
-        // "This browser or app may not be secure" rejection. Direct sign-in works fine.
+        // 4. Direct programmatic login at accounts.google.com
+        // CRITICAL: Avoid page.evaluate()/screenshot() before email+Next step.
+        // Google detects CDP Runtime.evaluate and rejects the login.
         const GOOGLE_SIGNIN_URL = 'https://accounts.google.com/signin';
-        console.log(`[GoogleLogin] Navigating to ${GOOGLE_SIGNIN_URL} (direct login, not OAuth)`);
+        console.log(`[GoogleLogin] Navigating to ${GOOGLE_SIGNIN_URL} (direct login)`);
         await page.goto(GOOGLE_SIGNIN_URL, {
             waitUntil: 'networkidle2',
             timeout: PAGE_LOAD_TIMEOUT,
         });
-
         await randomDelay(2000, 3000);
 
-        // 5. Gemini Vision Loop — login at Google, then navigate to Flow
-        const context = `Logging into Google account directly at accounts.google.com. Email: ${email}. Password: [AVAILABLE - type it when you see password input].
-FLOW:
-1. You are on accounts.google.com/signin. Type email, click Next.
-2. Type password, click Next. 
-3. After successful Google login (you'll see myaccount.google.com or Google homepage or "Welcome"), use action "navigate" with value "${GOOGLE_FLOW_URL}" to go to Google Flow.
-4. If you land on Google Flow and see the tool UI or "Create with Flow", set status to "login_complete".
-RULES:
-- You have both email and password, so ALWAYS use type_text with status "need_action" for password fields. NEVER ask for the password via need_user_input.
-- After typing password and clicking Next, if Google asks for verification, handle passkey by clicking "Try another way" then "Enter your password".
-- After login succeeds and you see Google homepage/myaccount, NAVIGATE to ${GOOGLE_FLOW_URL}.`;
-        let step = 0;
+        // Step 1: Type email (no evaluate before this!)
+        console.log('[GoogleLogin] Typing email...');
+        await page.waitForSelector('input[type="email"]', { timeout: 10000 });
+        await page.type('input[type="email"]', email, { delay: 80 + Math.random() * 40 });
+        await randomDelay(800, 1500);
+
+        // Step 2: Click Next
+        console.log('[GoogleLogin] Clicking Next (email)...');
+        const nextBtn1 = await page.evaluateHandle(() => {
+            return [...document.querySelectorAll('button')].find(b => 
+                b.textContent.includes('Next') || b.textContent.includes('Tiếp theo')
+            );
+        });
+        if (nextBtn1) await nextBtn1.click();
+        await randomDelay(3000, 5000);
+
+        // Check if rejected
+        const urlAfterEmail = page.url();
+        console.log(`[GoogleLogin] URL after email: ${urlAfterEmail}`);
+        if (urlAfterEmail.includes('/signin/rejected')) {
+            await page.screenshot({ path: '/tmp/google-rejected.png' });
+            throw new Error('Google chặn đăng nhập — trình duyệt bị phát hiện là tự động');
+        }
+
+        // Step 3: Handle post-email pages (password, passkey, 2FA)
         let loginSuccess = false;
+        for (let attempt = 0; attempt < 15; attempt++) {
+            const curUrl = page.url();
+            console.log(`[GoogleLogin] Post-email attempt ${attempt + 1}, URL: ${curUrl}`);
 
-        while (step < MAX_LOGIN_STEPS) {
-            step++;
-            console.log(`[GoogleLogin] Step ${step}/${MAX_LOGIN_STEPS}`);
+            if (curUrl.includes('labs.google')) { loginSuccess = true; break; }
+            if (curUrl.includes('myaccount.google.com') || curUrl.includes('google.com/?')) { loginSuccess = true; break; }
 
-            // Take screenshot
-            const screenshot = await takeScreenshot(page);
+            // Password input?
+            const hasPwd = await page.evaluate(() => {
+                const el = document.querySelector('input[type="password"]');
+                return el && el.offsetParent !== null;
+            }).catch(() => false);
 
-            // Debug: Log current page state
-            try {
-                const currentUrl = page.url();
-                const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 200) || '');
-                console.log(`[GoogleLogin] Page URL: ${currentUrl}`);
-                console.log(`[GoogleLogin] Page text: ${bodyText.replace(/\n/g, ' | ')}`);
-                // Save screenshot for debugging (always to /tmp/)
-                const debugPath = `/tmp/google-step-${step}.png`;
-                await page.screenshot({ path: debugPath, type: 'png' });
-            } catch { /* ok */ }
+            if (hasPwd) {
+                console.log('[GoogleLogin] Typing password...');
+                await page.type('input[type="password"]', password, { delay: 60 + Math.random() * 40 });
+                await randomDelay(500, 1000);
+                const nextBtn2 = await page.evaluateHandle(() =>
+                    [...document.querySelectorAll('button')].find(b =>
+                        b.textContent.includes('Next') || b.textContent.includes('Tiếp theo')
+                    )
+                );
+                if (nextBtn2) await nextBtn2.click();
+                await randomDelay(4000, 6000);
 
-            // Analyze with Gemini
-            const analysis = await analyzeWithGemini(screenshot, context, model);
-            console.log(`[GoogleLogin] Gemini says: ${analysis.status} — ${analysis.description}`);
-
-            switch (analysis.status) {
-                case 'already_logged_in':
-                case 'login_complete': {
-                    console.log('[GoogleLogin] ✅ Login complete!');
-                    loginSuccess = true;
-                    break;
+                const postUrl = page.url();
+                console.log(`[GoogleLogin] URL after password: ${postUrl}`);
+                if (postUrl.includes('myaccount.google') || postUrl.includes('labs.google') ||
+                    postUrl.includes('google.com/?') || postUrl.includes('signin/oauth')) {
+                    loginSuccess = true; break;
                 }
-
-                case 'need_action': {
-                    // Gemini wants to type/click something
-                    const actionToExecute = { ...analysis };
-                    // Inject actual credentials (Gemini only knows to type, not the actual values)
-                    if (analysis.action === 'type_text') {
-                        if (analysis.value === email || analysis.description?.toLowerCase().includes('email')) {
-                            actionToExecute.value = email;
-                        }
-                        if (analysis.description?.toLowerCase().includes('password') || 
-                            analysis.description?.toLowerCase().includes('mật khẩu') ||
-                            analysis.target?.includes('password') ||
-                            analysis.target?.includes('Passwd')) {
-                            actionToExecute.value = password;
-                        }
-                    }
-                    await executeAction(page, actionToExecute);
-                    break;
-                }
-
-
-                case 'need_2fa': {
-                    // 2FA required — notify user via Telegram
-                    const msg = analysis.userMessage || '🔔 Google yêu cầu xác thực. Vui lòng nhấn "Có" trên điện thoại trong 2 phút.';
-                    await sendTelegram(msg);
-
-                    // Poll for page change (user approves on phone)
-                    let approved = false;
-                    const startTime = Date.now();
-                    while (Date.now() - startTime < 120000) { // 2 min timeout
-                        await randomDelay(3000, 5000);
-                        const currentUrl = page.url();
-                        // If redirected away from accounts.google.com → 2FA approved
-                        if (!currentUrl.includes('accounts.google.com/v3/signin') &&
-                            !currentUrl.includes('accounts.google.com/signin')) {
-                            approved = true;
-                            break;
-                        }
-                        // Also check if page content changed (some 2FA stays on same URL)
-                        const newScreenshot = await takeScreenshot(page);
-                        const recheck = await analyzeWithGemini(newScreenshot, context, model);
-                        if (recheck.status === 'login_complete' || recheck.status === 'already_logged_in') {
-                            approved = true;
-                            loginSuccess = true;
-                            break;
-                        }
-                        if (recheck.status === 'need_action') {
-                            // 2FA approved, now there's another action needed
-                            await executeAction(page, recheck);
-                            approved = true;
-                            break;
-                        }
-                    }
-
-                    if (!approved) {
-                        await sendTelegram('⏰ Hết thời gian chờ xác thực 2FA. Vui lòng thử lại.');
-                        throw new Error('2FA timeout — user did not approve within 2 minutes');
-                    }
-                    await sendTelegram('✅ Xác thực thành công!');
-                    break;
-                }
-
-                case 'need_user_input': {
-                    // Check if this is actually a password prompt — auto-fill from DB
-                    const inputDesc = (analysis.description || '').toLowerCase() + ' ' + (analysis.userMessage || '').toLowerCase();
-                    if (inputDesc.includes('password') || inputDesc.includes('mật khẩu')) {
-                        console.log('[GoogleLogin] Gemini asked for password but we have it — auto-typing');
-                        const pwTarget = analysis.target || 'input[type=password]';
-                        await executeAction(page, { action: 'type_text', target: pwTarget, value: password });
-                        await randomDelay(500, 1000);
-                        await page.keyboard.press('Enter');
-                        break;
-                    }
-                    // Not a password prompt — ask user via Telegram
-                    const inputMsg = analysis.userMessage || '❓ Google yêu cầu thông tin bổ sung. Vui lòng trả lời tin nhắn này.';
-                    try {
-                        const userReply = await waitForTelegramInput(
-                            telegramChatId,
-                            inputMsg,
-                            sendTelegram,
-                            120000
-                        );
-                        // Type the user's reply
-                        if (analysis.target) {
-                            await executeAction(page, { action: 'type_text', target: analysis.target, value: userReply });
-                        } else {
-                            await page.keyboard.type(userReply, { delay: 80 });
-                        }
-                        await randomDelay(500, 1000);
-                        await page.keyboard.press('Enter');
-                    } catch (e) {
-                        await sendTelegram('⏰ Hết thời gian chờ phản hồi.');
-                        throw e;
-                    }
-                    break;
-                }
-
-                case 'error': {
-                    const errMsg = analysis.userMessage || analysis.description || 'Unknown error';
-                    // Save error screenshot for debugging (use absolute path)
-                    try {
-                        const uploadsDir = path.join(process.cwd(), 'uploads');
-                        const errScreenshot = await page.screenshot({ type: 'png', fullPage: true });
-                        const errPath = path.join(uploadsDir, `google-login-error-${Date.now()}.png`);
-                        await fs.writeFile(errPath, errScreenshot);
-                        console.log(`[GoogleLogin] ⚠️ Error screenshot saved: ${errPath}`);
-                    } catch (ssErr) { console.error('[GoogleLogin] Screenshot save failed:', ssErr.message); }
-                    throw new Error(`Login agent error: ${errMsg}`);
-                }
+                continue;
             }
 
-            if (loginSuccess) break;
-            await randomDelay();
+            // Passkey page?
+            const hasPasskey = await page.evaluate(() => {
+                const t = document.body?.innerText || '';
+                return t.includes('passkey') || t.includes('khóa truy cập') || t.includes('Use your');
+            }).catch(() => false);
+            if (hasPasskey) {
+                console.log('[GoogleLogin] Passkey detected, clicking "Try another way"...');
+                const btn = await page.evaluateHandle(() =>
+                    [...document.querySelectorAll('button, a')].find(b =>
+                        b.textContent.includes('Try another way') || b.textContent.includes('Thử cách khác')
+                    )
+                );
+                if (btn) { await btn.click(); await randomDelay(2000, 3000); }
+                const pwdOpt = await page.evaluateHandle(() =>
+                    [...document.querySelectorAll('li, div[role="link"], button, a')].find(el =>
+                        el.textContent.includes('Enter your password') || el.textContent.includes('Nhập mật khẩu')
+                    )
+                );
+                if (pwdOpt) { await pwdOpt.click(); await randomDelay(2000, 3000); }
+                continue;
+            }
+
+            // 2FA?
+            const has2FA = await page.evaluate(() => {
+                const t = document.body?.innerText || '';
+                return t.includes('Check your phone') || t.includes('Kiểm tra điện thoại') ||
+                       t.includes('2-Step Verification') || t.includes('Xác minh 2 bước');
+            }).catch(() => false);
+            if (has2FA) {
+                console.log('[GoogleLogin] 2FA detected...');
+                await sendTelegram('🔐 Google yêu cầu xác minh 2 bước. Vui lòng xác nhận trên điện thoại.');
+                for (let w = 0; w < 12; w++) {
+                    await randomDelay(5000, 5000);
+                    const nu = page.url();
+                    if (!nu.includes('challenge') && !nu.includes('signin')) { loginSuccess = true; break; }
+                }
+                if (loginSuccess) break;
+                continue;
+            }
+
+            // Consent?
+            const hasConsent = await page.evaluate(() => {
+                const t = document.body?.innerText || '';
+                return t.includes('wants to access') || t.includes('muốn truy cập');
+            }).catch(() => false);
+            if (hasConsent) {
+                console.log('[GoogleLogin] Consent page...');
+                const allowBtn = await page.evaluateHandle(() =>
+                    [...document.querySelectorAll('button')].find(b =>
+                        b.textContent.includes('Allow') || b.textContent.includes('Continue') ||
+                        b.textContent.includes('Cho phép') || b.textContent.includes('Tiếp tục')
+                    )
+                );
+                if (allowBtn) await allowBtn.click();
+                await randomDelay(3000, 5000);
+                continue;
+            }
+
+            console.log('[GoogleLogin] Waiting for transition...');
+            await randomDelay(2000, 3000);
         }
 
         if (!loginSuccess) {
-            // May have landed on the page after many steps — do a final check
-            const finalUrl = page.url();
-            if (finalUrl.includes('labs.google')) {
+            const fUrl = page.url();
+            if (fUrl.includes('labs.google') || fUrl.includes('myaccount.google') || fUrl.includes('google.com/?')) {
                 loginSuccess = true;
             }
         }
-
         if (!loginSuccess) {
-            throw new Error(`Login failed after ${MAX_LOGIN_STEPS} steps`);
+            await page.screenshot({ path: '/tmp/google-login-final-fail.png' });
+            throw new Error('Login failed after all attempts');
         }
 
         // 6. Navigate to Google Flow page to ensure NextAuth cookies are present
