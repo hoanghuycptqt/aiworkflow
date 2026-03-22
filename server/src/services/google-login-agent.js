@@ -780,6 +780,26 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
     }
     activeOperations.set(userId, true);
 
+    // File-based lock — survives PM2 cluster restarts
+    const lockFile = '/tmp/google-login.lock';
+    try {
+        const fs = await import('fs');
+        if (fs.existsSync(lockFile)) {
+            const lockAge = Date.now() - fs.statSync(lockFile).mtimeMs;
+            if (lockAge < 180000) { // Lock younger than 3 minutes
+                console.log(`[GoogleLogin] ⏳ Another login in progress (lock age: ${Math.round(lockAge/1000)}s). Skipping.`);
+                activeOperations.delete(userId);
+                await sendTelegram('⏳ Đang có một phiên đăng nhập khác đang chạy. Vui lòng đợi.');
+                return { success: false, message: 'Another login in progress' };
+            }
+            // Stale lock, remove it
+            fs.unlinkSync(lockFile);
+        }
+        fs.writeFileSync(lockFile, `${Date.now()}\n${process.pid}`);
+    } catch (lockErr) {
+        console.log(`[GoogleLogin] Lock error (non-critical): ${lockErr.message}`);
+    }
+
     let browser = null;
     let chromeProcess = null;
 
@@ -1025,6 +1045,8 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         return result;
     } finally {
         activeOperations.delete(userId);
+        // Clean up file lock
+        try { const fs = await import('fs'); fs.unlinkSync('/tmp/google-login.lock'); } catch { /* ok */ }
     }
 }
 
