@@ -221,6 +221,30 @@ async function run() {
                 await delay(3000, 5000);
             }
             process.stderr.write(`[Worker] After form submit URL: ${page.url()}\n`);
+            
+            // OAuth done — navigate to tools page and check session
+            if (!page.url().includes('accounts.google.com')) {
+                process.stderr.write('[Worker] OAuth seems complete. Navigating to Flow tools page...\n');
+                await page.goto('https://labs.google/fx/vi/tools/flow/', {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000,
+                });
+                await delay(2000, 3000);
+                
+                // Check session token via CDP
+                const cdp3 = await page.createCDPSession();
+                const { cookies: postOAuthCookies } = await cdp3.send('Network.getAllCookies');
+                await cdp3.detach();
+                const postOAuthSession = postOAuthCookies.find(c =>
+                    c.name === '__Secure-next-auth.session-token' && c.domain.includes('labs.google')
+                );
+                if (postOAuthSession) {
+                    process.stderr.write('[Worker] ✅ Session token found after OAuth! Done.\n');
+                    browser.disconnect();
+                    return { success: true, url: page.url(), port: debugPort, hasSession: true };
+                }
+                process.stderr.write('[Worker] ⚠️ No session token after OAuth form submit.\n');
+            }
         } catch (e) {
             process.stderr.write(`[Worker] NextAuth form error: ${e.message}\n`);
         }
