@@ -443,7 +443,15 @@ IMPORTANT RULES:
 9. If the page shows any unexpected challenge, set status to "need_user_input" and describe it
 10. For the number matching 2FA (Google shows a number to tap on phone), read the number and include it in userMessage
 11. If already on Google Flow (the creative tool page), set status to "already_logged_in"
-12. Use Vietnamese for userMessage and description`;
+12. Use Vietnamese for userMessage and description
+13. ★ CRITICAL: NEVER set status to "error" for these NORMAL login pages:
+    - Password entry page ("Enter your password", "Nhập mật khẩu")
+    - Passkey page ("Use your passkey", "Sử dụng khóa truy cập") → click "Try another way"
+    - Challenge pages (phone verification, recovery email)
+    - Loading/transition pages → just set status "need_action" with action "wait"
+    - Account picker pages
+    Only set "error" if you see the EXACT text "Couldn't sign you in" or "This browser or app may not be secure" or "Không thể đăng nhập"
+14. If you see any page that is part of the Google login flow (email, password, verification, passkey, challenges), ALWAYS continue with appropriate actions. Do NOT give up.`;
 
     const response = await ai.models.generateContent({
         model,
@@ -943,13 +951,14 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
 
                 case 'error': {
                     const errMsg = analysis.userMessage || analysis.description || 'Unknown error';
-                    // Save error screenshot for debugging
+                    // Save error screenshot for debugging (use absolute path)
                     try {
+                        const uploadsDir = path.join(process.cwd(), 'uploads');
                         const errScreenshot = await page.screenshot({ type: 'png', fullPage: true });
-                        const errPath = path.join('uploads', `google-login-error-${Date.now()}.png`);
+                        const errPath = path.join(uploadsDir, `google-login-error-${Date.now()}.png`);
                         await fs.writeFile(errPath, errScreenshot);
                         console.log(`[GoogleLogin] ⚠️ Error screenshot saved: ${errPath}`);
-                    } catch { /* ok */ }
+                    } catch (ssErr) { console.error('[GoogleLogin] Screenshot save failed:', ssErr.message); }
                     throw new Error(`Login agent error: ${errMsg}`);
                 }
             }
