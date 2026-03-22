@@ -226,13 +226,7 @@ async function launchPersistentChrome(userId) {
         throw new Error('Chrome failed to start within 15 seconds');
     }
 
-    // Inject stealth scripts to bypass automation detection via CDP
-    // Using CDP directly is more reliable than evaluateOnNewDocument via puppeteer.connect
-    const cdpSession = await browser.target().createCDPSession();
-    await cdpSession.send('Page.addScriptToEvaluateOnNewDocument', {
-        source: STEALTH_SCRIPT,
-    });
-    await cdpSession.detach();
+    // Note: stealth scripts are injected per-page via prepareStealthPage()\n    // called before each navigation in loginGoogleFlow and refreshCookies
 
     console.log(`[GoogleLogin] ✅ Chrome launched natively & connected via CDP (port: ${debugPort}, profile: ${profileDir})`);
     return { browser, chromeProcess, debugPort };
