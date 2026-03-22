@@ -154,32 +154,75 @@ async function run() {
     process.stderr.write(`[Worker] Sign-in clicked: ${signInClicked}\n`);
     
     if (signInClicked) {
-        // Wait for navigation to Google OAuth
-        try {
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-        } catch { /* might already have navigated */ }
-        await delay(2000, 3000);
+        // Check if a popup window was opened (Google One Tap or OAuth popup)
+        const pages = await browser.pages();
+        process.stderr.write(`[Worker] Open pages: ${pages.length}\n`);
+        if (pages.length > 1) {
+            // Switch to the popup
+            const popup = pages[pages.length - 1];
+            process.stderr.write(`[Worker] Popup URL: ${popup.url()}\n`);
+            // Wait for popup to finish OAuth
+            try {
+                await popup.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+            } catch { /* ok */ }
+            await delay(3000, 5000);
+        } else {
+            // Wait for navigation on current page
+            try {
+                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
+            } catch { /* might already have navigated */ }
+            await delay(2000, 3000);
+        }
         process.stderr.write(`[Worker] After sign-in click URL: ${page.url()}\n`);
     }
     
-    // If still on labs.google after clicking, try direct CSSI (Cross-Site Sign-In)
+    // If still on labs.google, use NextAuth POST form to trigger OAuth
     if (page.url().includes('labs.google')) {
-        process.stderr.write('[Worker] Still on labs.google. Trying CSSI via callback URL...\n');
-        // Use the NextAuth callback approach with CSRF token
+        process.stderr.write('[Worker] Still on labs.google. Posting NextAuth signin form...\n');
         try {
-            // Get CSRF token from cookies
-            const csrfCookie = allCookies.find(c => c.name === '__Host-next-auth.csrf-token');
-            const csrfToken = csrfCookie ? csrfCookie.value.split('|')[0] : '';
-            
-            // Post to NextAuth signin endpoint (triggers server-side OAuth redirect)
-            await page.goto(`https://labs.google/fx/api/auth/signin/google?callbackUrl=${encodeURIComponent('https://labs.google/fx/vi/tools/flow/')}`, {
+            // Navigate to NextAuth signin page
+            await page.goto('https://labs.google/fx/api/auth/signin', {
                 waitUntil: 'networkidle2',
                 timeout: 30000,
             });
-            await delay(2000, 3000);
-            process.stderr.write(`[Worker] After CSSI URL: ${page.url()}\n`);
+            await delay(1000, 2000);
+            
+            // Take screenshot to see what NextAuth shows
+            await page.screenshot({ path: '/tmp/nextauth-signin.png' }).catch(() => {});
+            
+            // Find and click the "Sign in with Google" button on NextAuth page
+            const formSubmitted = await page.evaluate(() => {
+                // NextAuth signin page has a form with a button for each provider
+                const forms = [...document.querySelectorAll('form')];
+                for (const form of forms) {
+                    const action = form.action || '';
+                    if (action.includes('google') || action.includes('signin')) {
+                        form.submit();
+                        return true;
+                    }
+                }
+                // Also try clicking any button
+                const btns = [...document.querySelectorAll('button')];
+                for (const btn of btns) {
+                    if (btn.textContent.includes('Google') || btn.textContent.includes('Sign in')) {
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            }).catch(() => false);
+            
+            process.stderr.write(`[Worker] Form submitted: ${formSubmitted}\n`);
+            
+            if (formSubmitted) {
+                try {
+                    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+                } catch { /* ok */ }
+                await delay(3000, 5000);
+            }
+            process.stderr.write(`[Worker] After form submit URL: ${page.url()}\n`);
         } catch (e) {
-            process.stderr.write(`[Worker] CSSI error: ${e.message}\n`);
+            process.stderr.write(`[Worker] NextAuth form error: ${e.message}\n`);
         }
     }
 
