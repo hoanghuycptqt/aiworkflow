@@ -319,36 +319,16 @@ async function run() {
             continue;
         }
 
-        // Account chooser?
-        const hasChooser = await page.evaluate((targetEmail) => {
-            const items = [...document.querySelectorAll('[data-identifier], [data-email]')];
-            const match = items.find(el => 
-                el.getAttribute('data-identifier') === targetEmail ||
-                el.getAttribute('data-email') === targetEmail ||
-                el.textContent.includes(targetEmail)
-            );
-            if (match) { match.click(); return true; }
-            
-            // Also check for email text in divs
-            const divs = [...document.querySelectorAll('div, li')];
-            const emailDiv = divs.find(d => d.textContent.includes(targetEmail) && d.offsetParent !== null);
-            if (emailDiv) { emailDiv.click(); return true; }
-            return false;
-        }, email).catch(() => false);
-        if (hasChooser) {
-            process.stderr.write('[Worker] Selected account from chooser\n');
-            await delay(3000, 5000);
-            continue;
-        }
-
-        // 2FA?
-        const has2FA = await page.evaluate(() => {
+        // 2FA? (MUST check BEFORE account chooser — /challenge/dp page shows email which tricks chooser)
+        const is2FAUrl = url.includes('/challenge/dp') || url.includes('/challenge/ipp') || url.includes('/challenge/ootp');
+        const has2FA = is2FAUrl || await page.evaluate(() => {
             const t = document.body?.innerText || '';
             return t.includes('Check your phone') || t.includes('Kiểm tra điện thoại') ||
                    t.includes('2-Step Verification') || t.includes('Xác minh 2 bước') ||
-                   t.includes('Confirm it') || t.includes('Tap') ||
+                   t.includes('Confirm it') || t.includes('Verify it') ||
                    t.includes('confirm that it') || t.includes('xác nhận') ||
-                   t.includes('trying to sign in') || t.includes('đang cố đăng nhập');
+                   t.includes('trying to sign in') || t.includes('đang cố đăng nhập') ||
+                   t.includes('Verify it\'s you') || t.includes('Xác minh danh tính');
         }).catch(() => false);
         if (has2FA) {
             await page.screenshot({ path: '/tmp/google-2fa.png' }).catch(() => {});
@@ -375,6 +355,22 @@ async function run() {
                 chrome.kill();
                 return { success: false, error: '2FA timeout' };
             }
+            continue;
+        }
+
+        // Account chooser? (runs AFTER 2FA check to avoid false match on /challenge/dp)
+        const hasChooser = await page.evaluate((targetEmail) => {
+            const items = [...document.querySelectorAll('[data-identifier], [data-email]')];
+            const match = items.find(el => 
+                el.getAttribute('data-identifier') === targetEmail ||
+                el.getAttribute('data-email') === targetEmail
+            );
+            if (match) { match.click(); return true; }
+            return false;
+        }, email).catch(() => false);
+        if (hasChooser) {
+            process.stderr.write('[Worker] Selected account from chooser\n');
+            await delay(3000, 5000);
             continue;
         }
 
