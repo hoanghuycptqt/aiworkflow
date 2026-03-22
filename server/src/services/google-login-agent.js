@@ -961,6 +961,42 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         browser = null;
         chromeProcess = null;
 
+        // 11. Auto Refresh — same as UI "🔄 Auto Refresh" button
+        console.log('[GoogleLogin] Running auto-refresh (session API → fresh token → DB update)...');
+        try {
+            const refreshRes = await fetch('https://labs.google/fx/api/auth/session', {
+                method: 'GET',
+                headers: {
+                    'Accept': '*/*',
+                    'Content-Type': 'application/json',
+                    'Cookie': cookieString,
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+                    'Referer': 'https://labs.google/fx/vi/tools/flow/',
+                },
+            });
+            if (refreshRes.ok) {
+                const refreshData = await refreshRes.json();
+                if (refreshData.access_token) {
+                    await prisma.credential.update({
+                        where: { id: savedCredential.id },
+                        data: {
+                            accessToken: refreshData.access_token,
+                            metadata: JSON.stringify({
+                                ...JSON.parse(savedCredential.metadata || '{}'),
+                                lastRefreshed: new Date().toISOString(),
+                                tokenExpiresAt: refreshData.expires || null,
+                            }),
+                        },
+                    });
+                    console.log(`[GoogleLogin] ✅ Auto-refresh successful! Fresh token saved.`);
+                }
+            } else {
+                console.log(`[GoogleLogin] Auto-refresh session API returned ${refreshRes.status}`);
+            }
+        } catch (refreshErr) {
+            console.log(`[GoogleLogin] Auto-refresh failed (non-critical): ${refreshErr.message}`);
+        }
+
         const result = {
             success: true,
             message: `✅ Login Google Flow thành công (${tokenData.userEmail})! Token expires: ${tokenData.expiresAt || 'N/A'}`,
