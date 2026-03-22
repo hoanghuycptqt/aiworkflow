@@ -257,6 +257,7 @@ async function run() {
     // or already redirected back to labs.google with session
     
     let loginDone = false;
+    let twoFASent = false; // Only send 2FA screenshot/Gemini once
     let leftLabsGoogle = !page.url().includes('labs.google'); // Track if we actually left
     for (let step = 0; step < 20; step++) {
         const url = page.url();
@@ -331,11 +332,17 @@ async function run() {
                    t.includes('Verify it\'s you') || t.includes('Xác minh danh tính');
         }).catch(() => false);
         if (has2FA) {
-            await page.screenshot({ path: '/tmp/google-2fa.png' }).catch(() => {});
-            process.stderr.write('2FA_SCREENSHOT:/tmp/google-2fa.png\n');
-            process.stderr.write('[Worker] 2FA detected. Screenshot saved. Waiting 120s...\n');
+            // Only send screenshot + Gemini analysis ONCE
+            if (!twoFASent) {
+                twoFASent = true;
+                await page.screenshot({ path: '/tmp/google-2fa.png' }).catch(() => {});
+                process.stderr.write('2FA_SCREENSHOT:/tmp/google-2fa.png\n');
+                process.stderr.write('[Worker] 2FA detected. Screenshot saved. Waiting 120s...\n');
+            } else {
+                process.stderr.write('[Worker] 2FA still active. Continuing to wait...\n');
+            }
 
-            // Poll for approval
+            // Poll for approval — full 120s (24 × 5s)
             let approved = false;
             for (let w = 0; w < 24; w++) {
                 await delay(5000, 5000);
@@ -345,7 +352,7 @@ async function run() {
                     approved = true;
                     break;
                 }
-                if (newUrl.includes('myaccount.google') || newUrl.includes('labs.google')) {
+                if (newUrl.includes('myaccount.google') || newUrl.includes('labs.google') || newUrl.includes('consent')) {
                     approved = true;
                     break;
                 }
@@ -355,7 +362,8 @@ async function run() {
                 chrome.kill();
                 return { success: false, error: '2FA timeout' };
             }
-            continue;
+            loginDone = true;
+            break; // Exit main loop — 2FA approved
         }
 
         // Account chooser? (runs AFTER 2FA check to avoid false match on /challenge/dp)
