@@ -1404,6 +1404,10 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                 if (result) return result;
 
             } catch (e) {
+                // Re-throw fatal errors (FAILED/ERROR status from _checkBatchStatus)
+                if (e.message.includes('failed with status') || e.message.includes('generation failed')) {
+                    throw e;
+                }
                 if (i % 4 === 0) console.log(`[FlowVideo] Poll ${i + 1}: error: ${e.message}`);
             }
 
