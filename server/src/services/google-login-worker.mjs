@@ -332,38 +332,54 @@ async function run() {
                    t.includes('Verify it\'s you') || t.includes('Xác minh danh tính');
         }).catch(() => false);
         if (has2FA) {
-            // Only send screenshot + Gemini analysis ONCE
+            // Send screenshot + Gemini analysis only ONCE
             if (!twoFASent) {
                 twoFASent = true;
                 await page.screenshot({ path: '/tmp/google-2fa.png' }).catch(() => {});
                 process.stderr.write('2FA_SCREENSHOT:/tmp/google-2fa.png\n');
-                process.stderr.write('[Worker] 2FA detected. Screenshot saved. Waiting 120s...\n');
-            } else {
-                process.stderr.write('[Worker] 2FA still active. Continuing to wait...\n');
+                process.stderr.write('[Worker] 2FA detected! Polling for user approval (max 120s)...\n');
             }
 
-            // Poll for approval — full 120s (24 × 5s)
-            let approved = false;
-            for (let w = 0; w < 24; w++) {
-                await delay(5000, 5000);
-                const newUrl = page.url();
-                process.stderr.write(`[Worker] 2FA poll ${w+1}/24, URL: ${newUrl.substring(0, 80)}\n`);
-                if (!newUrl.includes('challenge') && !newUrl.includes('signin')) {
-                    approved = true;
+            // Poll every 5s for 120s — wait for user to approve on phone
+            let twoFAApproved = false;
+            for (let pollIdx = 0; pollIdx < 24; pollIdx++) {
+                await new Promise(r => setTimeout(r, 5000)); // explicit 5s wait
+                let pollUrl = '';
+                try { pollUrl = page.url(); } catch { pollUrl = 'ERROR'; }
+                process.stderr.write(`[Worker] 2FA-poll ${pollIdx+1}/24 url=${pollUrl.substring(0, 90)}\n`);
+                
+                // Check if user approved — URL changed away from challenge
+                if (pollUrl.includes('consent') || pollUrl.includes('myaccount.google') || 
+                    pollUrl.includes('labs.google') || pollUrl.includes('callback')) {
+                    process.stderr.write('[Worker] ✅ 2FA approved! URL changed.\n');
+                    twoFAApproved = true;
                     break;
                 }
-                if (newUrl.includes('myaccount.google') || newUrl.includes('labs.google') || newUrl.includes('consent')) {
-                    approved = true;
+                // Also check: URL no longer contains challenge AND no longer contains signin
+                if (!pollUrl.includes('/challenge/') && !pollUrl.includes('/signin/')) {
+                    process.stderr.write('[Worker] ✅ 2FA approved! Left signin pages.\n');
+                    twoFAApproved = true;
                     break;
+                }
+                // Check for rejection
+                if (pollUrl.includes('rejected')) {
+                    process.stderr.write('[Worker] ❌ 2FA rejected by Google.\n');
+                    browser.disconnect();
+                    chrome.kill();
+                    return { success: false, error: '2FA rejected' };
                 }
             }
-            if (!approved) {
+            
+            if (!twoFAApproved) {
+                process.stderr.write('[Worker] ❌ 2FA timeout after 120s.\n');
                 browser.disconnect();
                 chrome.kill();
-                return { success: false, error: '2FA timeout' };
+                return { success: false, error: '2FA timeout - user did not approve in 120s' };
             }
+            
+            // 2FA approved — break out of main loop
             loginDone = true;
-            break; // Exit main loop — 2FA approved
+            break;
         }
 
         // Account chooser? (runs AFTER 2FA check to avoid false match on /challenge/dp)
