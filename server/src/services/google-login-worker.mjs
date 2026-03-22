@@ -75,10 +75,10 @@ async function run() {
     await page.setViewport({ width: 1280, height: 900 });
 
     // ========================================
-    // STEP 1: Navigate to Google Flow tool page
+    // STEP 1: Check if already signed in (navigate to /fx/vi/tools/flow first for cookie check)
     // ========================================
-    process.stderr.write('[Worker] Navigating to labs.google/fx/vi/tools/flow...\n');
-    await page.goto('https://labs.google/fx/vi/tools/flow/', {
+    process.stderr.write('[Worker] Checking session on labs.google/fx...\n');
+    await page.goto('https://labs.google/fx', {
         waitUntil: 'networkidle2',
         timeout: 30000,
     });
@@ -93,34 +93,33 @@ async function run() {
     );
     if (sessionToken) {
         process.stderr.write(`[Worker] ✅ Already signed in! Session token found (HttpOnly). Skipping login.\n`);
+        // Navigate to the actual Flow tool page
+        await page.goto('https://labs.google/fx/vi/tools/flow/', { waitUntil: 'networkidle2', timeout: 30000 });
         browser.disconnect();
         return { success: true, url: page.url(), port: debugPort, alreadyLoggedIn: true };
     }
     process.stderr.write('[Worker] No session token found. Need to sign in.\n');
 
     // ========================================
-    // STEP 2: Find and click Sign In on labs.google
+    // STEP 2: Click "Sign in with Google" on /fx landing page
     // ========================================
-    process.stderr.write('[Worker] Looking for sign-in button on labs.google...\n');
+    process.stderr.write('[Worker] Looking for "Sign in with Google" button on /fx landing page...\n');
     
     // Take screenshot to see the page
     await page.screenshot({ path: '/tmp/google-labs-page.png' }).catch(() => {});
     
-    // Click "Sign in with Google" button — match precisely to avoid "About" or other elements
+    // The "Sign in with Google" button is on the /fx landing page (NOT /fx/vi/tools/flow)
     let signInClicked = false;
     try {
         signInClicked = await page.evaluate(() => {
-            // Strategy 1: Look for a button/link containing "Sign in with Google" exactly
             const all = [...document.querySelectorAll('a, button')];
             for (const el of all) {
                 const t = el.textContent.trim();
-                // Must contain "Sign in" but NOT "About" 
                 if (t.includes('Sign in') && !t.includes('About') && t.length < 40) {
                     el.click();
                     return true;
                 }
             }
-            // Strategy 2: Look for any element with aria-label
             const ariaBtn = document.querySelector('[aria-label*="Sign in"], [aria-label*="sign in"]');
             if (ariaBtn) { ariaBtn.click(); return true; }
             return false;
@@ -132,23 +131,31 @@ async function run() {
     if (signInClicked) {
         // Wait for navigation to Google OAuth
         try {
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
         } catch { /* might already have navigated */ }
         await delay(2000, 3000);
+        process.stderr.write(`[Worker] After sign-in click URL: ${page.url()}\n`);
     }
     
-    // If still on labs.google, try direct NextAuth endpoint
+    // If still on labs.google after clicking, try direct CSSI (Cross-Site Sign-In)
     if (page.url().includes('labs.google')) {
-        process.stderr.write('[Worker] Still on labs.google. Trying NextAuth signin endpoint...\n');
+        process.stderr.write('[Worker] Still on labs.google. Trying CSSI via callback URL...\n');
+        // Use the NextAuth callback approach with CSRF token
         try {
-            await page.goto('https://labs.google/fx/api/auth/signin/google', {
+            // Get CSRF token from cookies
+            const csrfCookie = allCookies.find(c => c.name === '__Host-next-auth.csrf-token');
+            const csrfToken = csrfCookie ? csrfCookie.value.split('|')[0] : '';
+            
+            // Post to NextAuth signin endpoint (triggers server-side OAuth redirect)
+            await page.goto(`https://labs.google/fx/api/auth/signin/google?callbackUrl=${encodeURIComponent('https://labs.google/fx/vi/tools/flow/')}`, {
                 waitUntil: 'networkidle2',
                 timeout: 30000,
             });
+            await delay(2000, 3000);
+            process.stderr.write(`[Worker] After CSSI URL: ${page.url()}\n`);
         } catch (e) {
-            process.stderr.write(`[Worker] NextAuth endpoint error: ${e.message}\n`);
+            process.stderr.write(`[Worker] CSSI error: ${e.message}\n`);
         }
-        await delay(3000, 5000);
     }
 
     // ========================================
