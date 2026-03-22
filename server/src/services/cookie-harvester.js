@@ -1,26 +1,30 @@
 /**
- * Cookie Harvester — Background cron service
+ * Cookie Harvester — Smart cron service
  *
- * Periodically refreshes Google Flow cookies for ALL users with google-account credentials.
- * Runs sequentially (1 Chrome at a time) to conserve server resources.
+ * Refreshes Google Flow cookies based on tokenExpiresAt from DB.
+ * - On server start: check if expired → refresh immediately, else schedule
+ * - After refresh: read new tokenExpiresAt → schedule next run
+ * - Handles VPS shutdown (1:30AM-8:00AM): on restart, detects expired → refresh
  *
  * Flow per user:
  *   1. Launch Chrome with user's persistent profile
- *   2. Navigate to Google Flow → check if cookies are still valid
- *   3. If valid → extract cookies → save to DB
- *   4. If expired → auto re-login using google-login-agent
- *   5. Notify user via Telegram
+ *   2. Navigate to Google Flow → get fresh cookies
+ *   3. Call session API → get access_token
+ *   4. Save cookies + token to DB
+ *   5. Schedule next refresh at tokenExpiresAt + 1 min
  */
 
 import { prisma } from '../index.js';
 import { refreshCookies, loginGoogleFlow } from './google-login-agent.js';
 import { notifyTelegramUser } from './telegram-bot.js';
 
-const HARVEST_INTERVAL_MS = 18 * 60 * 60 * 1000; // 18 hours
+const REFRESH_DELAY_MS = 60 * 1000; // 1 min after expiry
 const USER_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max per user
+const FALLBACK_INTERVAL_MS = 18 * 60 * 60 * 1000; // 18h fallback if no expiry info
 
 let harvestTimer = null;
 let isRunning = false;
+let cronStarted = false;
 
 /**
  * Get the Telegram chat ID for a user.
@@ -172,25 +176,91 @@ export async function harvestForSpecificUser(userId) {
 }
 
 /**
- * Start the cron timer.
+ * Get the earliest tokenExpiresAt from all google-flow credentials.
  */
-export function startHarvestCron() {
+async function getEarliestExpiry() {
+    const credentials = await prisma.credential.findMany({
+        where: { provider: 'google-flow' },
+        select: { metadata: true },
+    });
+
+    let earliest = null;
+    for (const cred of credentials) {
+        try {
+            const meta = JSON.parse(cred.metadata || '{}');
+            if (meta.tokenExpiresAt) {
+                const expiry = new Date(meta.tokenExpiresAt);
+                if (!earliest || expiry < earliest) {
+                    earliest = expiry;
+                }
+            }
+        } catch { /* skip invalid metadata */ }
+    }
+
+    return earliest;
+}
+
+/**
+ * Schedule the next harvest based on tokenExpiresAt.
+ * - If already expired → run immediately
+ * - If not expired → schedule for expiresAt + 1 min
+ * - If no expiry info → fallback to 18h interval
+ */
+async function scheduleNextHarvest() {
+    // Clear any existing timer
     if (harvestTimer) {
+        clearTimeout(harvestTimer);
+        harvestTimer = null;
+    }
+
+    const earliest = await getEarliestExpiry();
+    const now = Date.now();
+
+    let delayMs;
+    let reason;
+
+    if (!earliest) {
+        // No google-flow credentials yet — use fallback interval
+        delayMs = FALLBACK_INTERVAL_MS;
+        reason = `no expiry info, fallback ${FALLBACK_INTERVAL_MS / 3600000}h`;
+    } else if (earliest.getTime() <= now) {
+        // Already expired — run in 10 seconds (give server time to stabilize)
+        delayMs = 10 * 1000;
+        reason = `expired ${Math.round((now - earliest.getTime()) / 60000)}m ago → refreshing soon`;
+    } else {
+        // Not expired — schedule for expiresAt + 1 min
+        delayMs = earliest.getTime() - now + REFRESH_DELAY_MS;
+        reason = `expires at ${earliest.toISOString()} → refresh in ${Math.round(delayMs / 60000)}m`;
+    }
+
+    const nextRun = new Date(now + delayMs);
+    console.log(`[CookieHarvester] ⏰ Next harvest: ${nextRun.toISOString()} (${reason})`);
+
+    harvestTimer = setTimeout(async () => {
+        try {
+            await harvestAllUsers();
+        } catch (e) {
+            console.error('[CookieHarvester] Harvest error:', e.message);
+        }
+        // After harvest, schedule the next one
+        await scheduleNextHarvest();
+    }, delayMs);
+}
+
+/**
+ * Start the smart cron.
+ * Reads tokenExpiresAt from DB and schedules accordingly.
+ */
+export async function startHarvestCron() {
+    if (cronStarted) {
         console.log('[CookieHarvester] Cron already started');
         return;
     }
 
-    console.log(`[CookieHarvester] 🕐 Cron started — will run every ${HARVEST_INTERVAL_MS / 3600000}h`);
+    cronStarted = true;
+    console.log('[CookieHarvester] 🕐 Smart cron started — scheduling based on tokenExpiresAt');
 
-    // Only run on cron schedule, NOT on server start
-    // (Avoids launching Chrome on every restart; CredCheck auto-refreshes tokens via session API)
-
-    // Then run every 18 hours
-    harvestTimer = setInterval(() => {
-        harvestAllUsers().catch(e =>
-            console.error('[CookieHarvester] Cron harvest error:', e.message)
-        );
-    }, HARVEST_INTERVAL_MS);
+    await scheduleNextHarvest();
 }
 
 /**
@@ -198,8 +268,9 @@ export function startHarvestCron() {
  */
 export function stopHarvestCron() {
     if (harvestTimer) {
-        clearInterval(harvestTimer);
+        clearTimeout(harvestTimer);
         harvestTimer = null;
+        cronStarted = false;
         console.log('[CookieHarvester] Cron stopped');
     }
 }
