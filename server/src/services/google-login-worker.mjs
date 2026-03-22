@@ -166,12 +166,58 @@ async function run() {
         const has2FA = await page.evaluate(() => {
             const t = document.body?.innerText || '';
             return t.includes('Check your phone') || t.includes('Kiểm tra điện thoại') ||
-                   t.includes('2-Step Verification') || t.includes('Xác minh 2 bước');
+                   t.includes('2-Step Verification') || t.includes('Xác minh 2 bước') ||
+                   t.includes('Confirm it') || t.includes('Tap') ||
+                   t.includes('confirm that it') || t.includes('xác nhận');
         }).catch(() => false);
         if (has2FA) {
-            process.stderr.write('[Worker] 2FA detected, waiting 60s...\n');
-            // Output 2FA status immediately
-            return { success: false, need2FA: true, error: '2FA required' };
+            // Read the number or challenge info from the page
+            const twoFAInfo = await page.evaluate(() => {
+                const body = document.body?.innerText || '';
+                // Google shows a number like "78" that user needs to tap
+                const numberMatch = body.match(/(\d{2,3})/);
+                return {
+                    bodyText: body.substring(0, 500),
+                    number: numberMatch ? numberMatch[1] : null,
+                };
+            }).catch(() => ({ bodyText: '', number: null }));
+
+            // Save screenshot for debugging
+            await page.screenshot({ path: '/tmp/google-2fa.png' }).catch(() => {});
+
+            // Output 2FA info via stderr — agent reads this in real-time
+            const msg = twoFAInfo.number
+                ? `2FA_NUMBER:${twoFAInfo.number}`
+                : `2FA_TEXT:${twoFAInfo.bodyText.substring(0, 200)}`;
+            process.stderr.write(`${msg}\n`);
+            process.stderr.write(`[Worker] 2FA detected. Number: ${twoFAInfo.number || 'N/A'}. Waiting 120s...\n`);
+
+            // Poll for up to 120 seconds for user to approve
+            let twoFAApproved = false;
+            for (let w = 0; w < 24; w++) {
+                await delay(5000, 5000);
+                const newUrl = page.url();
+                process.stderr.write(`[Worker] 2FA poll ${w+1}/24, URL: ${newUrl.substring(0, 80)}\n`);
+                if (!newUrl.includes('challenge') && !newUrl.includes('signin')) {
+                    twoFAApproved = true;
+                    loginSuccess = true;
+                    break;
+                }
+                // Also check if page changed to myaccount
+                if (newUrl.includes('myaccount.google') || newUrl.includes('google.com/?')) {
+                    twoFAApproved = true;
+                    loginSuccess = true;
+                    break;
+                }
+            }
+            if (loginSuccess) break;
+            if (!twoFAApproved) {
+                process.stderr.write('[Worker] 2FA timeout after 120s\n');
+                browser.disconnect();
+                chrome.kill();
+                return { success: false, error: '2FA timeout - user did not approve within 2 minutes' };
+            }
+            continue;
         }
 
         // Consent?

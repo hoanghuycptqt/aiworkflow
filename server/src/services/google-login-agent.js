@@ -821,29 +821,58 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         } catch {}
 
         const workerPath = path.resolve(path.dirname(import.meta.url.replace('file://', '')), 'google-login-worker.mjs');
+        const workerCwd = path.resolve(path.dirname(import.meta.url.replace('file://', '')), '../..');
         console.log(`[GoogleLogin] Executing worker: node ${workerPath}`);
 
         const workerResult = await new Promise((resolve, reject) => {
-            execFile('node', [workerPath, profileDir, String(debugPort), email, password], {
-                timeout: 120000,
+            const child = spawn('node', [workerPath, profileDir, String(debugPort), email, password], {
                 env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' },
-                maxBuffer: 1024 * 1024,
-                cwd: path.resolve(path.dirname(import.meta.url.replace('file://', '')), '../..'),
-            }, (error, stdout, stderr) => {
-                if (stderr) console.log(`[GoogleLogin] Worker log: ${stderr.substring(0, 500)}`);
+                cwd: workerCwd,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
+
+            let stdout = '';
+            const timeout = setTimeout(() => {
+                child.kill();
+                reject(new Error('Worker timeout after 180s'));
+            }, 180000);
+
+            // Stream stderr in real-time for 2FA messages
+            child.stderr.on('data', (data) => {
+                const text = data.toString();
+                console.log(`[GoogleLogin] Worker: ${text.trim()}`);
+                
+                // Check for 2FA number — forward to Telegram immediately
+                for (const line of text.split('\n')) {
+                    if (line.startsWith('2FA_NUMBER:')) {
+                        const number = line.replace('2FA_NUMBER:', '').trim();
+                        sendTelegram(`🔐 Google yêu cầu xác minh 2 bước.\n\n📱 Nhấn số **${number}** trên điện thoại của bạn.\n\n⏰ Bạn có 2 phút để xác nhận.`);
+                    } else if (line.startsWith('2FA_TEXT:')) {
+                        const info = line.replace('2FA_TEXT:', '').trim();
+                        sendTelegram(`🔐 Google yêu cầu xác minh 2 bước.\n\n${info}\n\n⏰ Vui lòng xác nhận trên điện thoại trong 2 phút.`);
+                    }
+                }
+            });
+
+            child.stdout.on('data', (data) => { stdout += data.toString(); });
+
+            child.on('close', (code) => {
+                clearTimeout(timeout);
                 try {
-                    const result = JSON.parse((stdout || '').trim());
+                    const result = JSON.parse(stdout.trim());
                     resolve(result);
                 } catch {
-                    reject(new Error(`Worker failed: ${error?.message || stdout || 'unknown'}`));
+                    reject(new Error(`Worker parse error (code ${code}): ${stdout}`));
                 }
+            });
+
+            child.on('error', (err) => {
+                clearTimeout(timeout);
+                reject(new Error(`Worker spawn error: ${err.message}`));
             });
         });
 
         if (!workerResult.success) {
-            if (workerResult.need2FA) {
-                await sendTelegram('🔐 Google yêu cầu xác minh 2 bước. Vui lòng xác nhận trên điện thoại.');
-            }
             throw new Error(workerResult.error || 'Login worker failed');
         }
         console.log(`[GoogleLogin] ✅ Worker login succeeded! Connecting to Chrome on port ${debugPort}...`);
