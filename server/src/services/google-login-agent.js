@@ -1000,7 +1000,7 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
                     await prisma.credential.update({
                         where: { id: savedCredential.id },
                         data: {
-                            accessToken: refreshData.access_token,
+                            token: refreshData.access_token,
                             metadata: JSON.stringify({
                                 ...JSON.parse(savedCredential.metadata || '{}'),
                                 lastRefreshed: new Date().toISOString(),
