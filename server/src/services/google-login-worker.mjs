@@ -109,22 +109,47 @@ async function run() {
     await page.screenshot({ path: '/tmp/google-labs-page.png' }).catch(() => {});
     
     // The "Sign in with Google" button is on the /fx landing page (NOT /fx/vi/tools/flow)
+    // NOTE: This button may NOT be a standard <a> or <button> — labs.google uses custom elements
     let signInClicked = false;
+    
+    // Strategy 1: Search ALL elements (not just a/button) for "Sign in" text
     try {
         signInClicked = await page.evaluate(() => {
-            const all = [...document.querySelectorAll('a, button')];
+            // Search broadly — include all clickable-looking elements
+            const all = [...document.querySelectorAll('*')];
             for (const el of all) {
+                // Only check leaf-ish elements (avoid matching a parent container)
+                if (el.children.length > 5) continue;
                 const t = el.textContent.trim();
-                if (t.includes('Sign in') && !t.includes('About') && t.length < 40) {
+                if ((t === 'Sign in with Google' || t === 'Sign in') && t.length < 40) {
                     el.click();
                     return true;
                 }
             }
-            const ariaBtn = document.querySelector('[aria-label*="Sign in"], [aria-label*="sign in"]');
-            if (ariaBtn) { ariaBtn.click(); return true; }
             return false;
         });
     } catch { signInClicked = false; }
+    
+    // Strategy 2: Try Puppeteer XPath for text matching
+    if (!signInClicked) {
+        try {
+            const [btn] = await page.$$('::-p-xpath(//*[contains(text(), "Sign in")])');
+            if (btn) {
+                await btn.click();
+                signInClicked = true;
+            }
+        } catch { /* xpath not supported or not found */ }
+    }
+    
+    // Strategy 3: Coordinate-based click at top-right where button is visible
+    if (!signInClicked) {
+        process.stderr.write('[Worker] No element found. Trying coordinate click at top-right (sign-in button position)...\n');
+        try {
+            // "Sign in with Google" button is at approximately x=1130, y=40 on 1280x900 viewport
+            await page.mouse.click(1130, 40);
+            signInClicked = true;
+        } catch { signInClicked = false; }
+    }
     
     process.stderr.write(`[Worker] Sign-in clicked: ${signInClicked}\n`);
     
