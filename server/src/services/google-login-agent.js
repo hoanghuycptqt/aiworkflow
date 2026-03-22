@@ -17,7 +17,7 @@ import { GoogleGenAI } from '@google/genai';
 import { prisma } from '../index.js';
 import { join } from 'path';
 import { mkdir } from 'fs/promises';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { CHROME_PATH } from './browser-manager.js';
 
 puppeteer.use(StealthPlugin());
@@ -804,160 +804,59 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         const model = await getGeminiModel();
         console.log(`[GoogleLogin] Using model: ${model}`);
 
-        // 3. Launch Chrome
+        // 3. Login via standalone worker (runs OUTSIDE PM2 cluster - tests proved this works)
         await sendTelegram('🚀 Đang khởi động trình duyệt...');
-        const launched = await launchPersistentChrome(userId);
-        browser = launched.browser;
-        chromeProcess = launched.chromeProcess;
+        const profileDir = await ensureProfileDir(userId);
+        const debugPort = getDebugPort(userId);
+        
+        // Kill any old Chrome on this port
+        try {
+            const r = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+            if (r.ok) {
+                console.log(`[GoogleLogin] Killing old Chrome on port ${debugPort}`);
+                try { const b = await puppeteer.connect({ browserWSEndpoint: (await r.json()).webSocketDebuggerUrl }); await b.close(); } catch {}
+                await randomDelay(1000, 2000);
+            }
+        } catch {}
 
-        // Always create a new page (old pages may be detached after server restart)
-        const page = await browser.newPage();
-        await prepareStealthPage(page); // Stealth: UA, viewport, scripts BEFORE navigation
+        const workerPath = path.resolve(path.dirname(import.meta.url.replace('file://', '')), 'google-login-worker.mjs');
+        console.log(`[GoogleLogin] Executing worker: node ${workerPath}`);
+
+        const workerResult = await new Promise((resolve, reject) => {
+            execFile('node', [workerPath, profileDir, String(debugPort), email, password], {
+                timeout: 120000,
+                env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' },
+                maxBuffer: 1024 * 1024,
+                cwd: path.resolve(path.dirname(import.meta.url.replace('file://', '')), '../..'),
+            }, (error, stdout, stderr) => {
+                if (stderr) console.log(`[GoogleLogin] Worker log: ${stderr.substring(0, 500)}`);
+                try {
+                    const result = JSON.parse((stdout || '').trim());
+                    resolve(result);
+                } catch {
+                    reject(new Error(`Worker failed: ${error?.message || stdout || 'unknown'}`));
+                }
+            });
+        });
+
+        if (!workerResult.success) {
+            if (workerResult.need2FA) {
+                await sendTelegram('🔐 Google yêu cầu xác minh 2 bước. Vui lòng xác nhận trên điện thoại.');
+            }
+            throw new Error(workerResult.error || 'Login worker failed');
+        }
+        console.log(`[GoogleLogin] ✅ Worker login succeeded! Connecting to Chrome on port ${debugPort}...`);
+
+        // Connect to Chrome that worker left running
+        const vData = await (await fetch(`http://127.0.0.1:${debugPort}/json/version`)).json();
+        browser = await puppeteer.connect({ browserWSEndpoint: vData.webSocketDebuggerUrl, defaultViewport: null });
+        const pages = await browser.pages();
+        const page = pages[pages.length - 1] || await browser.newPage();
+        await page.setViewport({ width: 1280, height: 900 });
         await page.setDefaultNavigationTimeout(PAGE_LOAD_TIMEOUT);
 
-        // 4. Direct programmatic login at accounts.google.com
-        // CRITICAL: Avoid page.evaluate()/screenshot() before email+Next step.
-        // Google detects CDP Runtime.evaluate and rejects the login.
-        const GOOGLE_SIGNIN_URL = 'https://accounts.google.com/signin';
-        console.log(`[GoogleLogin] Navigating to ${GOOGLE_SIGNIN_URL} (direct login)`);
-        await page.goto(GOOGLE_SIGNIN_URL, {
-            waitUntil: 'networkidle2',
-            timeout: PAGE_LOAD_TIMEOUT,
-        });
-        await randomDelay(2000, 3000);
-
-        // Step 1: Type email (no evaluate before this!)
-        console.log('[GoogleLogin] Typing email...');
-        await page.waitForSelector('input[type="email"]', { timeout: 10000 });
-        await page.type('input[type="email"]', email, { delay: 80 + Math.random() * 40 });
-        await randomDelay(800, 1500);
-
-        // Step 2: Click Next
-        console.log('[GoogleLogin] Clicking Next (email)...');
-        const nextBtn1 = await page.evaluateHandle(() => {
-            return [...document.querySelectorAll('button')].find(b => 
-                b.textContent.includes('Next') || b.textContent.includes('Tiếp theo')
-            );
-        });
-        if (nextBtn1) await nextBtn1.click();
-        await randomDelay(3000, 5000);
-
-        // Check if rejected
-        const urlAfterEmail = page.url();
-        console.log(`[GoogleLogin] URL after email: ${urlAfterEmail}`);
-        if (urlAfterEmail.includes('/signin/rejected')) {
-            await page.screenshot({ path: '/tmp/google-rejected.png' });
-            throw new Error('Google chặn đăng nhập — trình duyệt bị phát hiện là tự động');
-        }
-
-        // Step 3: Handle post-email pages (password, passkey, 2FA)
-        let loginSuccess = false;
-        for (let attempt = 0; attempt < 15; attempt++) {
-            const curUrl = page.url();
-            console.log(`[GoogleLogin] Post-email attempt ${attempt + 1}, URL: ${curUrl}`);
-
-            if (curUrl.includes('labs.google')) { loginSuccess = true; break; }
-            if (curUrl.includes('myaccount.google.com') || curUrl.includes('google.com/?')) { loginSuccess = true; break; }
-
-            // Password input?
-            const hasPwd = await page.evaluate(() => {
-                const el = document.querySelector('input[type="password"]');
-                return el && el.offsetParent !== null;
-            }).catch(() => false);
-
-            if (hasPwd) {
-                console.log('[GoogleLogin] Typing password...');
-                await page.type('input[type="password"]', password, { delay: 60 + Math.random() * 40 });
-                await randomDelay(500, 1000);
-                const nextBtn2 = await page.evaluateHandle(() =>
-                    [...document.querySelectorAll('button')].find(b =>
-                        b.textContent.includes('Next') || b.textContent.includes('Tiếp theo')
-                    )
-                );
-                if (nextBtn2) await nextBtn2.click();
-                await randomDelay(4000, 6000);
-
-                const postUrl = page.url();
-                console.log(`[GoogleLogin] URL after password: ${postUrl}`);
-                if (postUrl.includes('myaccount.google') || postUrl.includes('labs.google') ||
-                    postUrl.includes('google.com/?') || postUrl.includes('signin/oauth')) {
-                    loginSuccess = true; break;
-                }
-                continue;
-            }
-
-            // Passkey page?
-            const hasPasskey = await page.evaluate(() => {
-                const t = document.body?.innerText || '';
-                return t.includes('passkey') || t.includes('khóa truy cập') || t.includes('Use your');
-            }).catch(() => false);
-            if (hasPasskey) {
-                console.log('[GoogleLogin] Passkey detected, clicking "Try another way"...');
-                const btn = await page.evaluateHandle(() =>
-                    [...document.querySelectorAll('button, a')].find(b =>
-                        b.textContent.includes('Try another way') || b.textContent.includes('Thử cách khác')
-                    )
-                );
-                if (btn) { await btn.click(); await randomDelay(2000, 3000); }
-                const pwdOpt = await page.evaluateHandle(() =>
-                    [...document.querySelectorAll('li, div[role="link"], button, a')].find(el =>
-                        el.textContent.includes('Enter your password') || el.textContent.includes('Nhập mật khẩu')
-                    )
-                );
-                if (pwdOpt) { await pwdOpt.click(); await randomDelay(2000, 3000); }
-                continue;
-            }
-
-            // 2FA?
-            const has2FA = await page.evaluate(() => {
-                const t = document.body?.innerText || '';
-                return t.includes('Check your phone') || t.includes('Kiểm tra điện thoại') ||
-                       t.includes('2-Step Verification') || t.includes('Xác minh 2 bước');
-            }).catch(() => false);
-            if (has2FA) {
-                console.log('[GoogleLogin] 2FA detected...');
-                await sendTelegram('🔐 Google yêu cầu xác minh 2 bước. Vui lòng xác nhận trên điện thoại.');
-                for (let w = 0; w < 12; w++) {
-                    await randomDelay(5000, 5000);
-                    const nu = page.url();
-                    if (!nu.includes('challenge') && !nu.includes('signin')) { loginSuccess = true; break; }
-                }
-                if (loginSuccess) break;
-                continue;
-            }
-
-            // Consent?
-            const hasConsent = await page.evaluate(() => {
-                const t = document.body?.innerText || '';
-                return t.includes('wants to access') || t.includes('muốn truy cập');
-            }).catch(() => false);
-            if (hasConsent) {
-                console.log('[GoogleLogin] Consent page...');
-                const allowBtn = await page.evaluateHandle(() =>
-                    [...document.querySelectorAll('button')].find(b =>
-                        b.textContent.includes('Allow') || b.textContent.includes('Continue') ||
-                        b.textContent.includes('Cho phép') || b.textContent.includes('Tiếp tục')
-                    )
-                );
-                if (allowBtn) await allowBtn.click();
-                await randomDelay(3000, 5000);
-                continue;
-            }
-
-            console.log('[GoogleLogin] Waiting for transition...');
-            await randomDelay(2000, 3000);
-        }
-
-        if (!loginSuccess) {
-            const fUrl = page.url();
-            if (fUrl.includes('labs.google') || fUrl.includes('myaccount.google') || fUrl.includes('google.com/?')) {
-                loginSuccess = true;
-            }
-        }
-        if (!loginSuccess) {
-            await page.screenshot({ path: '/tmp/google-login-final-fail.png' });
-            throw new Error('Login failed after all attempts');
-        }
+        // Worker already logged in successfully. loginSuccess = true.
+        const loginSuccess = true;
 
         // 6. Navigate to Google Flow page to ensure NextAuth cookies are present
         console.log('[GoogleLogin] Navigating to Google Flow to ensure cookies are set...');
