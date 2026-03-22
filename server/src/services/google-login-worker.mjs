@@ -171,15 +171,23 @@ async function run() {
                    t.includes('confirm that it') || t.includes('xác nhận');
         }).catch(() => false);
         if (has2FA) {
-            // Read full challenge text from the page (not just one number)
+            // Read full challenge text — Google uses split panels, innerText may miss content
             const twoFAText = await page.evaluate(() => {
-                const body = document.body?.innerText || '';
-                // Clean: remove nav/footer lines, keep meaningful challenge text
-                return body.split('\n')
-                    .map(l => l.trim())
-                    .filter(l => l.length > 0 && l.length < 200)
-                    .filter(l => !l.includes('English') && !l.includes('Help') && 
-                                !l.includes('Privacy') && !l.includes('Terms'))
+                // Strategy: collect ALL text from all elements, then deduplicate
+                const seen = new Set();
+                const texts = [];
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                let node;
+                while (node = walker.nextNode()) {
+                    const text = node.textContent.trim();
+                    if (text && text.length > 1 && text.length < 200 && !seen.has(text)) {
+                        seen.add(text);
+                        texts.push(text);
+                    }
+                }
+                return texts
+                    .filter(t => !t.includes('English') && !t.includes('Help') && 
+                                !t.includes('Privacy') && !t.includes('Terms'))
                     .join('\n');
             }).catch(() => '');
 
