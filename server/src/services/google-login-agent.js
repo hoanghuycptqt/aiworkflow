@@ -820,17 +820,29 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         await prepareStealthPage(page); // Stealth: UA, viewport, scripts BEFORE navigation
         await page.setDefaultNavigationTimeout(PAGE_LOAD_TIMEOUT);
 
-        // 4. Navigate to Google Flow
-        console.log(`[GoogleLogin] Navigating to ${GOOGLE_FLOW_URL}`);
-        await page.goto(GOOGLE_FLOW_URL, {
+        // 4. First login at Google directly (NOT via OAuth flow which gets blocked)
+        // OAuth flows (/v3/signin with flowName=GeneralOAuthFlow) trigger Google's
+        // "This browser or app may not be secure" rejection. Direct sign-in works fine.
+        const GOOGLE_SIGNIN_URL = 'https://accounts.google.com/signin';
+        console.log(`[GoogleLogin] Navigating to ${GOOGLE_SIGNIN_URL} (direct login, not OAuth)`);
+        await page.goto(GOOGLE_SIGNIN_URL, {
             waitUntil: 'networkidle2',
             timeout: PAGE_LOAD_TIMEOUT,
         });
 
         await randomDelay(2000, 3000);
 
-        // 5. Gemini Vision Loop
-        const context = `Logging into Google Flow. Email: ${email}. Password: [AVAILABLE - type it when you see password input]. Goal: reach ${GOOGLE_FLOW_URL} logged in. You have both email and password, so ALWAYS use type_text with status "need_action" for password fields. NEVER ask for the password via need_user_input.`;
+        // 5. Gemini Vision Loop — login at Google, then navigate to Flow
+        const context = `Logging into Google account directly at accounts.google.com. Email: ${email}. Password: [AVAILABLE - type it when you see password input].
+FLOW:
+1. You are on accounts.google.com/signin. Type email, click Next.
+2. Type password, click Next. 
+3. After successful Google login (you'll see myaccount.google.com or Google homepage or "Welcome"), use action "navigate" with value "${GOOGLE_FLOW_URL}" to go to Google Flow.
+4. If you land on Google Flow and see the tool UI or "Create with Flow", set status to "login_complete".
+RULES:
+- You have both email and password, so ALWAYS use type_text with status "need_action" for password fields. NEVER ask for the password via need_user_input.
+- After typing password and clicking Next, if Google asks for verification, handle passkey by clicking "Try another way" then "Enter your password".
+- After login succeeds and you see Google homepage/myaccount, NAVIGATE to ${GOOGLE_FLOW_URL}.`;
         let step = 0;
         let loginSuccess = false;
 
