@@ -23,7 +23,7 @@ import { CHROME_PATH } from './browser-manager.js';
 
 puppeteer.use(StealthPlugin());
 
-const GOOGLE_FLOW_URL = 'https://labs.google/fx/vi/tools/flow';
+const GOOGLE_FLOW_URL = 'https://labs.google/fx/vi/tools/flow/';
 const PROFILES_BASE = join(process.env.UPLOAD_DIR || './uploads', '.google-profiles');
 const MAX_LOGIN_STEPS = 20;
 const PAGE_LOAD_TIMEOUT = 30000;
@@ -1102,10 +1102,10 @@ export async function refreshCookies(userId, sendTelegram = null) {
 
         // ── Check 2: Cookie existence ──
         const { cookies, cookieString } = await extractAllCookies(page);
-        const hasSessionCookie = cookies.some(c => c.name === '__Secure-1PSID' && c.value.length > 10);
+        const hasSessionCookie = cookies.some(c => c.name === '__Secure-next-auth.session-token' && c.value.length > 10);
 
         if (!hasSessionCookie) {
-            console.log('[CookieRefresh] ❌ No __Secure-1PSID cookie — session expired');
+            console.log('[CookieRefresh] ❌ No __Secure-next-auth.session-token cookie — session expired');
             try { await page.close(); } catch { /* ok */ }
             browser.disconnect();
             if (chromeProcess) try { chromeProcess.kill(); } catch { /* ok */ }
