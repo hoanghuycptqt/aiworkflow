@@ -841,6 +841,17 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
             // Take screenshot
             const screenshot = await takeScreenshot(page);
 
+            // Debug: Log current page state
+            try {
+                const currentUrl = page.url();
+                const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 200) || '');
+                console.log(`[GoogleLogin] Page URL: ${currentUrl}`);
+                console.log(`[GoogleLogin] Page text: ${bodyText.replace(/\n/g, ' | ')}`);
+                // Save screenshot for debugging (always to /tmp/)
+                const debugPath = `/tmp/google-step-${step}.png`;
+                await page.screenshot({ path: debugPath, type: 'png' });
+            } catch { /* ok */ }
+
             // Analyze with Gemini
             const analysis = await analyzeWithGemini(screenshot, context, model);
             console.log(`[GoogleLogin] Gemini says: ${analysis.status} — ${analysis.description}`);
