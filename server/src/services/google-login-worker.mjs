@@ -106,48 +106,40 @@ async function run() {
     // Take screenshot to see the page
     await page.screenshot({ path: '/tmp/google-labs-page.png' }).catch(() => {});
     
-    // Try to find sign-in link/button
-    const signInResult = await page.evaluate(() => {
-        // Look for sign-in links by href
-        const links = [...document.querySelectorAll('a[href]')];
-        const signInLink = links.find(a => 
-            a.href.includes('/signin') || a.href.includes('/auth/') ||
-            a.href.includes('accounts.google.com') ||
-            a.textContent.trim().toLowerCase().includes('sign in') ||
-            a.textContent.trim().toLowerCase().includes('log in')
-        );
-        if (signInLink) {
-            return { found: true, href: signInLink.href, text: signInLink.textContent.trim(), type: 'link' };
-        }
-
-        // Look for sign-in buttons
-        const btns = [...document.querySelectorAll('button')];
-        const signInBtn = btns.find(b =>
-            b.textContent.trim().toLowerCase().includes('sign in') ||
-            b.textContent.trim().toLowerCase().includes('get started') ||
-            b.textContent.trim().toLowerCase().includes('log in')
-        );
-        if (signInBtn) {
-            signInBtn.click();
-            return { found: true, text: signInBtn.textContent.trim(), type: 'button', clicked: true };
-        }
-
-        return { found: false, allLinks: links.slice(0, 10).map(a => ({text: a.textContent.trim().substring(0,30), href: a.href.substring(0,60)})) };
-    });
-
-    process.stderr.write(`[Worker] Sign-in result: ${JSON.stringify(signInResult)}\n`);
-
-    if (signInResult.found) {
-        if (signInResult.type === 'link') {
-            // Navigate to the sign-in link
-            process.stderr.write(`[Worker] Navigating to sign-in: ${signInResult.href}\n`);
-            await page.goto(signInResult.href, { waitUntil: 'networkidle2', timeout: 30000 });
-        }
-        // If button was clicked, wait for navigation
-        await delay(3000, 5000);
-    } else {
-        // Fallback: try direct NextAuth endpoint
-        process.stderr.write('[Worker] No sign-in button found. Trying NextAuth endpoint...\n');
+    // Click "Sign in with Google" button — match precisely to avoid "About" or other elements
+    let signInClicked = false;
+    try {
+        signInClicked = await page.evaluate(() => {
+            // Strategy 1: Look for a button/link containing "Sign in with Google" exactly
+            const all = [...document.querySelectorAll('a, button')];
+            for (const el of all) {
+                const t = el.textContent.trim();
+                // Must contain "Sign in" but NOT "About" 
+                if (t.includes('Sign in') && !t.includes('About') && t.length < 40) {
+                    el.click();
+                    return true;
+                }
+            }
+            // Strategy 2: Look for any element with aria-label
+            const ariaBtn = document.querySelector('[aria-label*="Sign in"], [aria-label*="sign in"]');
+            if (ariaBtn) { ariaBtn.click(); return true; }
+            return false;
+        });
+    } catch { signInClicked = false; }
+    
+    process.stderr.write(`[Worker] Sign-in clicked: ${signInClicked}\n`);
+    
+    if (signInClicked) {
+        // Wait for navigation to Google OAuth
+        try {
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
+        } catch { /* might already have navigated */ }
+        await delay(2000, 3000);
+    }
+    
+    // If still on labs.google, try direct NextAuth endpoint
+    if (page.url().includes('labs.google')) {
+        process.stderr.write('[Worker] Still on labs.google. Trying NextAuth signin endpoint...\n');
         try {
             await page.goto('https://labs.google/fx/api/auth/signin/google', {
                 waitUntil: 'networkidle2',
@@ -163,17 +155,23 @@ async function run() {
     // STEP 3: Handle Google OAuth login
     // ========================================
     // At this point we should be on accounts.google.com (Google OAuth)
-    // or already redirected back to labs.google
+    // or already redirected back to labs.google with session
     
     let loginDone = false;
+    let leftLabsGoogle = !page.url().includes('labs.google'); // Track if we actually left
     for (let step = 0; step < 20; step++) {
         const url = page.url();
         process.stderr.write(`[Worker] Step ${step + 1}, URL: ${url.substring(0, 100)}\n`);
 
-        // Success: back on labs.google
-        if (url.includes('labs.google')) {
+        // Only consider success if we already left labs.google and came back
+        if (url.includes('labs.google') && leftLabsGoogle) {
             loginDone = true;
             break;
+        }
+        
+        // Track when we leave labs.google (to avoid false success on first iteration)
+        if (!url.includes('labs.google')) {
+            leftLabsGoogle = true;
         }
 
         // Google rejected
