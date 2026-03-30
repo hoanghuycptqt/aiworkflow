@@ -20,6 +20,7 @@ import { join } from 'path';
 import { mkdir } from 'fs/promises';
 import { spawn, execFile } from 'child_process';
 import { CHROME_PATH } from './browser-manager.js';
+import { syncSiblingCredentials } from './credential-sync.js';
 
 puppeteer.use(StealthPlugin());
 
@@ -758,6 +759,10 @@ async function saveCredentialsToDB(userId, cookieString, tokenData) {
         });
         console.log(`[GoogleLogin] Created new google-flow credential: ${credential.id}`);
     }
+
+    // Sync to sibling credentials sharing the same Google account
+    const savedMeta = credential.metadata ? JSON.parse(credential.metadata) : metadata;
+    await syncSiblingCredentials(credential.id, tokenData.accessToken, { ...savedMeta, ...metadata });
 
     return credential;
 }

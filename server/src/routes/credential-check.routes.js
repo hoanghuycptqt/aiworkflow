@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { prisma } from '../index.js';
 import fetch from 'node-fetch';
+import { syncSiblingCredentials } from '../services/credential-sync.js';
 
 const router = Router();
 
@@ -154,6 +155,9 @@ router.post('/token', async (req, res) => {
                                 expiresIn = Math.floor((new Date(sessionData.expires).getTime() - Date.now()) / 1000);
                             }
                             console.log(`[CredCheck] ✅ Auto-refreshed google-flow token!`);
+                            // Sync to sibling credentials
+                            const refreshedMeta = { ...meta, lastRefreshed: new Date().toISOString(), tokenExpiresAt: sessionData.expires || null };
+                            await syncSiblingCredentials(credential.id, sessionData.access_token, refreshedMeta);
                         }
                     } else {
                         console.log(`[CredCheck] Session API returned ${sessionRes.status} — cookies may be expired`);
@@ -293,6 +297,17 @@ router.post('/google-flow-refresh', async (req, res) => {
         });
 
         console.log('[GoogleFlow Auth] ✅ Credentials saved successfully!');
+
+        // Sync to sibling credentials sharing the same Google account
+        const updatedMeta = {
+            ...existingMeta,
+            lastRefreshed: new Date().toISOString(),
+            tokenExpiresAt: expiresAt,
+            sessionCookies: existingMeta.sessionCookies,
+            userName: sessionData.user?.name || existingMeta.userName,
+            userEmail: sessionData.user?.email || existingMeta.userEmail,
+        };
+        await syncSiblingCredentials(credentialId, capturedToken, updatedMeta);
 
         return res.json({
             success: true,

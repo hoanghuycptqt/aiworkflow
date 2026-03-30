@@ -1,23 +1,27 @@
 /**
- * Cookie Harvester — Smart per-user cron service
+ * Cookie Harvester — Smart per-Google-account cron service
  *
- * Each user has their own timer based on tokenExpiresAt.
+ * Groups users by Google account email — only 1 Chrome per account.
+ * After refresh, syncs cookies/token to all sibling credentials.
+ *
  * Two layers of protection:
- *   Layer 1: Per-user setTimeout at tokenExpiresAt + 1 min
+ *   Layer 1: Per-account setTimeout at tokenExpiresAt + 1 min
  *   Layer 2: Before opening Chrome, check DB — skip if cookie still valid
  *
- * Flow per user:
+ * Flow per Google account:
  *   1. Check DB: if cookie not expired yet → skip (no Chrome)
- *   2. Launch Chrome with user's persistent profile
+ *   2. Launch Chrome with primary user's persistent profile
  *   3. Navigate to Google Flow → get fresh cookies
  *   4. Call session API → get access_token
  *   5. Save cookies + token to DB
- *   6. Schedule next refresh at new tokenExpiresAt + 1 min
+ *   6. Sync to all sibling credentials (same Google account)
+ *   7. Schedule next refresh at new tokenExpiresAt + 1 min
  */
 
 import { prisma } from '../index.js';
 import { refreshCookies, loginGoogleFlow } from './google-login-agent.js';
 import { notifyTelegramUser } from './telegram-bot.js';
+import { syncSiblingCredentials } from './credential-sync.js';
 
 const REFRESH_DELAY_MS = 60 * 1000; // 1 min after expiry
 const USER_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max per user
@@ -83,6 +87,7 @@ async function isCookieExpired(userId) {
 
 /**
  * Process a single user's cookie refresh.
+ * After success, sync to all sibling credentials sharing the same Google account.
  */
 async function harvestForUser(userId, googleAccountCredentialId) {
     const sendTelegram = createSendFn(userId);
@@ -99,6 +104,8 @@ async function harvestForUser(userId, googleAccountCredentialId) {
 
     if (refreshResult.success) {
         console.log(`[CookieHarvester] ✅ User ${userId.substring(0, 8)}: Cookie refreshed successfully`);
+        // Sync to siblings sharing the same Google account
+        await _syncAfterHarvest(userId);
         return { userId, success: true, action: 'refresh' };
     }
 
@@ -125,6 +132,8 @@ async function harvestForUser(userId, googleAccountCredentialId) {
 
             if (loginResult.success) {
                 console.log(`[CookieHarvester] ✅ User ${userId.substring(0, 8)}: Re-login successful`);
+                // Sync to siblings sharing the same Google account
+                await _syncAfterHarvest(userId);
                 return { userId, success: true, action: 'relogin' };
             } else {
                 console.log(`[CookieHarvester] ❌ User ${userId.substring(0, 8)}: Re-login failed: ${loginResult.message}`);
@@ -140,6 +149,22 @@ async function harvestForUser(userId, googleAccountCredentialId) {
     // Step 3: Other failure
     console.log(`[CookieHarvester] ❌ User ${userId.substring(0, 8)}: Refresh failed: ${refreshResult.message}`);
     return { userId, success: false, action: 'refresh_failed', reason: refreshResult.message };
+}
+
+/**
+ * After a successful harvest, read the refreshed credential and sync to siblings.
+ */
+async function _syncAfterHarvest(userId) {
+    try {
+        const cred = await prisma.credential.findFirst({
+            where: { userId, provider: 'google-flow' },
+        });
+        if (!cred) return;
+        const meta = JSON.parse(cred.metadata || '{}');
+        await syncSiblingCredentials(cred.id, cred.token, meta);
+    } catch (e) {
+        console.warn(`[CookieHarvester] Sibling sync error (non-fatal): ${e.message}`);
+    }
 }
 
 /**
@@ -265,8 +290,9 @@ async function scheduleForUser(userId, googleAccountCredentialId) {
 }
 
 /**
- * Start the smart per-user cron.
- * Reads all users with google-account credentials and schedules each independently.
+ * Start the smart per-Google-account cron.
+ * Groups users by Google account email — only 1 timer per account.
+ * After refresh, syncs to all sibling credentials automatically.
  */
 export async function startHarvestCron() {
     if (cronStarted) {
@@ -275,12 +301,12 @@ export async function startHarvestCron() {
     }
 
     cronStarted = true;
-    console.log('[CookieHarvester] 🕐 Smart per-user cron started');
+    console.log('[CookieHarvester] 🕐 Smart per-Google-account cron started');
 
     try {
         const googleAccounts = await prisma.credential.findMany({
             where: { provider: 'google-account' },
-            select: { id: true, userId: true },
+            select: { id: true, userId: true, metadata: true },
         });
 
         if (googleAccounts.length === 0) {
@@ -292,10 +318,32 @@ export async function startHarvestCron() {
             return;
         }
 
-        console.log(`[CookieHarvester] Scheduling ${googleAccounts.length} user(s)...`);
-
+        // Group by Google account email — 1 timer per account, not per user
+        const accountGroups = new Map(); // email → { primaryUserId, credentialId, allUserIds }
         for (const account of googleAccounts) {
-            await scheduleForUser(account.userId, account.id);
+            let email = 'unknown';
+            try {
+                const meta = JSON.parse(account.metadata || '{}');
+                email = meta.email?.toLowerCase() || 'unknown';
+            } catch { /* use unknown */ }
+
+            if (!accountGroups.has(email)) {
+                accountGroups.set(email, {
+                    primaryUserId: account.userId,
+                    credentialId: account.id,
+                    allUserIds: [account.userId],
+                });
+            } else {
+                accountGroups.get(email).allUserIds.push(account.userId);
+            }
+        }
+
+        console.log(`[CookieHarvester] Found ${accountGroups.size} Google account(s) across ${googleAccounts.length} user(s)`);
+
+        for (const [email, group] of accountGroups) {
+            console.log(`[CookieHarvester] 📧 ${email}: primary=${group.primaryUserId.substring(0, 8)}, ${group.allUserIds.length} user(s)`);
+            // Schedule ONLY for primary user — syncSiblingCredentials handles the rest
+            await scheduleForUser(group.primaryUserId, group.credentialId);
         }
     } catch (e) {
         console.error('[CookieHarvester] Startup error:', e.message);

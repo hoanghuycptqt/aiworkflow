@@ -22,6 +22,7 @@ import fetch from 'node-fetch';
 import https from 'https';
 import { prisma } from '../../index.js';
 import { launchTempBrowser } from '../../services/browser-manager.js';
+import { syncSiblingCredentials } from '../../services/credential-sync.js';
 
 const API_BASE = 'https://aisandbox-pa.googleapis.com';
 const TOOL = 'PINHOLE';
@@ -107,6 +108,9 @@ async function ensureFreshToken(credentials) {
                 metadata: JSON.stringify(newMeta),
             },
         });
+
+        // Sync to sibling credentials sharing the same Google account
+        await syncSiblingCredentials(credentials.id, newToken, newMeta);
 
         // Return updated credentials
         return {
