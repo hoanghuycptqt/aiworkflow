@@ -189,7 +189,8 @@ async function _ensureRecaptchaPage(sessionCookies) {
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--disable-software-rasterizer',
-                '--headless=new',
+                '--lang=en-US,en',
+                '--start-maximized',
             );
             if (!process.env.DISPLAY) {
                 process.env.DISPLAY = ':99';
