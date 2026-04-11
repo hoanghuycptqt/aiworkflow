@@ -21,8 +21,9 @@ import { v4 as uuidv4 } from 'uuid';
 import fetch from 'node-fetch';
 import https from 'https';
 import { prisma } from '../../index.js';
-import { launchTempBrowser } from '../../services/browser-manager.js';
+import { CHROME_PATH } from '../../services/browser-manager.js';
 import { syncSiblingCredentials } from '../../services/credential-sync.js';
+import puppeteer from 'puppeteer-core';
 
 const API_BASE = 'https://aisandbox-pa.googleapis.com';
 const TOOL = 'PINHOLE';
@@ -133,17 +134,20 @@ async function ensureFreshToken(credentials) {
 // ─────────────────────────────────────────────────────────
 
 const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
-const RECAPTCHA_PAGE_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 min idle → close browser
+const RECAPTCHA_PAGE_IDLE_TIMEOUT = 10 * 60 * 1000; // 10 min idle → close browser
 
 let _recaptchaPage = null;       // Persistent Puppeteer page
 let _recaptchaBrowser = null;    // Persistent browser instance
 let _recaptchaIdleTimer = null;  // Auto-close timer
 let _recaptchaReady = false;     // SDK loaded flag
 let _recaptchaInitPromise = null; // Prevents concurrent initializations
+let _recaptchaChromeProcess = null; // Native Chrome process
+const RECAPTCHA_DEBUG_PORT = 9339;  // Separate port from cookie harvester
 
 /**
  * Initialize (or reuse) the reCAPTCHA browser page.
- * Launches browser, navigates to Flow page, waits for SDK.
+ * Uses NATIVE Chrome launch (not puppeteer.launch) — same approach as cookie harvester.
+ * This avoids automation detection flags that cause low reCAPTCHA scores.
  */
 async function _ensureRecaptchaPage(sessionCookies) {
     // Already initialized and alive
@@ -163,9 +167,83 @@ async function _ensureRecaptchaPage(sessionCookies) {
         // Clean up any stale browser
         await _closeRecaptchaBrowser();
 
-        console.log('[reCAPTCHA] Launching persistent browser for token generation...');
-        const result = await launchTempBrowser({ headless: 'new' });
-        _recaptchaBrowser = result.browser;
+        console.log('[reCAPTCHA] Launching NATIVE Chrome for token generation...');
+
+        const chromePath = process.env.CHROME_PATH || CHROME_PATH;
+        const profileDir = join(process.cwd(), 'uploads', '.recaptcha-profile');
+        await mkdir(profileDir, { recursive: true });
+
+        // Launch Chrome natively — NO automation flags (same as cookie harvester)
+        const args = [
+            `--user-data-dir=${profileDir}`,
+            `--remote-debugging-port=${RECAPTCHA_DEBUG_PORT}`,
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--window-size=1280,900',
+            '--disable-blink-features=AutomationControlled',
+        ];
+
+        if (process.platform === 'linux') {
+            args.push(
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+                '--headless=new',
+            );
+            if (!process.env.DISPLAY) {
+                process.env.DISPLAY = ':99';
+            }
+        }
+
+        // Check if Chrome is already running on this port
+        let browser = null;
+        try {
+            const res = await fetch(`http://127.0.0.1:${RECAPTCHA_DEBUG_PORT}/json/version`);
+            if (res.ok) {
+                const data = await res.json();
+                browser = await puppeteer.connect({
+                    browserWSEndpoint: data.webSocketDebuggerUrl,
+                    defaultViewport: null,
+                });
+                console.log('[reCAPTCHA] Reusing existing Chrome instance');
+            }
+        } catch { /* not running, will launch */ }
+
+        if (!browser) {
+            const { spawn } = await import('child_process');
+            _recaptchaChromeProcess = spawn(chromePath, args, {
+                stdio: 'ignore',
+                detached: true,
+                env: { ...process.env },
+            });
+            _recaptchaChromeProcess.unref();
+
+            // Wait for Chrome to be ready
+            for (let attempt = 0; attempt < 30; attempt++) {
+                await new Promise(r => setTimeout(r, 500));
+                try {
+                    const res = await fetch(`http://127.0.0.1:${RECAPTCHA_DEBUG_PORT}/json/version`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        browser = await puppeteer.connect({
+                            browserWSEndpoint: data.webSocketDebuggerUrl,
+                            defaultViewport: null,
+                        });
+                        break;
+                    }
+                } catch { /* not ready yet */ }
+            }
+
+            if (!browser) {
+                if (_recaptchaChromeProcess) _recaptchaChromeProcess.kill();
+                throw new Error('Chrome failed to start for reCAPTCHA');
+            }
+
+            console.log(`[reCAPTCHA] ✅ Native Chrome launched & connected via CDP (port: ${RECAPTCHA_DEBUG_PORT})`);
+        }
+
+        _recaptchaBrowser = browser;
 
         // Auto-cleanup on unexpected disconnect
         _recaptchaBrowser.on('disconnected', () => {
@@ -237,6 +315,10 @@ async function _closeRecaptchaBrowser() {
     if (_recaptchaBrowser) {
         try { await _recaptchaBrowser.close(); } catch { /* ok */ }
     }
+    if (_recaptchaChromeProcess) {
+        try { _recaptchaChromeProcess.kill(); } catch { /* ok */ }
+        _recaptchaChromeProcess = null;
+    }
     _recaptchaPage = null;
     _recaptchaBrowser = null;
     _recaptchaReady = false;
@@ -257,8 +339,10 @@ function _resetRecaptchaIdleTimer() {
  * Fetch a FRESH reCAPTCHA Enterprise token.
  * Each call returns a new single-use token (never reused).
  * Keeps the browser page alive for efficiency.
+ * @param {string} sessionCookies - Session cookies for auth
+ * @param {string} action - reCAPTCHA action name (IMAGE_GENERATION or VIDEO_GENERATION)
  */
-async function fetchRecaptchaToken(sessionCookies) {
+async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION') {
     if (!sessionCookies) {
         console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
         return '';
@@ -268,9 +352,9 @@ async function fetchRecaptchaToken(sessionCookies) {
         const page = await _ensureRecaptchaPage(sessionCookies);
 
         // Each call to execute() returns a FRESH single-use token
-        const token = await page.evaluate(async (siteKey) => {
-            return await grecaptcha.enterprise.execute(siteKey, { action: 'IMAGE_GENERATION' });
-        }, RECAPTCHA_SITE_KEY);
+        const token = await page.evaluate(async (siteKey, act) => {
+            return await grecaptcha.enterprise.execute(siteKey, { action: act });
+        }, RECAPTCHA_SITE_KEY, action);
 
         // Reset idle timer on each successful call
         _resetRecaptchaIdleTimer();
@@ -289,6 +373,48 @@ async function fetchRecaptchaToken(sessionCookies) {
         await _closeRecaptchaBrowser();
         return '';
     }
+}
+
+/**
+ * Execute a fetch request INSIDE the Puppeteer Chrome page.
+ * This ensures Chrome attaches all native headers (x-browser-*, x-client-data)
+ * that Google now validates alongside the reCAPTCHA token.
+ *
+ * Falls back to Node.js fetch if browser is not available.
+ */
+async function browserFetch(url, token, body) {
+    // Try to use the reCAPTCHA browser page for the fetch
+    if (_recaptchaPage && _recaptchaBrowser?.isConnected() && _recaptchaReady) {
+        try {
+            const result = await _recaptchaPage.evaluate(async (fetchUrl, bearerToken, fetchBody) => {
+                const res = await fetch(fetchUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/plain;charset=UTF-8',
+                        'Authorization': `Bearer ${bearerToken}`,
+                    },
+                    body: fetchBody,
+                    credentials: 'include',
+                });
+                const text = await res.text();
+                return { status: res.status, ok: res.ok, body: text };
+            }, url, token, JSON.stringify(body));
+
+            console.log(`[BrowserFetch] Response status: ${result.status}`);
+            return result;
+        } catch (e) {
+            console.warn(`[BrowserFetch] Chrome fetch failed: ${e.message}, falling back to Node.js fetch`);
+        }
+    }
+
+    // Fallback to Node.js fetch
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: buildHeaders(token),
+        body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    return { status: res.status, ok: res.ok, body: text };
 }
 
 /**
@@ -337,7 +463,7 @@ function buildHeaders(token) {
         'Authorization': `Bearer ${token}`,
         'Origin': 'https://labs.google',
         'Referer': 'https://labs.google/',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
     };
 }
 
@@ -431,38 +557,32 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
 
     console.log(`[FlowImage] Generating 1 image(s), model=${modelName}, ratio=${aspectRatio}, seed=${request.seed}...`);
 
-    let res;
+    const apiUrl = `${API_BASE}/v1/projects/${projectId}/flowMedia:batchGenerateImages`;
+    let result;
     const MAX_RETRIES = 2;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        res = await fetch(
-            `${API_BASE}/v1/projects/${projectId}/flowMedia:batchGenerateImages`,
-            {
-                method: 'POST',
-                headers: buildHeaders(token),
-                body: JSON.stringify(body),
-            }
-        );
+        result = await browserFetch(apiUrl, token, body);
 
-        if (res.ok) break;
+        if (result.ok) break;
 
-        const errText = await res.text();
+        console.log(`[FlowImage] Error response (${result.status}): ${result.body.substring(0, 300)}`);
         // Only retry on 5xx server errors
-        if (res.status >= 500 && attempt < MAX_RETRIES) {
-            console.log(`[FlowImage] ⚠️ Server error ${res.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
+        if (result.status >= 500 && attempt < MAX_RETRIES) {
+            console.log(`[FlowImage] ⚠️ Server error ${result.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
             await new Promise(r => setTimeout(r, 3000)); // wait 3s before retry
             continue;
         }
         // Detect content policy violation on input image
-        if (errText.includes('PUBLIC_ERROR_MINOR_INPUT_IMAGE')) {
+        if (result.body.includes('PUBLIC_ERROR_MINOR_INPUT_IMAGE')) {
             throw new Error('⚠️ Ảnh bạn tải lên có nội dung không phù hợp hoặc không được hỗ trợ. Vui lòng thử ảnh khác.');
         }
-        if (res.status === 401) {
+        if (result.status === 401) {
             throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
         }
-        throw new Error(`Generation failed (${res.status}): ${errText.substring(0, 400)}`);
+        throw new Error(`Generation failed (${result.status}): ${result.body.substring(0, 400)}`);
     }
 
-    const data = await res.json();
+    const data = JSON.parse(result.body);
 
     // Response: { media: [ { name, image: { generatedImage: { fifeUrl, ... } } } ], workflows: [...] }
     const mediaItems = data.media || [];
@@ -664,6 +784,11 @@ export class GoogleFlowImageConnector extends BaseConnector {
 
             // Clear the used token (matches Google Flow web behavior)
             await clearRecaptchaToken(recaptchaToken);
+
+            // Delay between generations to avoid reCAPTCHA rate limiting
+            if (i < count - 1) {
+                await new Promise(r => setTimeout(r, 3000));
+            }
         }
 
         const results = allResults;
@@ -686,6 +811,8 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 if (resolution !== '1k' && r.mediaId) {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
+                        // Delay to avoid reCAPTCHA rate limiting
+                        await new Promise(r => setTimeout(r, 3000));
                         const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies);
                         const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha);
                         await clearRecaptchaToken(upscaleRecaptcha);
@@ -741,6 +868,11 @@ export class GoogleFlowImageConnector extends BaseConnector {
             } catch (_) { }
         }
 
+        // Close reCAPTCHA browser after batch completes
+        // Don't close browser here — video batch runs next in the same job
+        // and needs to reuse this Chrome instance. Idle timer will auto-close if unused.
+        _resetRecaptchaIdleTimer();
+
         return {
             text: prompt,
             imageUrl: primary.imageUrl || primary.fifeUrl,
@@ -781,26 +913,16 @@ export class GoogleFlowImageConnector extends BaseConnector {
         };
 
         console.log(`[FlowImage] Upscale request: POST /v1/flow/upsampleImage (${targetResolution})`);
-        const res = await fetch(`${API_BASE}/v1/flow/upsampleImage`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'text/plain;charset=UTF-8',
-                'Origin': 'https://labs.google',
-                'Referer': 'https://labs.google/',
-            },
-            body: JSON.stringify(body),
-        });
+        const result = await browserFetch(`${API_BASE}/v1/flow/upsampleImage`, token, body);
 
-        if (!res.ok) {
-            const text = await res.text();
-            if (res.status === 401) {
+        if (!result.ok) {
+            if (result.status === 401) {
                 throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
             }
-            throw new Error(`Image upscale failed (${res.status}): ${text.substring(0, 300)}`);
+            throw new Error(`Image upscale failed (${result.status}): ${result.body.substring(0, 300)}`);
         }
 
-        const data = await res.json();
+        const data = JSON.parse(result.body);
         const hasImage = !!data.encodedImage;
         console.log(`[FlowImage] Upscale response: hasEncodedImage=${hasImage}, keys=${Object.keys(data).join(',')}`);
 
@@ -978,7 +1100,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         }
 
         // ─── Build request (from HAR capture) ───
-        const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '');
+        // Delay before video token to avoid rate limiting after image batch
+        await new Promise(r => setTimeout(r, 3000));
+        const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
         const batchId = uuidv4();
 
         const request = {
@@ -1016,39 +1140,29 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         console.log(`[FlowVideo] Submitting video generation, model=${videoModelKey}, aspect=${aspectRatio}, startFrame=${!!startFrameMediaId}...`);
         console.log('[FlowVideo] Request body:', JSON.stringify(body, null, 2).substring(0, 1000));
 
-        let res;
+        let result;
         const MAX_RETRIES = 2;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            res = await fetch(
+            result = await browserFetch(
                 `${API_BASE}/v1/video:batchAsyncGenerateVideoStartImage`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'text/plain;charset=UTF-8',
-                        'Authorization': `Bearer ${token}`,
-                        'Origin': 'https://labs.google',
-                        'Referer': 'https://labs.google/',
-                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                    },
-                    body: JSON.stringify(body),
-                }
+                token,
+                body
             );
 
-            if (res.ok) break;
+            if (result.ok) break;
 
-            const errText = await res.text();
-            if (res.status >= 500 && attempt < MAX_RETRIES) {
-                console.log(`[FlowVideo] ⚠️ Server error ${res.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
+            if (result.status >= 500 && attempt < MAX_RETRIES) {
+                console.log(`[FlowVideo] ⚠️ Server error ${result.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
                 await new Promise(r => setTimeout(r, 3000));
                 continue;
             }
-            if (res.status === 401) {
+            if (result.status === 401) {
                 throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
             }
-            throw new Error(`Video generation failed (${res.status}): ${errText.substring(0, 400)}`);
+            throw new Error(`Video generation failed (${result.status}): ${result.body.substring(0, 400)}`);
         }
 
-        const data = await res.json();
+        const data = JSON.parse(result.body);
         console.log('[FlowVideo] Response:', JSON.stringify(data).substring(0, 1000));
 
         // Extract all IDs from response
@@ -1078,7 +1192,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
         // Poll until video generation is 100% complete
         console.log(`[FlowVideo] Starting polling for completion...`);
-        const result = await this._pollVideoOperation(token, projectId, operationName, mediaId, workflowId);
+        const pollResult = await this._pollVideoOperation(token, projectId, operationName, mediaId, workflowId);
 
         console.log(`[FlowVideo] ✅ Video generation complete!`);
 
@@ -1088,7 +1202,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         if (resolution === '1080p') {
             console.log(`[FlowVideo] 🔄 Upscaling to 1080p...`);
             // Fetch fresh reCAPTCHA token for upscale (previous one may have expired during generation)
-            const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '');
+            const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
             const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken);
             if (upsampleResult.upsampledMediaId) {
                 const upsampledMediaId = upsampleResult.upsampledMediaId;
@@ -1126,6 +1240,10 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                 console.warn('[FlowVideo] Could not download video:', e.message);
             }
         }
+
+        // Close reCAPTCHA browser after batch completes
+        await _closeRecaptchaBrowser();
+        console.log('[FlowVideo] 🧹 reCAPTCHA browser closed after batch');
 
         return {
             text: prompt,
@@ -1172,24 +1290,14 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         };
 
         console.log(`[FlowVideo] Upscale request: POST ${url}`);
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'text/plain;charset=UTF-8',
-                'Origin': 'https://labs.google',
-                'Referer': 'https://labs.google/',
-            },
-            body: JSON.stringify(body),
-        });
+        const result = await browserFetch(url, token, body);
 
-        if (!res.ok) {
-            const text = await res.text();
-            console.error(`[FlowVideo] Upscale API error: ${res.status} - ${text.substring(0, 300)}`);
+        if (!result.ok) {
+            console.error(`[FlowVideo] Upscale API error: ${result.status} - ${result.body.substring(0, 300)}`);
             return { upsampledMediaId: null };
         }
 
-        const data = await res.json();
+        const data = JSON.parse(result.body);
         console.log(`[FlowVideo] Upscale response: ${JSON.stringify(data).substring(0, 500)}`);
 
         // Extract upsampled media ID (e.g. "{mediaId}_upsampled")
@@ -1556,7 +1664,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             }
 
             if (!videoUrl) {
-                console.log(`[FlowVideo] DEBUG full response (3000 chars): ${dataStr.substring(0, 3000)}`);
+                console.log(`[FlowVideo] Full response: ${dataStr.substring(0, 1000)}`);
             }
         }
 
