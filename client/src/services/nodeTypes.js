@@ -109,6 +109,8 @@ export const NODE_TYPES = {
                     { label: 'Veo 3.1 Fast (Low Priority)', value: 'veo3_fast_low' },
                     { label: 'Veo 3.1 - Fast', value: 'veo3_fast' },
                     { label: 'Veo 3.1 - Quality', value: 'veo3' },
+                    { label: 'Veo 3.1 - Lite', value: 'veo3_lite' },
+                    { label: 'Veo 3.1 - Lite (Low Priority)', value: 'veo3_lite_low' },
                 ],
                 default: 'veo3_fast_low',
             },

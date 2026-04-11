@@ -957,6 +957,8 @@ const VIDEO_MODELS = {
     'veo3_fast_low': 'veo_3_1_i2v_s_fast_portrait_ultra_relaxed',  // Veo 3.1 Fast (Low Priority) — CONFIRMED
     'veo3_fast': 'veo_3_1_i2v_s_fast_portrait_ultra',              // Veo 3.1 - Fast — CONFIRMED via HAR
     'veo3': 'veo_3_1_i2v_s_portrait',                              // Veo 3.1 - Quality — CONFIRMED via HAR
+    'veo3_lite': 'veo_3_1_i2v_lite',                               // Veo 3.1 - Lite
+    'veo3_lite_low': 'veo_3_1_i2v_lite_low_priority',              // Veo 3.1 - Lite (Low Priority)
 };
 
 // Video aspect ratio enum mapping
