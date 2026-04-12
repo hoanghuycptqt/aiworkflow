@@ -209,8 +209,8 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
                 '--disable-software-rasterizer',
                 '--lang=en-US,en',
                 '--start-maximized',
-                // Route through Surfshark VPN via local SOCKS5 proxy
-                '--proxy-server=socks5://127.0.0.1:1080',
+                // Route through residential proxy
+                '--proxy-server=http://142.111.67.146:5611',
             );
             if (!process.env.DISPLAY) {
                 process.env.DISPLAY = ':99';
@@ -275,6 +275,11 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
         });
 
         const page = await inst.browser.newPage();
+
+        // Authenticate with proxy (required for HTTP proxies with user/pass)
+        if (process.platform === 'linux') {
+            await page.authenticate({ username: 'hkvzpuyp', password: 'yljn3ivnxbep' });
+        }
 
         // Parse and set session cookies
         const cookieParts = sessionCookies.split(';').map(c => c.trim()).filter(Boolean);
