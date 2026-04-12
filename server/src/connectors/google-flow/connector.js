@@ -788,7 +788,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
 
             // Delay between generations to avoid reCAPTCHA rate limiting
             if (i < count - 1) {
-                await new Promise(r => setTimeout(r, 3000));
+                await new Promise(r => setTimeout(r, 5000));
             }
         }
 
@@ -813,7 +813,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
                         // Delay to avoid reCAPTCHA rate limiting
-                        await new Promise(r => setTimeout(r, 3000));
+                        await new Promise(r => setTimeout(r, 5000));
                         const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies);
                         const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha);
                         await clearRecaptchaToken(upscaleRecaptcha);
@@ -1104,7 +1104,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
         // ─── Build request (from HAR capture) ───
         // Delay before video token to avoid rate limiting after image batch
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 5000));
         const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
         const batchId = uuidv4();
 
