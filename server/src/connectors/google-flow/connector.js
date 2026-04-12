@@ -459,6 +459,14 @@ async function browserFetch(url, token, body) {
             }, url, token, JSON.stringify(body));
 
             console.log(`[BrowserFetch] Response status: ${result.status}`);
+
+            // If reCAPTCHA rejected (403), the Chrome session is "tainted"
+            // Close it so next request gets a fresh browser with clean score
+            if (result.status === 403 && result.body.includes('reCAPTCHA')) {
+                console.warn('[BrowserFetch] ⚠️ reCAPTCHA 403 — closing tainted browser session');
+                await _closeRecaptchaBrowser();
+            }
+
             return result;
         } catch (e) {
             console.warn(`[BrowserFetch] Chrome fetch failed: ${e.message}, falling back to Node.js fetch`);
