@@ -135,48 +135,66 @@ async function ensureFreshToken(credentials) {
 
 const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
 const RECAPTCHA_PAGE_IDLE_TIMEOUT = 10 * 60 * 1000; // 10 min idle → close browser
+const RECAPTCHA_BASE_PORT = 9339;  // Base port for Chrome debug
 
-let _recaptchaPage = null;       // Persistent Puppeteer page
-let _recaptchaBrowser = null;    // Persistent browser instance
-let _recaptchaIdleTimer = null;  // Auto-close timer
-let _recaptchaReady = false;     // SDK loaded flag
-let _recaptchaInitPromise = null; // Prevents concurrent initializations
-let _recaptchaChromeProcess = null; // Native Chrome process
-const RECAPTCHA_DEBUG_PORT = 9339;  // Separate port from cookie harvester
+// Chrome instance pool — each job gets its own Chrome instance
+// Key: instanceId (string), Value: { page, browser, chromeProcess, ready, idleTimer, initPromise, port, profileDir }
+const _chromePool = new Map();
+let _nextPortOffset = 0;
 
 /**
- * Initialize (or reuse) the reCAPTCHA browser page.
+ * Get or create a Chrome instance entry in the pool.
+ */
+function _getOrCreateInstance(instanceId = 'default') {
+    if (!_chromePool.has(instanceId)) {
+        _chromePool.set(instanceId, {
+            page: null,
+            browser: null,
+            chromeProcess: null,
+            ready: false,
+            idleTimer: null,
+            initPromise: null,
+            port: RECAPTCHA_BASE_PORT + (_nextPortOffset++),
+            profileDir: join(process.cwd(), 'uploads', `.recaptcha-profile-${instanceId.substring(0, 8)}`),
+        });
+    }
+    return _chromePool.get(instanceId);
+}
+
+/**
+ * Initialize (or reuse) the reCAPTCHA browser page for a specific instance.
  * Uses NATIVE Chrome launch (not puppeteer.launch) — same approach as cookie harvester.
  * This avoids automation detection flags that cause low reCAPTCHA scores.
  */
-async function _ensureRecaptchaPage(sessionCookies) {
+async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
+    const inst = _getOrCreateInstance(instanceId);
+
     // Already initialized and alive
-    if (_recaptchaPage && _recaptchaBrowser?.isConnected() && _recaptchaReady) {
-        return _recaptchaPage;
+    if (inst.page && inst.browser?.isConnected() && inst.ready) {
+        return inst.page;
     }
 
-    // Prevent concurrent initializations
-    if (_recaptchaInitPromise) {
-        await _recaptchaInitPromise;
-        if (_recaptchaPage && _recaptchaBrowser?.isConnected() && _recaptchaReady) {
-            return _recaptchaPage;
+    // Prevent concurrent initializations for the same instance
+    if (inst.initPromise) {
+        await inst.initPromise;
+        if (inst.page && inst.browser?.isConnected() && inst.ready) {
+            return inst.page;
         }
     }
 
-    _recaptchaInitPromise = (async () => {
+    inst.initPromise = (async () => {
         // Clean up any stale browser
-        await _closeRecaptchaBrowser();
+        await _closeRecaptchaBrowser(instanceId);
 
-        console.log('[reCAPTCHA] Launching NATIVE Chrome for token generation...');
+        console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Launching Chrome (port: ${inst.port})...`);
 
         const chromePath = process.env.CHROME_PATH || CHROME_PATH;
-        const profileDir = join(process.cwd(), 'uploads', '.recaptcha-profile');
-        await mkdir(profileDir, { recursive: true });
+        await mkdir(inst.profileDir, { recursive: true });
 
         // Launch Chrome natively — NO automation flags (same as cookie harvester)
         const args = [
-            `--user-data-dir=${profileDir}`,
-            `--remote-debugging-port=${RECAPTCHA_DEBUG_PORT}`,
+            `--user-data-dir=${inst.profileDir}`,
+            `--remote-debugging-port=${inst.port}`,
             '--no-first-run',
             '--no-default-browser-check',
             '--window-size=1280,900',
@@ -192,7 +210,6 @@ async function _ensureRecaptchaPage(sessionCookies) {
                 '--lang=en-US,en',
                 '--start-maximized',
                 // Route through Surfshark VPN via local SOCKS5 proxy
-                // This changes Chrome's outgoing IP from GCP datacenter to Surfshark VPN
                 '--proxy-server=socks5://127.0.0.1:1080',
             );
             if (!process.env.DISPLAY) {
@@ -203,31 +220,31 @@ async function _ensureRecaptchaPage(sessionCookies) {
         // Check if Chrome is already running on this port
         let browser = null;
         try {
-            const res = await fetch(`http://127.0.0.1:${RECAPTCHA_DEBUG_PORT}/json/version`);
+            const res = await fetch(`http://127.0.0.1:${inst.port}/json/version`);
             if (res.ok) {
                 const data = await res.json();
                 browser = await puppeteer.connect({
                     browserWSEndpoint: data.webSocketDebuggerUrl,
                     defaultViewport: null,
                 });
-                console.log('[reCAPTCHA] Reusing existing Chrome instance');
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Reusing existing Chrome`);
             }
         } catch { /* not running, will launch */ }
 
         if (!browser) {
             const { spawn } = await import('child_process');
-            _recaptchaChromeProcess = spawn(chromePath, args, {
+            inst.chromeProcess = spawn(chromePath, args, {
                 stdio: 'ignore',
                 detached: true,
                 env: { ...process.env },
             });
-            _recaptchaChromeProcess.unref();
+            inst.chromeProcess.unref();
 
             // Wait for Chrome to be ready
             for (let attempt = 0; attempt < 30; attempt++) {
                 await new Promise(r => setTimeout(r, 500));
                 try {
-                    const res = await fetch(`http://127.0.0.1:${RECAPTCHA_DEBUG_PORT}/json/version`);
+                    const res = await fetch(`http://127.0.0.1:${inst.port}/json/version`);
                     if (res.ok) {
                         const data = await res.json();
                         browser = await puppeteer.connect({
@@ -240,24 +257,24 @@ async function _ensureRecaptchaPage(sessionCookies) {
             }
 
             if (!browser) {
-                if (_recaptchaChromeProcess) _recaptchaChromeProcess.kill();
+                if (inst.chromeProcess) inst.chromeProcess.kill();
                 throw new Error('Chrome failed to start for reCAPTCHA');
             }
 
-            console.log(`[reCAPTCHA] ✅ Native Chrome launched & connected via CDP (port: ${RECAPTCHA_DEBUG_PORT})`);
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Chrome launched (port: ${inst.port})`);
         }
 
-        _recaptchaBrowser = browser;
+        inst.browser = browser;
 
         // Auto-cleanup on unexpected disconnect
-        _recaptchaBrowser.on('disconnected', () => {
-            console.log('[reCAPTCHA] Browser disconnected unexpectedly');
-            _recaptchaPage = null;
-            _recaptchaBrowser = null;
-            _recaptchaReady = false;
+        inst.browser.on('disconnected', () => {
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Browser disconnected`);
+            inst.page = null;
+            inst.browser = null;
+            inst.ready = false;
         });
 
-        const page = await _recaptchaBrowser.newPage();
+        const page = await inst.browser.newPage();
 
         // Parse and set session cookies
         const cookieParts = sessionCookies.split(';').map(c => c.trim()).filter(Boolean);
@@ -280,7 +297,7 @@ async function _ensureRecaptchaPage(sessionCookies) {
             { name: c.name, value: c.value, url: 'https://www.google.com' },
         ]);
         await page.setCookie(...cookiesForPuppeteer);
-        console.log(`[reCAPTCHA] Set ${validCookies.length} cookies`);
+        console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Set ${validCookies.length} cookies`);
 
         // Navigate to Flow page (loads reCAPTCHA Enterprise SDK)
         await page.goto('https://labs.google/fx/tools/flow/', {
@@ -294,66 +311,71 @@ async function _ensureRecaptchaPage(sessionCookies) {
             { timeout: 15000 }
         );
 
-        _recaptchaPage = page;
-        _recaptchaReady = true;
-        console.log('[reCAPTCHA] ✅ Persistent page ready (SDK loaded)');
+        inst.page = page;
+        inst.ready = true;
+        console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Page ready (SDK loaded)`);
     })();
 
     try {
-        await _recaptchaInitPromise;
+        await inst.initPromise;
     } finally {
-        _recaptchaInitPromise = null;
+        inst.initPromise = null;
     }
 
-    return _recaptchaPage;
+    return inst.page;
 }
 
 /**
- * Close the persistent reCAPTCHA browser.
+ * Close a specific reCAPTCHA browser instance.
  */
-async function _closeRecaptchaBrowser() {
-    if (_recaptchaIdleTimer) {
-        clearTimeout(_recaptchaIdleTimer);
-        _recaptchaIdleTimer = null;
+async function _closeRecaptchaBrowser(instanceId = 'default') {
+    const inst = _chromePool.get(instanceId);
+    if (!inst) return;
+
+    if (inst.idleTimer) {
+        clearTimeout(inst.idleTimer);
+        inst.idleTimer = null;
     }
-    if (_recaptchaBrowser) {
-        try { await _recaptchaBrowser.close(); } catch { /* ok */ }
+    if (inst.browser) {
+        try { await inst.browser.close(); } catch { /* ok */ }
     }
-    if (_recaptchaChromeProcess) {
-        try { _recaptchaChromeProcess.kill(); } catch { /* ok */ }
-        _recaptchaChromeProcess = null;
+    if (inst.chromeProcess) {
+        try { inst.chromeProcess.kill(); } catch { /* ok */ }
+        inst.chromeProcess = null;
     }
-    _recaptchaPage = null;
-    _recaptchaBrowser = null;
-    _recaptchaReady = false;
+    inst.page = null;
+    inst.browser = null;
+    inst.ready = false;
 }
 
 /**
- * Reset the idle timer — browser auto-closes after 5 min of inactivity.
+ * Reset the idle timer for a specific instance.
  */
-function _resetRecaptchaIdleTimer() {
-    if (_recaptchaIdleTimer) clearTimeout(_recaptchaIdleTimer);
-    _recaptchaIdleTimer = setTimeout(async () => {
-        console.log('[reCAPTCHA] Idle timeout — closing persistent browser');
-        await _closeRecaptchaBrowser();
+function _resetRecaptchaIdleTimer(instanceId = 'default') {
+    const inst = _chromePool.get(instanceId);
+    if (!inst) return;
+    if (inst.idleTimer) clearTimeout(inst.idleTimer);
+    inst.idleTimer = setTimeout(async () => {
+        console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Idle timeout — closing browser`);
+        await _closeRecaptchaBrowser(instanceId);
+        _chromePool.delete(instanceId);
     }, RECAPTCHA_PAGE_IDLE_TIMEOUT);
 }
 
 /**
- * Fetch a FRESH reCAPTCHA Enterprise token.
- * Each call returns a new single-use token (never reused).
- * Keeps the browser page alive for efficiency.
+ * Fetch a FRESH reCAPTCHA Enterprise token using a specific Chrome instance.
  * @param {string} sessionCookies - Session cookies for auth
  * @param {string} action - reCAPTCHA action name (IMAGE_GENERATION or VIDEO_GENERATION)
+ * @param {string} instanceId - Chrome instance ID (unique per job)
  */
-async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION') {
+async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
     if (!sessionCookies) {
         console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
         return '';
     }
 
     try {
-        const page = await _ensureRecaptchaPage(sessionCookies);
+        const page = await _ensureRecaptchaPage(sessionCookies, instanceId);
 
         // Each call to execute() returns a FRESH single-use token
         const token = await page.evaluate(async (siteKey, act) => {
@@ -361,36 +383,33 @@ async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION') 
         }, RECAPTCHA_SITE_KEY, action);
 
         // Reset idle timer on each successful call
-        _resetRecaptchaIdleTimer();
+        _resetRecaptchaIdleTimer(instanceId);
 
         if (token && token.length > 50) {
-            console.log(`[reCAPTCHA] ✅ Fresh token (${token.length} chars)`);
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Fresh token (${token.length} chars)`);
             return token;
         }
 
-        console.warn('[reCAPTCHA] Token too short or empty:', token?.substring(0, 50));
+        console.warn(`[reCAPTCHA:${instanceId.substring(0, 8)}] Token too short or empty:`, token?.substring(0, 50));
         return '';
 
     } catch (e) {
-        console.error('[reCAPTCHA] Failed to fetch token:', e.message);
-        // Page may be dead — force cleanup so next call reinitializes
-        await _closeRecaptchaBrowser();
+        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Failed to fetch token:`, e.message);
+        await _closeRecaptchaBrowser(instanceId);
         return '';
     }
 }
 
 /**
- * Execute a fetch request INSIDE the Puppeteer Chrome page.
- * This ensures Chrome attaches all native headers (x-browser-*, x-client-data)
- * that Google now validates alongside the reCAPTCHA token.
- *
+ * Execute a fetch request INSIDE a specific Puppeteer Chrome page.
  * Falls back to Node.js fetch if browser is not available.
  */
-async function browserFetch(url, token, body) {
+async function browserFetch(url, token, body, instanceId = 'default') {
+    const inst = _chromePool.get(instanceId);
     // Try to use the reCAPTCHA browser page for the fetch
-    if (_recaptchaPage && _recaptchaBrowser?.isConnected() && _recaptchaReady) {
+    if (inst?.page && inst?.browser?.isConnected() && inst?.ready) {
         try {
-            const result = await _recaptchaPage.evaluate(async (fetchUrl, bearerToken, fetchBody) => {
+            const result = await inst.page.evaluate(async (fetchUrl, bearerToken, fetchBody) => {
                 const res = await fetch(fetchUrl, {
                     method: 'POST',
                     headers: {
@@ -404,10 +423,10 @@ async function browserFetch(url, token, body) {
                 return { status: res.status, ok: res.ok, body: text };
             }, url, token, JSON.stringify(body));
 
-            console.log(`[BrowserFetch] Response status: ${result.status}`);
+            console.log(`[BrowserFetch:${instanceId.substring(0, 8)}] Response status: ${result.status}`);
             return result;
         } catch (e) {
-            console.warn(`[BrowserFetch] Chrome fetch failed: ${e.message}, falling back to Node.js fetch`);
+            console.warn(`[BrowserFetch:${instanceId.substring(0, 8)}] Chrome fetch failed: ${e.message}, falling back`);
         }
     }
 
@@ -516,7 +535,7 @@ async function uploadReferenceImage(token, projectId, imageBase64, mimeType = 'i
  * Caller provides batchId + sessionId to group multiple calls.
  * Returns array of { mediaId, fifeUrl, ... } (usually 1 item).
  */
-async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, referenceMediaIds, seed, recaptchaToken, batchId, sessionId, sessionCookies }) {
+async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, referenceMediaIds, seed, recaptchaToken, batchId, sessionId, sessionCookies, instanceId }) {
     // Build recaptcha context
     const recaptchaContext = {
         applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
@@ -565,7 +584,7 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
     let result;
     const MAX_RETRIES = 2;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        result = await browserFetch(apiUrl, token, body);
+        result = await browserFetch(apiUrl, token, body, instanceId);
 
         if (result.ok) break;
 
@@ -574,10 +593,10 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         // Retry on 403 reCAPTCHA — close Chrome, wait, restart, get fresh token
         if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
             console.log(`[FlowImage] ⚠️ reCAPTCHA 403 — closing Chrome, waiting 30s, then retrying (${attempt + 1}/${MAX_RETRIES})...`);
-            await _closeRecaptchaBrowser();
+            await _closeRecaptchaBrowser(instanceId);
             await new Promise(r => setTimeout(r, 30000));
             // Get fresh token with fresh Chrome
-            const freshToken = await fetchRecaptchaToken(sessionCookies);
+            const freshToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
             // Update recaptchaContext in body
             body.clientContext.recaptchaContext = {
                 token: freshToken,
@@ -782,13 +801,14 @@ export class GoogleFlowImageConnector extends BaseConnector {
         const sessionCookies = credentials.metadata?.sessionCookies || '';
         const batchId = uuidv4();
         const sessionId = `;${Date.now()}`;
+        const instanceId = context.executionId || uuidv4(); // Unique Chrome per job
         const allResults = [];
 
-        console.log(`[FlowImage] Starting batch of ${count} image(s), batchId=${batchId}`);
+        console.log(`[FlowImage] Starting batch of ${count} image(s), batchId=${batchId}, chrome=${instanceId.substring(0, 8)}`);
 
         for (let i = 0; i < count; i++) {
             // Fresh reCAPTCHA token for each API call
-            const recaptchaToken = await fetchRecaptchaToken(sessionCookies);
+            const recaptchaToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
 
             const result = await batchGenerateImages(token, projectId, {
                 prompt,
@@ -799,6 +819,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 batchId,
                 sessionId,
                 sessionCookies,
+                instanceId,
                 seed: Math.floor(Math.random() * 2147483647),
             });
             allResults.push(...result);
@@ -834,8 +855,8 @@ export class GoogleFlowImageConnector extends BaseConnector {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
                         // Delay to avoid reCAPTCHA rate limiting
                         await new Promise(r => setTimeout(r, 5000));
-                        const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies);
-                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha);
+                        const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
+                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId);
                         await clearRecaptchaToken(upscaleRecaptcha);
                         if (upscaleResult.encodedImage) {
                             const filename = `gflow_${resolution}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
@@ -858,7 +879,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                         // This prevents all subsequent upscales/video from also failing
                         if (e.message.includes('403') && e.message.includes('reCAPTCHA')) {
                             console.log('[FlowImage] 🔄 reCAPTCHA 403 on upscale — closing Chrome, waiting 30s before next request...');
-                            await _closeRecaptchaBrowser();
+                            await _closeRecaptchaBrowser(instanceId);
                             await new Promise(r => setTimeout(r, 30000));
                         }
                     }
@@ -919,7 +940,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
      * POST /v1/flow/upsampleImage
      * Response returns { encodedImage: "<base64 JPEG>" }
      */
-    async _upscaleImage(token, projectId, mediaId, resolution, recaptchaToken = '') {
+    async _upscaleImage(token, projectId, mediaId, resolution, recaptchaToken = '', instanceId = 'default') {
         const targetResolution = resolution === '4k'
             ? 'UPSAMPLE_IMAGE_RESOLUTION_4K'
             : 'UPSAMPLE_IMAGE_RESOLUTION_2K';
@@ -941,7 +962,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
         };
 
         console.log(`[FlowImage] Upscale request: POST /v1/flow/upsampleImage (${targetResolution})`);
-        const result = await browserFetch(`${API_BASE}/v1/flow/upsampleImage`, token, body);
+        const result = await browserFetch(`${API_BASE}/v1/flow/upsampleImage`, token, body, instanceId);
 
         if (!result.ok) {
             if (result.status === 401) {
@@ -1079,6 +1100,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         const videoModelKey = VIDEO_MODELS[modelKey] || 'veo_3_1_i2v_s_fast_portrait_ultra_relaxed';
         const aspectRatio = VIDEO_ASPECT_RATIO_MAP[config.aspectRatio || '9:16'] || 'VIDEO_ASPECT_RATIO_PORTRAIT';
         const sessionId = `;${Date.now()}`;
+        const instanceId = context.executionId || uuidv4(); // Unique Chrome per job
 
         // ─── Get start frame from upstream Flow Image ───
         let startFrameMediaId = null;
@@ -1132,7 +1154,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         // ─── Build request (from HAR capture) ───
         // Delay before video token to avoid rate limiting after image batch
         await new Promise(r => setTimeout(r, 5000));
-        const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
+        const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
         const batchId = uuidv4();
 
         const request = {
@@ -1176,7 +1198,8 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             result = await browserFetch(
                 `${API_BASE}/v1/video:batchAsyncGenerateVideoStartImage`,
                 token,
-                body
+                body,
+                instanceId
             );
 
             if (result.ok) break;
@@ -1184,9 +1207,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             // Retry on 403 reCAPTCHA — close Chrome, wait, restart, get fresh token
             if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
                 console.log(`[FlowVideo] ⚠️ reCAPTCHA 403 — closing Chrome, waiting 30s, then retrying (${attempt + 1}/${MAX_RETRIES})...`);
-                await _closeRecaptchaBrowser();
+                await _closeRecaptchaBrowser(instanceId);
                 await new Promise(r => setTimeout(r, 30000));
-                const freshToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
+                const freshToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
                 body.clientContext.recaptchaContext = {
                     token: freshToken,
                     applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
@@ -1245,7 +1268,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         if (resolution === '1080p') {
             console.log(`[FlowVideo] 🔄 Upscaling to 1080p...`);
             // Fetch fresh reCAPTCHA token for upscale (previous one may have expired during generation)
-            const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
+            const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
             const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken);
             if (upsampleResult.upsampledMediaId) {
                 const upsampledMediaId = upsampleResult.upsampledMediaId;
@@ -1285,8 +1308,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         }
 
         // Close reCAPTCHA browser after batch completes
-        await _closeRecaptchaBrowser();
-        console.log('[FlowVideo] 🧹 reCAPTCHA browser closed after batch');
+        await _closeRecaptchaBrowser(instanceId);
+        _chromePool.delete(instanceId);
+        console.log(`[FlowVideo] 🧹 Chrome ${instanceId.substring(0, 8)} closed after batch`);
 
         return {
             text: prompt,
