@@ -578,7 +578,7 @@ async function uploadReferenceImage(token, projectId, imageBase64, mimeType = 'i
  * Caller provides batchId + sessionId to group multiple calls.
  * Returns array of { mediaId, fifeUrl, ... } (usually 1 item).
  */
-async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, referenceMediaIds, seed, recaptchaToken, batchId, sessionId }) {
+async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, referenceMediaIds, seed, recaptchaToken, batchId, sessionId, sessionCookies }) {
     // Build recaptcha context
     const recaptchaContext = {
         applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
@@ -632,6 +632,16 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         if (result.ok) break;
 
         console.log(`[FlowImage] Error response (${result.status}): ${result.body.substring(0, 300)}`);
+
+        // Retry on 403 reCAPTCHA: close tainted Chrome, get fresh token, rebuild body
+        if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
+            console.log(`[FlowImage] ⚠️ reCAPTCHA 403, retrying with fresh Chrome (${attempt + 1}/${MAX_RETRIES})...`);
+            const freshToken = await fetchRecaptchaToken(sessionCookies || '', 'IMAGE_GENERATION');
+            if (freshToken) {
+                body.clientContext.recaptchaContext.token = freshToken;
+            }
+            continue;
+        }
         // Only retry on 5xx server errors
         if (result.status >= 500 && attempt < MAX_RETRIES) {
             console.log(`[FlowImage] ⚠️ Server error ${result.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
@@ -844,6 +854,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 recaptchaToken,
                 batchId,
                 sessionId,
+                sessionCookies,
                 seed: Math.floor(Math.random() * 2147483647),
             });
             allResults.push(...result);
@@ -1210,6 +1221,15 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
             if (result.ok) break;
 
+            // Retry on 403 reCAPTCHA: close tainted Chrome, get fresh token
+            if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
+                console.log(`[FlowVideo] ⚠️ reCAPTCHA 403, retrying with fresh Chrome (${attempt + 1}/${MAX_RETRIES})...`);
+                const freshToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
+                if (freshToken) {
+                    body.clientContext.recaptchaContext.token = freshToken;
+                }
+                continue;
+            }
             if (result.status >= 500 && attempt < MAX_RETRIES) {
                 console.log(`[FlowVideo] ⚠️ Server error ${result.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
                 await new Promise(r => setTimeout(r, 3000));
