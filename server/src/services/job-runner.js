@@ -300,6 +300,11 @@ async function finalizeBatch(batchId, userId, completed, failed, total) {
                 }
             }
 
+            console.log(`[JobRunner] Batch ${batchId}: collected ${mediaFiles.length} media files from ${executions.length} execution(s)`);
+            for (const m of mediaFiles) {
+                console.log(`[JobRunner]   ${m.type}: ${m.path}`);
+            }
+
             const msg = status === 'completed'
                 ? `✅ *Batch hoàn thành!*\n📊 ${completed}/${total} jobs thành công\n📸 ${mediaFiles.length} media files`
                 : `⚠️ *Batch hoàn thành một phần*\n✅ ${completed} thành công, ❌ ${failed} thất bại`;

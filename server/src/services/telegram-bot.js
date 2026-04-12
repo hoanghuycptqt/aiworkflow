@@ -290,6 +290,7 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
         try {
             // Send text message first
             await bot.telegram.sendMessage(link.chatId, message, { parse_mode: 'Markdown' });
+            console.log(`[Telegram] ✅ Text sent to chat ${link.chatId}`);
 
             // Send media files: photos inline, videos as native video
             for (const media of mediaFiles.slice(0, 50)) { // max 50 files per batch
@@ -300,10 +301,13 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
                             supports_streaming: true,
                             ...(dims && { width: dims.width, height: dims.height }),
                         });
+                        console.log(`[Telegram] ✅ Video sent: ${media.path}`);
                     } else {
                         await bot.telegram.sendPhoto(link.chatId, { source: media.path });
+                        console.log(`[Telegram] ✅ Photo sent: ${media.path}`);
                     }
                 } catch (mediaErr) {
+                    console.warn(`[Telegram] ⚠️ Media send failed (${media.path}): ${mediaErr.message}`);
                     // If file too large, send URL instead
                     if (media.url) {
                         await bot.telegram.sendMessage(
