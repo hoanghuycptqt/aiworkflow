@@ -326,6 +326,11 @@ async function _ensureRecaptchaPage(sessionCookies) {
             console.warn('[reCAPTCHA] Interaction simulation failed (non-fatal):', e.message);
         }
 
+        // Wait for reCAPTCHA SDK to process behavioral signals before first token
+        // Without this delay, the first token gets a low score → 403
+        console.log('[reCAPTCHA] ⏳ Warming up (5s wait for SDK to process signals)...');
+        await new Promise(r => setTimeout(r, 5000));
+
         _recaptchaPage = page;
         _recaptchaReady = true;
         console.log('[reCAPTCHA] ✅ Persistent page ready (SDK loaded)');
