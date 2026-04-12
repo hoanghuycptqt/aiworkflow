@@ -10,7 +10,7 @@ import { prisma, io } from '../index.js';
 import { handleMessage, handlePhoto } from './telegram-ai.js';
 import { pendingInputRequests } from './google-login-agent.js';
 import { mkdir } from 'fs/promises';
-import { join, extname, resolve } from 'path';
+import { join, extname } from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { execFile } from 'child_process';
@@ -288,44 +288,31 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
 
     for (const link of links) {
         try {
-            // Separate photos and videos
-            const photos = mediaFiles.filter(m => m.type !== 'video' && m.path).slice(0, 40);
-            const videos = mediaFiles.filter(m => m.type === 'video' && m.path).slice(0, 10);
-
             // Send text message first
             await bot.telegram.sendMessage(link.chatId, message, { parse_mode: 'Markdown' });
-            console.log(`[Telegram] ✅ Text sent to chat ${link.chatId}`);
 
-            // Send photos individually (sendMediaGroup was unreliable with large files)
-            for (const media of photos) {
+            // Send media files: photos inline, videos as native video
+            for (const media of mediaFiles.slice(0, 10)) { // max 10 files
                 try {
-                    const absPath = resolve(media.path);
-                    await bot.telegram.sendPhoto(link.chatId, { source: absPath });
-                    console.log(`[Telegram] ✅ Photo sent: ${media.path}`);
-                } catch (photoErr) {
-                    console.warn(`[Telegram] ⚠️ Photo failed (${media.path}): ${photoErr.message}`);
-                }
-            }
-
-            // Send videos individually (videos can be large, sendMediaGroup has 50MB limit)
-            for (const media of videos) {
-                try {
-                    const absPath = resolve(media.path);
-                    const dims = await getVideoDimensions(absPath);
-                    await bot.telegram.sendVideo(link.chatId, { source: absPath }, {
-                        supports_streaming: true,
-                        ...(dims && { width: dims.width, height: dims.height }),
-                    });
-                    console.log(`[Telegram] ✅ Video sent: ${media.path}`);
-                } catch (videoErr) {
-                    console.warn(`[Telegram] ⚠️ Video send failed (${media.path}): ${videoErr.message}`);
+                    if (media.type === 'video') {
+                        const dims = await getVideoDimensions(media.path);
+                        await bot.telegram.sendVideo(link.chatId, { source: media.path }, {
+                            supports_streaming: true,
+                            ...(dims && { width: dims.width, height: dims.height }),
+                        });
+                    } else {
+                        await bot.telegram.sendPhoto(link.chatId, { source: media.path });
+                    }
+                } catch (mediaErr) {
+                    // If file too large, send URL instead
                     if (media.url) {
-                        await bot.telegram.sendMessage(link.chatId, `📎 Video quá lớn, tải tại: ${media.url}`);
+                        await bot.telegram.sendMessage(
+                            link.chatId,
+                            `📎 File quá lớn, tải tại: ${media.url}`
+                        );
                     }
                 }
             }
-
-            console.log(`[Telegram] ✅ Batch complete: ${photos.length} photos + ${videos.length} videos`);
         } catch (err) {
             console.error(`[Telegram] Failed to notify chat ${link.chatId}:`, err.message);
         }
