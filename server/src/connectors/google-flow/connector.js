@@ -917,10 +917,10 @@ export class GoogleFlowImageConnector extends BaseConnector {
             } catch (_) { }
         }
 
-        // Close reCAPTCHA browser after batch completes
-        // Don't close browser here — video batch runs next in the same job
-        // and needs to reuse this Chrome instance. Idle timer will auto-close if unused.
-        _resetRecaptchaIdleTimer();
+        // Close Chrome after image batch completes
+        await _closeRecaptchaBrowser(instanceId);
+        _chromePool.delete(instanceId);
+        console.log(`[FlowImage] 🧹 Chrome ${instanceId.substring(0, 8)} closed after batch`);
 
         return {
             text: prompt,
