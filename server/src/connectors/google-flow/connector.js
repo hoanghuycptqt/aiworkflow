@@ -144,12 +144,6 @@ let _recaptchaInitPromise = null; // Prevents concurrent initializations
 let _recaptchaChromeProcess = null; // Native Chrome process
 const RECAPTCHA_DEBUG_PORT = 9339;  // Separate port from cookie harvester
 
-// Global mutex for reCAPTCHA token generation — prevents parallel jobs from
-// flooding the token endpoint and triggering rate limits
-let _tokenMutexQueue = Promise.resolve();
-let _lastTokenTime = 0;
-const TOKEN_MIN_INTERVAL = 3000; // Minimum 3s between token generations
-
 /**
  * Initialize (or reuse) the reCAPTCHA browser page.
  * Uses NATIVE Chrome launch (not puppeteer.launch) — same approach as cookie harvester.
@@ -297,40 +291,6 @@ async function _ensureRecaptchaPage(sessionCookies) {
             { timeout: 15000 }
         );
 
-        // Simulate human-like interactions to boost reCAPTCHA score
-        // Without these signals, Google gives a low score on headless/VPS environments
-        try {
-            // Random mouse movements
-            for (let i = 0; i < 5; i++) {
-                await page.mouse.move(
-                    100 + Math.random() * 800,
-                    100 + Math.random() * 500,
-                    { steps: 5 + Math.floor(Math.random() * 10) }
-                );
-                await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
-            }
-            // Scroll down and back up
-            await page.evaluate(() => {
-                window.scrollTo({ top: 300, behavior: 'smooth' });
-            });
-            await new Promise(r => setTimeout(r, 500));
-            await page.evaluate(() => {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            });
-            await new Promise(r => setTimeout(r, 500));
-            // Click on empty area
-            await page.mouse.click(400, 300);
-            await new Promise(r => setTimeout(r, 300));
-            console.log('[reCAPTCHA] ✅ Human interaction simulation complete');
-        } catch (e) {
-            console.warn('[reCAPTCHA] Interaction simulation failed (non-fatal):', e.message);
-        }
-
-        // Wait for reCAPTCHA SDK to process behavioral signals before first token
-        // Without this delay, the first token gets a low score → 403
-        console.log('[reCAPTCHA] ⏳ Warming up (5s wait for SDK to process signals)...');
-        await new Promise(r => setTimeout(r, 5000));
-
         _recaptchaPage = page;
         _recaptchaReady = true;
         console.log('[reCAPTCHA] ✅ Persistent page ready (SDK loaded)');
@@ -384,23 +344,6 @@ function _resetRecaptchaIdleTimer() {
  * @param {string} action - reCAPTCHA action name (IMAGE_GENERATION or VIDEO_GENERATION)
  */
 async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION') {
-    // Use mutex to serialize token generation across parallel jobs
-    return new Promise((resolve, reject) => {
-        _tokenMutexQueue = _tokenMutexQueue.then(async () => {
-            // Enforce minimum interval between token generations
-            const now = Date.now();
-            const elapsed = now - _lastTokenTime;
-            if (elapsed < TOKEN_MIN_INTERVAL) {
-                await new Promise(r => setTimeout(r, TOKEN_MIN_INTERVAL - elapsed));
-            }
-            const token = await _fetchRecaptchaTokenInner(sessionCookies, action);
-            _lastTokenTime = Date.now();
-            return token;
-        }).then(resolve).catch(reject);
-    });
-}
-
-async function _fetchRecaptchaTokenInner(sessionCookies, action = 'IMAGE_GENERATION') {
     if (!sessionCookies) {
         console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
         return '';
@@ -459,14 +402,6 @@ async function browserFetch(url, token, body) {
             }, url, token, JSON.stringify(body));
 
             console.log(`[BrowserFetch] Response status: ${result.status}`);
-
-            // If reCAPTCHA rejected (403), the Chrome session is "tainted"
-            // Close it so next request gets a fresh browser with clean score
-            if (result.status === 403 && result.body.includes('reCAPTCHA')) {
-                console.warn('[BrowserFetch] ⚠️ reCAPTCHA 403 — closing tainted browser session');
-                await _closeRecaptchaBrowser();
-            }
-
             return result;
         } catch (e) {
             console.warn(`[BrowserFetch] Chrome fetch failed: ${e.message}, falling back to Node.js fetch`);
@@ -578,7 +513,7 @@ async function uploadReferenceImage(token, projectId, imageBase64, mimeType = 'i
  * Caller provides batchId + sessionId to group multiple calls.
  * Returns array of { mediaId, fifeUrl, ... } (usually 1 item).
  */
-async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, referenceMediaIds, seed, recaptchaToken, batchId, sessionId, sessionCookies }) {
+async function batchGenerateImages(token, projectId, { prompt, modelName, aspectRatio, referenceMediaIds, seed, recaptchaToken, batchId, sessionId }) {
     // Build recaptcha context
     const recaptchaContext = {
         applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
@@ -632,16 +567,6 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         if (result.ok) break;
 
         console.log(`[FlowImage] Error response (${result.status}): ${result.body.substring(0, 300)}`);
-
-        // Retry on 403 reCAPTCHA: close tainted Chrome, get fresh token, rebuild body
-        if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
-            console.log(`[FlowImage] ⚠️ reCAPTCHA 403, retrying with fresh Chrome (${attempt + 1}/${MAX_RETRIES})...`);
-            const freshToken = await fetchRecaptchaToken(sessionCookies || '', 'IMAGE_GENERATION');
-            if (freshToken) {
-                body.clientContext.recaptchaContext.token = freshToken;
-            }
-            continue;
-        }
         // Only retry on 5xx server errors
         if (result.status >= 500 && attempt < MAX_RETRIES) {
             console.log(`[FlowImage] ⚠️ Server error ${result.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
@@ -854,13 +779,17 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 recaptchaToken,
                 batchId,
                 sessionId,
-                sessionCookies,
                 seed: Math.floor(Math.random() * 2147483647),
             });
             allResults.push(...result);
 
             // Clear the used token (matches Google Flow web behavior)
             await clearRecaptchaToken(recaptchaToken);
+
+            // Delay between generations to avoid reCAPTCHA rate limiting
+            if (i < count - 1) {
+                await new Promise(r => setTimeout(r, 3000));
+            }
         }
 
         const results = allResults;
@@ -883,6 +812,8 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 if (resolution !== '1k' && r.mediaId) {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
+                        // Delay to avoid reCAPTCHA rate limiting
+                        await new Promise(r => setTimeout(r, 3000));
                         const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies);
                         const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha);
                         await clearRecaptchaToken(upscaleRecaptcha);
@@ -1172,6 +1103,8 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         }
 
         // ─── Build request (from HAR capture) ───
+        // Delay before video token to avoid rate limiting after image batch
+        await new Promise(r => setTimeout(r, 3000));
         const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
         const batchId = uuidv4();
 
@@ -1221,15 +1154,6 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
             if (result.ok) break;
 
-            // Retry on 403 reCAPTCHA: close tainted Chrome, get fresh token
-            if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
-                console.log(`[FlowVideo] ⚠️ reCAPTCHA 403, retrying with fresh Chrome (${attempt + 1}/${MAX_RETRIES})...`);
-                const freshToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
-                if (freshToken) {
-                    body.clientContext.recaptchaContext.token = freshToken;
-                }
-                continue;
-            }
             if (result.status >= 500 && attempt < MAX_RETRIES) {
                 console.log(`[FlowVideo] ⚠️ Server error ${result.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
                 await new Promise(r => setTimeout(r, 3000));
