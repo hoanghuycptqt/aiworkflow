@@ -297,6 +297,35 @@ async function _ensureRecaptchaPage(sessionCookies) {
             { timeout: 15000 }
         );
 
+        // Simulate human-like interactions to boost reCAPTCHA score
+        // Without these signals, Google gives a low score on headless/VPS environments
+        try {
+            // Random mouse movements
+            for (let i = 0; i < 5; i++) {
+                await page.mouse.move(
+                    100 + Math.random() * 800,
+                    100 + Math.random() * 500,
+                    { steps: 5 + Math.floor(Math.random() * 10) }
+                );
+                await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+            }
+            // Scroll down and back up
+            await page.evaluate(() => {
+                window.scrollTo({ top: 300, behavior: 'smooth' });
+            });
+            await new Promise(r => setTimeout(r, 500));
+            await page.evaluate(() => {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+            await new Promise(r => setTimeout(r, 500));
+            // Click on empty area
+            await page.mouse.click(400, 300);
+            await new Promise(r => setTimeout(r, 300));
+            console.log('[reCAPTCHA] ✅ Human interaction simulation complete');
+        } catch (e) {
+            console.warn('[reCAPTCHA] Interaction simulation failed (non-fatal):', e.message);
+        }
+
         _recaptchaPage = page;
         _recaptchaReady = true;
         console.log('[reCAPTCHA] ✅ Persistent page ready (SDK loaded)');
