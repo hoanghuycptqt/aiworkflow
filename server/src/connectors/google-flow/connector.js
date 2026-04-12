@@ -209,8 +209,8 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
                 '--disable-software-rasterizer',
                 '--lang=en-US,en',
                 '--start-maximized',
-                // Route through Surfshark VPN via local SOCKS5 proxy
-                '--proxy-server=socks5://127.0.0.1:1080',
+                // Direct connection (no VPN) — uses VM's external IP
+                // '--proxy-server=socks5://127.0.0.1:1080',
             );
             if (!process.env.DISPLAY) {
                 process.env.DISPLAY = ':99';
