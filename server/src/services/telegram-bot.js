@@ -292,7 +292,7 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
             await bot.telegram.sendMessage(link.chatId, message, { parse_mode: 'Markdown' });
 
             // Send media files: photos inline, videos as native video
-            for (const media of mediaFiles.slice(0, 10)) { // max 10 files
+            for (const media of mediaFiles.slice(0, 50)) { // max 50 files per batch
                 try {
                     if (media.type === 'video') {
                         const dims = await getVideoDimensions(media.path);
