@@ -854,6 +854,13 @@ export class GoogleFlowImageConnector extends BaseConnector {
                         }
                     } catch (e) {
                         console.warn(`[FlowImage] ⚠️ Upscale to ${resolution.toUpperCase()} failed: ${e.message}, downloading original`);
+                        // If 403 reCAPTCHA, close Chrome and wait before continuing
+                        // This prevents all subsequent upscales/video from also failing
+                        if (e.message.includes('403') && e.message.includes('reCAPTCHA')) {
+                            console.log('[FlowImage] 🔄 reCAPTCHA 403 on upscale — closing Chrome, waiting 30s before next request...');
+                            await _closeRecaptchaBrowser();
+                            await new Promise(r => setTimeout(r, 30000));
+                        }
                     }
                 }
 
