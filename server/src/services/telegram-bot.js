@@ -10,7 +10,7 @@ import { prisma, io } from '../index.js';
 import { handleMessage, handlePhoto } from './telegram-ai.js';
 import { pendingInputRequests } from './google-login-agent.js';
 import { mkdir } from 'fs/promises';
-import { join, extname } from 'path';
+import { join, extname, resolve } from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { execFile } from 'child_process';
@@ -296,34 +296,23 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
             await bot.telegram.sendMessage(link.chatId, message, { parse_mode: 'Markdown' });
             console.log(`[Telegram] ✅ Text sent to chat ${link.chatId}`);
 
-            // Send photos as albums (max 10 per album via Telegram API)
-            for (let i = 0; i < photos.length; i += 10) {
-                const chunk = photos.slice(i, i + 10);
-                const mediaGroup = chunk.map(m => ({
-                    type: 'photo',
-                    media: { source: m.path },
-                }));
+            // Send photos individually (sendMediaGroup was unreliable with large files)
+            for (const media of photos) {
                 try {
-                    await bot.telegram.sendMediaGroup(link.chatId, mediaGroup);
-                    console.log(`[Telegram] ✅ Photo album sent (${chunk.length} photos)`);
-                } catch (albumErr) {
-                    console.warn(`[Telegram] ⚠️ Album failed: ${albumErr.message}, sending individually...`);
-                    // Fallback: send one by one
-                    for (const m of chunk) {
-                        try {
-                            await bot.telegram.sendPhoto(link.chatId, { source: m.path });
-                        } catch (e) {
-                            console.warn(`[Telegram] ⚠️ Photo failed (${m.path}): ${e.message}`);
-                        }
-                    }
+                    const absPath = resolve(media.path);
+                    await bot.telegram.sendPhoto(link.chatId, { source: absPath });
+                    console.log(`[Telegram] ✅ Photo sent: ${media.path}`);
+                } catch (photoErr) {
+                    console.warn(`[Telegram] ⚠️ Photo failed (${media.path}): ${photoErr.message}`);
                 }
             }
 
             // Send videos individually (videos can be large, sendMediaGroup has 50MB limit)
             for (const media of videos) {
                 try {
-                    const dims = await getVideoDimensions(media.path);
-                    await bot.telegram.sendVideo(link.chatId, { source: media.path }, {
+                    const absPath = resolve(media.path);
+                    const dims = await getVideoDimensions(absPath);
+                    await bot.telegram.sendVideo(link.chatId, { source: absPath }, {
                         supports_streaming: true,
                         ...(dims && { width: dims.width, height: dims.height }),
                     });
