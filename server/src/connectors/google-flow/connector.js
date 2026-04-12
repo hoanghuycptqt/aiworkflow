@@ -144,6 +144,12 @@ let _recaptchaInitPromise = null; // Prevents concurrent initializations
 let _recaptchaChromeProcess = null; // Native Chrome process
 const RECAPTCHA_DEBUG_PORT = 9339;  // Separate port from cookie harvester
 
+// Global mutex for reCAPTCHA token generation — prevents parallel jobs from
+// flooding the token endpoint and triggering rate limits
+let _tokenMutexQueue = Promise.resolve();
+let _lastTokenTime = 0;
+const TOKEN_MIN_INTERVAL = 3000; // Minimum 3s between token generations
+
 /**
  * Initialize (or reuse) the reCAPTCHA browser page.
  * Uses NATIVE Chrome launch (not puppeteer.launch) — same approach as cookie harvester.
@@ -344,6 +350,23 @@ function _resetRecaptchaIdleTimer() {
  * @param {string} action - reCAPTCHA action name (IMAGE_GENERATION or VIDEO_GENERATION)
  */
 async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION') {
+    // Use mutex to serialize token generation across parallel jobs
+    return new Promise((resolve, reject) => {
+        _tokenMutexQueue = _tokenMutexQueue.then(async () => {
+            // Enforce minimum interval between token generations
+            const now = Date.now();
+            const elapsed = now - _lastTokenTime;
+            if (elapsed < TOKEN_MIN_INTERVAL) {
+                await new Promise(r => setTimeout(r, TOKEN_MIN_INTERVAL - elapsed));
+            }
+            const token = await _fetchRecaptchaTokenInner(sessionCookies, action);
+            _lastTokenTime = Date.now();
+            return token;
+        }).then(resolve).catch(reject);
+    });
+}
+
+async function _fetchRecaptchaTokenInner(sessionCookies, action = 'IMAGE_GENERATION') {
     if (!sessionCookies) {
         console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
         return '';
@@ -785,11 +808,6 @@ export class GoogleFlowImageConnector extends BaseConnector {
 
             // Clear the used token (matches Google Flow web behavior)
             await clearRecaptchaToken(recaptchaToken);
-
-            // Delay between generations to avoid reCAPTCHA rate limiting
-            if (i < count - 1) {
-                await new Promise(r => setTimeout(r, 3000));
-            }
         }
 
         const results = allResults;
@@ -812,8 +830,6 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 if (resolution !== '1k' && r.mediaId) {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
-                        // Delay to avoid reCAPTCHA rate limiting
-                        await new Promise(r => setTimeout(r, 3000));
                         const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies);
                         const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha);
                         await clearRecaptchaToken(upscaleRecaptcha);
@@ -1103,8 +1119,6 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         }
 
         // ─── Build request (from HAR capture) ───
-        // Delay before video token to avoid rate limiting after image batch
-        await new Promise(r => setTimeout(r, 3000));
         const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION');
         const batchId = uuidv4();
 
