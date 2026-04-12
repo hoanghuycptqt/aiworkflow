@@ -288,35 +288,55 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
 
     for (const link of links) {
         try {
+            // Separate photos and videos
+            const photos = mediaFiles.filter(m => m.type !== 'video' && m.path).slice(0, 40);
+            const videos = mediaFiles.filter(m => m.type === 'video' && m.path).slice(0, 10);
+
             // Send text message first
             await bot.telegram.sendMessage(link.chatId, message, { parse_mode: 'Markdown' });
             console.log(`[Telegram] ✅ Text sent to chat ${link.chatId}`);
 
-            // Send media files: photos inline, videos as native video
-            for (const media of mediaFiles.slice(0, 50)) { // max 50 files per batch
+            // Send photos as albums (max 10 per album via Telegram API)
+            for (let i = 0; i < photos.length; i += 10) {
+                const chunk = photos.slice(i, i + 10);
+                const mediaGroup = chunk.map(m => ({
+                    type: 'photo',
+                    media: { source: m.path },
+                }));
                 try {
-                    if (media.type === 'video') {
-                        const dims = await getVideoDimensions(media.path);
-                        await bot.telegram.sendVideo(link.chatId, { source: media.path }, {
-                            supports_streaming: true,
-                            ...(dims && { width: dims.width, height: dims.height }),
-                        });
-                        console.log(`[Telegram] ✅ Video sent: ${media.path}`);
-                    } else {
-                        await bot.telegram.sendPhoto(link.chatId, { source: media.path });
-                        console.log(`[Telegram] ✅ Photo sent: ${media.path}`);
-                    }
-                } catch (mediaErr) {
-                    console.warn(`[Telegram] ⚠️ Media send failed (${media.path}): ${mediaErr.message}`);
-                    // If file too large, send URL instead
-                    if (media.url) {
-                        await bot.telegram.sendMessage(
-                            link.chatId,
-                            `📎 File quá lớn, tải tại: ${media.url}`
-                        );
+                    await bot.telegram.sendMediaGroup(link.chatId, mediaGroup);
+                    console.log(`[Telegram] ✅ Photo album sent (${chunk.length} photos)`);
+                } catch (albumErr) {
+                    console.warn(`[Telegram] ⚠️ Album failed: ${albumErr.message}, sending individually...`);
+                    // Fallback: send one by one
+                    for (const m of chunk) {
+                        try {
+                            await bot.telegram.sendPhoto(link.chatId, { source: m.path });
+                        } catch (e) {
+                            console.warn(`[Telegram] ⚠️ Photo failed (${m.path}): ${e.message}`);
+                        }
                     }
                 }
             }
+
+            // Send videos individually (videos can be large, sendMediaGroup has 50MB limit)
+            for (const media of videos) {
+                try {
+                    const dims = await getVideoDimensions(media.path);
+                    await bot.telegram.sendVideo(link.chatId, { source: media.path }, {
+                        supports_streaming: true,
+                        ...(dims && { width: dims.width, height: dims.height }),
+                    });
+                    console.log(`[Telegram] ✅ Video sent: ${media.path}`);
+                } catch (videoErr) {
+                    console.warn(`[Telegram] ⚠️ Video send failed (${media.path}): ${videoErr.message}`);
+                    if (media.url) {
+                        await bot.telegram.sendMessage(link.chatId, `📎 Video quá lớn, tải tại: ${media.url}`);
+                    }
+                }
+            }
+
+            console.log(`[Telegram] ✅ Batch complete: ${photos.length} photos + ${videos.length} videos`);
         } catch (err) {
             console.error(`[Telegram] Failed to notify chat ${link.chatId}:`, err.message);
         }
