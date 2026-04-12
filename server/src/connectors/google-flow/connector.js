@@ -191,6 +191,9 @@ async function _ensureRecaptchaPage(sessionCookies) {
                 '--disable-software-rasterizer',
                 '--lang=en-US,en',
                 '--start-maximized',
+                // Route through Surfshark VPN via local SOCKS5 proxy
+                // This changes Chrome's outgoing IP from GCP datacenter to Surfshark VPN
+                '--proxy-server=socks5://127.0.0.1:1080',
             );
             if (!process.env.DISPLAY) {
                 process.env.DISPLAY = ':99';
