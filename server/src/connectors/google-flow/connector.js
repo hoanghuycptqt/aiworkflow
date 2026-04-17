@@ -1269,7 +1269,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             console.log(`[FlowVideo] 🔄 Upscaling to 1080p...`);
             // Fetch fresh reCAPTCHA token for upscale (previous one may have expired during generation)
             const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
-            const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken);
+            const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken, instanceId);
             if (upsampleResult.upsampledMediaId) {
                 const upsampledMediaId = upsampleResult.upsampledMediaId;
                 console.log(`[FlowVideo] Upscale submitted: ${upsampledMediaId}`);
@@ -1285,7 +1285,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         // Fetch the actual video download URL (poll response doesn't contain it)
         let videoUrl = '';
         const sessionCookies = credentials?.metadata?.sessionCookies || '';
-        videoUrl = await this._fetchVideoDownloadUrl(token, projectId, downloadMediaId, sessionCookies);
+        videoUrl = await this._fetchVideoDownloadUrl(token, projectId, downloadMediaId, sessionCookies, instanceId);
 
         // Download video to job folder if available
         let videoPath = '';
@@ -1330,7 +1330,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
      * Upscale a completed video from 720p to 1080p.
      * POST /v1/video:batchAsyncGenerateVideoUpsampleVideo
      */
-    async _upscaleVideo(token, projectId, mediaId, aspectRatio, recaptchaToken = '') {
+    async _upscaleVideo(token, projectId, mediaId, aspectRatio, recaptchaToken = '', instanceId = 'default') {
         const url = `${API_BASE}/v1/video:batchAsyncGenerateVideoUpsampleVideo`;
         const sessionId = `;${Date.now()}`;
         const body = {
@@ -1357,7 +1357,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         };
 
         console.log(`[FlowVideo] Upscale request: POST ${url}`);
-        const result = await browserFetch(url, token, body);
+        const result = await browserFetch(url, token, body, instanceId);
 
         if (!result.ok) {
             console.error(`[FlowVideo] Upscale API error: ${result.status} - ${result.body.substring(0, 300)}`);
@@ -1435,17 +1435,52 @@ export class GoogleFlowVideoConnector extends BaseConnector {
      * The poll response only contains metadata, not a download URL.
      * Uses the tRPC redirect endpoint to get a signed GCS URL.
      */
-    async _fetchVideoDownloadUrl(token, projectId, mediaId, sessionCookies = '') {
-        // Strategy 1: tRPC redirect (needs Google session cookie, may fail)
+    async _fetchVideoDownloadUrl(token, projectId, mediaId, sessionCookies = '', instanceId = 'default') {
+        const tRPCUrl = `https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=${mediaId}`;
+
+        // Strategy 0: Use Puppeteer browser context (has session cookies pre-set, avoids cookie parsing issues)
+        const inst = _chromePool.get(instanceId);
+        if (inst?.page && inst?.browser?.isConnected() && inst?.ready) {
+            try {
+                console.log(`[FlowVideo] Trying tRPC via browser context (Chrome ${instanceId.substring(0, 8)})...`);
+                const result = await inst.page.evaluate(async (url) => {
+                    try {
+                        const res = await fetch(url, {
+                            credentials: 'include',
+                            redirect: 'follow',
+                        });
+                        // After redirects, res.url is the final destination (signed GCS URL)
+                        return { url: res.url, status: res.status, ok: res.ok };
+                    } catch (e) {
+                        return { error: e.message };
+                    }
+                }, tRPCUrl);
+
+                console.log(`[FlowVideo] Browser tRPC result: status=${result.status}, url=${(result.url || '').substring(0, 150)}`);
+
+                if (result.error) {
+                    console.log(`[FlowVideo] Browser tRPC fetch error: ${result.error}`);
+                } else if (result.url && (result.url.includes('storage.googleapis.com') || result.url.includes('.mp4') || result.url.includes('video'))) {
+                    console.log(`[FlowVideo] ✅ Got signed URL via browser tRPC`);
+                    return result.url;
+                }
+            } catch (e) {
+                console.log(`[FlowVideo] Browser tRPC error: ${e.message}`);
+            }
+        } else {
+            console.log(`[FlowVideo] No active browser for tRPC — skipping browser strategy`);
+        }
+
+        // Strategy 1: tRPC redirect via Node.js fetch (needs Google session cookie)
         try {
-            const redirectUrl = `https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=${mediaId}`;
             const cookieHeader = sessionCookies || '';
-            console.log(`[FlowVideo] Trying tRPC redirect (cookies: ${cookieHeader ? 'yes (' + cookieHeader.length + ' chars)' : 'none'})...`);
+            console.log(`[FlowVideo] Trying tRPC redirect via Node.js (cookies: ${cookieHeader ? 'yes (' + cookieHeader.length + ' chars)' : 'none'})...`);
             const tRPCHeaders = {
                 'Referer': 'https://labs.google/',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
             };
             if (cookieHeader) tRPCHeaders['Cookie'] = cookieHeader;
-            const res = await fetch(redirectUrl, {
+            const res = await fetch(tRPCUrl, {
                 redirect: 'manual',
                 headers: tRPCHeaders,
             });
@@ -1462,6 +1497,13 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                 console.log(`[FlowVideo] tRPC body: ${text.substring(0, 300)}`);
                 const match = text.match(/(https?:\/\/storage\.googleapis\.com\/[^"'\s]+)/);
                 if (match) return match[1];
+            }
+            // Log error body for non-redirect, non-ok responses (e.g. 400)
+            if (!res.ok && ![301, 302, 307, 308].includes(res.status)) {
+                try {
+                    const errBody = await res.text();
+                    console.log(`[FlowVideo] tRPC error body: ${errBody.substring(0, 300)}`);
+                } catch (_) {}
             }
         } catch (e) {
             console.log(`[FlowVideo] tRPC error: ${e.message}`);
