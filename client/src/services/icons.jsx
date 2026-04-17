@@ -14,7 +14,8 @@ import {
     Mail, MailCheck, AlertTriangle, Bot, Smartphone, Image,
     Loader2, ChevronRight, CircleX, CircleAlert, CirclePause,
     SkipForward, Monitor, ListOrdered, Sparkles, KeyRound,
-    Sun, Moon
+    Sun, Moon,
+    Flame, GanttChart, Waves, Activity, Cpu, Calendar
 } from 'lucide-react';
 
 // Map string names to Lucide components
@@ -97,6 +98,14 @@ const ICON_MAP = {
     // Theme
     'sun': Sun,
     'moon': Moon,
+
+    // Analytics
+    'flame': Flame,
+    'gantt-chart': GanttChart,
+    'waves': Waves,
+    'activity': Activity,
+    'cpu': Cpu,
+    'calendar': Calendar,
 };
 
 /**

@@ -279,4 +279,283 @@ router.put('/settings', async (req, res, next) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════
+// ─── Analytics Endpoints ─────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+
+// ─── Activity Heatmap (day-of-week × hour-of-day) ────────
+router.get('/analytics/heatmap', async (req, res, next) => {
+    try {
+        const days = Math.min(parseInt(req.query.days) || 30, 365);
+        const since = new Date(Date.now() - days * 86400000);
+
+        const executions = await prisma.workflowExecution.findMany({
+            where: { startedAt: { gte: since } },
+            select: { startedAt: true, status: true },
+        });
+
+        // Build 7×24 matrix (day 0=Sun … 6=Sat, hour 0–23)
+        const matrix = Array.from({ length: 7 }, () => Array(24).fill(0));
+        const statusMatrix = Array.from({ length: 7 }, () =>
+            Array.from({ length: 24 }, () => ({ completed: 0, failed: 0, total: 0 }))
+        );
+
+        for (const exec of executions) {
+            const d = new Date(exec.startedAt);
+            const day = d.getDay();
+            const hour = d.getHours();
+            matrix[day][hour]++;
+            statusMatrix[day][hour].total++;
+            if (exec.status === 'completed') statusMatrix[day][hour].completed++;
+            if (exec.status === 'failed') statusMatrix[day][hour].failed++;
+        }
+
+        res.json({
+            matrix,
+            statusMatrix,
+            totalExecutions: executions.length,
+            days,
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ─── Execution Timeline (Gantt data) ─────────────────────
+router.get('/analytics/timeline', async (req, res, next) => {
+    try {
+        const hoursBack = Math.min(parseInt(req.query.hours) || 24, 24 * 365);
+        const since = new Date(Date.now() - hoursBack * 3600000);
+        const batchId = req.query.batchId;
+
+        const where = { startedAt: { gte: since } };
+        if (batchId) where.jobBatchId = batchId;
+
+        const executions = await prisma.workflowExecution.findMany({
+            where,
+            orderBy: { startedAt: 'asc' },
+            take: 200,
+            select: {
+                id: true,
+                status: true,
+                startedAt: true,
+                completedAt: true,
+                jobId: true,
+                jobBatchId: true,
+                instanceIndex: true,
+                error: true,
+                workflow: { select: { name: true, user: { select: { name: true } } } },
+                nodeExecutions: {
+                    select: {
+                        id: true,
+                        nodeId: true,
+                        nodeType: true,
+                        status: true,
+                        startedAt: true,
+                        completedAt: true,
+                    },
+                    orderBy: { startedAt: 'asc' },
+                },
+            },
+        });
+
+        // Enrich with job names
+        const jobIds = [...new Set(executions.map(e => e.jobId).filter(Boolean))];
+        const jobs = jobIds.length > 0
+            ? await prisma.job.findMany({ where: { id: { in: jobIds } }, select: { id: true, name: true } })
+            : [];
+        const jobMap = new Map(jobs.map(j => [j.id, j.name]));
+
+        // Batch info
+        const batchIds = [...new Set(executions.map(e => e.jobBatchId).filter(Boolean))];
+        const batches = batchIds.length > 0
+            ? await prisma.jobBatch.findMany({
+                where: { id: { in: batchIds } },
+                select: { id: true, mode: true, concurrency: true, status: true, startedAt: true, completedAt: true },
+            })
+            : [];
+        const batchMap = new Map(batches.map(b => [b.id, b]));
+
+        res.json({
+            executions: executions.map(e => ({
+                id: e.id,
+                status: e.status,
+                startedAt: e.startedAt,
+                completedAt: e.completedAt || (e.status === 'running' ? new Date().toISOString() : e.startedAt),
+                jobName: e.jobId ? jobMap.get(e.jobId) || `Job ${e.instanceIndex + 1}` : `Exec ${e.instanceIndex + 1}`,
+                workflowName: e.workflow?.name || 'Unknown',
+                userName: e.workflow?.user?.name || 'Unknown',
+                batchId: e.jobBatchId,
+                error: e.error,
+                nodeExecutions: e.nodeExecutions,
+            })),
+            batches: batches.map(b => ({
+                id: b.id,
+                mode: b.mode,
+                concurrency: b.concurrency,
+                status: b.status,
+                startedAt: b.startedAt,
+                completedAt: b.completedAt,
+            })),
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ─── Connector Performance Stats ─────────────────────────
+router.get('/analytics/connector-stats', async (req, res, next) => {
+    try {
+        const days = Math.min(parseInt(req.query.days) || 30, 365);
+        const since = new Date(Date.now() - days * 86400000);
+
+        const nodeExecs = await prisma.nodeExecution.findMany({
+            where: { startedAt: { gte: since } },
+            select: {
+                nodeType: true,
+                status: true,
+                startedAt: true,
+                completedAt: true,
+            },
+        });
+
+        // Group by nodeType
+        const groups = {};
+        for (const ne of nodeExecs) {
+            if (!groups[ne.nodeType]) {
+                groups[ne.nodeType] = { durations: [], completed: 0, failed: 0, total: 0, dailyCounts: {} };
+            }
+            const g = groups[ne.nodeType];
+            g.total++;
+            if (ne.status === 'completed') g.completed++;
+            if (ne.status === 'failed') g.failed++;
+
+            if (ne.startedAt && ne.completedAt) {
+                const dur = new Date(ne.completedAt) - new Date(ne.startedAt);
+                if (dur >= 0) g.durations.push(dur);
+            }
+
+            // Daily trend data
+            if (ne.startedAt) {
+                const dayKey = new Date(ne.startedAt).toISOString().split('T')[0];
+                if (!g.dailyCounts[dayKey]) g.dailyCounts[dayKey] = { total: 0, completed: 0, failed: 0 };
+                g.dailyCounts[dayKey].total++;
+                if (ne.status === 'completed') g.dailyCounts[dayKey].completed++;
+                if (ne.status === 'failed') g.dailyCounts[dayKey].failed++;
+            }
+        }
+
+        // Compute percentiles
+        function percentile(arr, p) {
+            if (arr.length === 0) return 0;
+            const sorted = [...arr].sort((a, b) => a - b);
+            const idx = Math.ceil((p / 100) * sorted.length) - 1;
+            return sorted[Math.max(0, idx)];
+        }
+
+        const stats = Object.entries(groups).map(([nodeType, g]) => ({
+            nodeType,
+            total: g.total,
+            completed: g.completed,
+            failed: g.failed,
+            successRate: g.total > 0 ? Math.round((g.completed / g.total) * 100) : 0,
+            avgDuration: g.durations.length > 0 ? Math.round(g.durations.reduce((a, b) => a + b, 0) / g.durations.length) : 0,
+            p50Duration: percentile(g.durations, 50),
+            p95Duration: percentile(g.durations, 95),
+            p99Duration: percentile(g.durations, 99),
+            dailyTrend: Object.entries(g.dailyCounts)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .slice(-14) // last 14 days
+                .map(([date, counts]) => ({ date, ...counts })),
+        }));
+
+        // Sort by total runs descending
+        stats.sort((a, b) => b.total - a.total);
+
+        res.json({ stats, days });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ─── Concurrency Monitor ─────────────────────────────────
+router.get('/analytics/concurrency', async (req, res, next) => {
+    try {
+        const hours = Math.min(parseInt(req.query.hours) || 24, 24 * 365);
+        const since = new Date(Date.now() - hours * 3600000);
+
+        // Get all executions that were active during the time window
+        const executions = await prisma.workflowExecution.findMany({
+            where: {
+                OR: [
+                    { startedAt: { gte: since } },
+                    { completedAt: { gte: since } },
+                    { status: 'running' },
+                ],
+            },
+            select: { startedAt: true, completedAt: true, status: true },
+        });
+
+        // Sweep-line algorithm to compute concurrent count at each event
+        const events = [];
+        for (const exec of executions) {
+            if (!exec.startedAt) continue;
+            const start = new Date(exec.startedAt).getTime();
+            const end = exec.completedAt
+                ? new Date(exec.completedAt).getTime()
+                : Date.now(); // running jobs count as active until now
+            events.push({ time: start, delta: 1 });
+            events.push({ time: end, delta: -1 });
+        }
+        events.sort((a, b) => a.time - b.time || a.delta - b.delta);
+
+        // Build time series
+        let current = 0;
+        let peak = 0;
+        const series = [];
+        const sinceMs = since.getTime();
+
+        for (const evt of events) {
+            if (evt.time < sinceMs) {
+                current += evt.delta;
+                continue;
+            }
+            current += evt.delta;
+            if (current > peak) peak = current;
+            series.push({ time: evt.time, concurrent: current });
+        }
+
+        // Downsample to max ~200 points for chart rendering
+        let downsampled = series;
+        if (series.length > 200) {
+            const step = Math.ceil(series.length / 200);
+            downsampled = series.filter((_, i) => i % step === 0);
+            // Always include the last point
+            if (downsampled[downsampled.length - 1] !== series[series.length - 1]) {
+                downsampled.push(series[series.length - 1]);
+            }
+        }
+
+        // Current running count
+        const currentRunning = await prisma.workflowExecution.count({
+            where: { status: 'running' },
+        });
+
+        // Average computed from series
+        const avg = series.length > 0
+            ? (series.reduce((s, p) => s + p.concurrent, 0) / series.length).toFixed(1)
+            : '0';
+
+        res.json({
+            series: downsampled,
+            peak,
+            currentRunning,
+            average: parseFloat(avg),
+            hours,
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
 export default router;
