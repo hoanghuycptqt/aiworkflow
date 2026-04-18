@@ -283,38 +283,56 @@ router.put('/settings', async (req, res, next) => {
 // ─── Analytics Endpoints ─────────────────────────────────
 // ═══════════════════════════════════════════════════════════
 
-// ─── Activity Heatmap (day-of-week × hour-of-day) ────────
+// ─── Activity Heatmap (calendar dates × hours) ──────────
 router.get('/analytics/heatmap', async (req, res, next) => {
     try {
         const days = Math.min(parseInt(req.query.days) || 30, 365);
-        const since = new Date(Date.now() - days * 86400000);
+        const now = new Date();
+        const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days + 1);
 
         const executions = await prisma.workflowExecution.findMany({
             where: { startedAt: { gte: since } },
             select: { startedAt: true, status: true },
         });
 
-        // Build 7×24 matrix (day 0=Sun … 6=Sat, hour 0–23)
-        const matrix = Array.from({ length: 7 }, () => Array(24).fill(0));
-        const statusMatrix = Array.from({ length: 7 }, () =>
-            Array.from({ length: 24 }, () => ({ completed: 0, failed: 0, total: 0 }))
-        );
+        // Build a date-keyed map: "YYYY-MM-DD" → { hours: [24], statusHours: [24] }
+        const dateMap = new Map();
 
-        for (const exec of executions) {
-            const d = new Date(exec.startedAt);
-            const day = d.getDay();
-            const hour = d.getHours();
-            matrix[day][hour]++;
-            statusMatrix[day][hour].total++;
-            if (exec.status === 'completed') statusMatrix[day][hour].completed++;
-            if (exec.status === 'failed') statusMatrix[day][hour].failed++;
+        // Pre-populate all dates in range (so empty days still show)
+        for (let i = 0; i < days; i++) {
+            const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days + 1 + i);
+            const key = d.toISOString().split('T')[0];
+            dateMap.set(key, {
+                date: key,
+                hours: Array(24).fill(0),
+                statusHours: Array.from({ length: 24 }, () => ({ completed: 0, failed: 0, total: 0 })),
+            });
         }
 
+        // Fill in execution data
+        for (const exec of executions) {
+            const d = new Date(exec.startedAt);
+            const key = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString().split('T')[0];
+            const entry = dateMap.get(key);
+            if (!entry) continue; // outside range
+            const hour = d.getHours();
+            entry.hours[hour]++;
+            entry.statusHours[hour].total++;
+            if (exec.status === 'completed') entry.statusHours[hour].completed++;
+            if (exec.status === 'failed') entry.statusHours[hour].failed++;
+        }
+
+        // Convert to sorted array
+        const dateGrid = [...dateMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
         res.json({
-            matrix,
-            statusMatrix,
+            dateGrid,
             totalExecutions: executions.length,
             days,
+            dateRange: {
+                from: dateGrid[0]?.date,
+                to: dateGrid[dateGrid.length - 1]?.date,
+            },
         });
     } catch (err) {
         next(err);
