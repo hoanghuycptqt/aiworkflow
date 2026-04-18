@@ -38,13 +38,14 @@ export default function ActivityHeatmap() {
     const containerRef = useRef(null);
 
     useEffect(() => {
-        loadData();
+        loadData(days);
     }, [days]);
 
-    async function loadData() {
+    async function loadData(daysParam) {
         setLoading(true);
+        setData(null);
         try {
-            const result = await api.request(`/admin/analytics/heatmap?days=${days}`);
+            const result = await api.request(`/admin/analytics/heatmap?days=${daysParam}`);
             setData(result);
         } catch (err) {
             console.error('Heatmap error:', err);
