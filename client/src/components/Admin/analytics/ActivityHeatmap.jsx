@@ -10,15 +10,15 @@ const RANGES = [
     { label: '1 Year', value: 365 },
 ];
 
-// Color scale: transparent → low → medium → high
+// Color scale
 const COLORS = [
-    'rgba(99, 102, 241, 0.05)',   // 0 - almost invisible
-    'rgba(99, 102, 241, 0.15)',   // very low
-    'rgba(99, 102, 241, 0.30)',   // low
-    'rgba(99, 102, 241, 0.50)',   // medium-low
-    'rgba(99, 102, 241, 0.65)',   // medium
-    'rgba(99, 102, 241, 0.80)',   // high
-    'rgba(99, 102, 241, 0.95)',   // very high
+    'rgba(99, 102, 241, 0.06)',
+    'rgba(99, 102, 241, 0.20)',
+    'rgba(99, 102, 241, 0.35)',
+    'rgba(99, 102, 241, 0.50)',
+    'rgba(99, 102, 241, 0.65)',
+    'rgba(99, 102, 241, 0.80)',
+    'rgba(99, 102, 241, 0.95)',
 ];
 
 function getColor(value, max) {
@@ -28,13 +28,17 @@ function getColor(value, max) {
     return COLORS[idx];
 }
 
-function formatDateShort(date) {
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+function formatDateShort(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-function getDayLabel(date) {
-    return date.toLocaleDateString([], { weekday: 'short' });
+function getDayLabel(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString([], { weekday: 'short' });
 }
+
+const DAY_LABELS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function ActivityHeatmap() {
     const [data, setData] = useState(null);
@@ -60,193 +64,28 @@ export default function ActivityHeatmap() {
     }
 
     if (loading) return <div className="analytics-card analytics-loading"><div className="analytics-spinner" /></div>;
-    if (!data) return <div className="analytics-card analytics-error">Failed to load heatmap</div>;
-
-    const { dateGrid, totalExecutions, dateRange } = data;
-
-    // dateGrid: array of { date: "2026-04-17", hours: [count0, count1, ..., count23], statusHours: [...] }
-    if (!dateGrid || dateGrid.length === 0) {
+    if (!data || !data.dateGrid || data.dateGrid.length === 0) {
         return (
             <div className="analytics-card" ref={containerRef}>
-                <div className="analytics-card-header">
-                    <h3>
-                        <Icon name="calendar" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
-                        Activity Heatmap
-                    </h3>
-                    <div className="analytics-controls">
-                        <span className="analytics-total">0 executions</span>
-                        <div className="analytics-range-btns">
-                            {RANGES.map(r => (
-                                <button key={r.value}
-                                    className={`analytics-range-btn ${days === r.value ? 'active' : ''}`}
-                                    onClick={() => setDays(r.value)}>{r.label}</button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
+                <HeatmapHeader days={days} setDays={setDays} totalExecutions={0} />
                 <div className="analytics-empty">No executions in this time range</div>
             </div>
         );
     }
 
-    // Compute max for color scale
-    const allCounts = dateGrid.flatMap(d => d.hours);
-    const maxVal = Math.max(...allCounts, 1);
-
-    // Layout
-    const cellSize = days <= 14 ? 24 : days <= 30 ? 16 : days <= 90 ? 8 : 4;
-    const cellGap = days <= 14 ? 2 : days <= 30 ? 2 : 1;
-    const hourLabelWidth = 36;
-    const topLabelHeight = days <= 30 ? 50 : 30;
-    const numHours = 24;
-    const numDates = dateGrid.length;
-
-    // For large ranges, group by showing fewer hour rows
-    let hourStep = 1;
-    let displayHours = Array.from({ length: 24 }, (_, i) => i);
-    if (days > 90) {
-        // Show 6-hour blocks for very large ranges
-        hourStep = 6;
-        displayHours = [0, 6, 12, 18];
-    } else if (days > 30) {
-        // Show 3-hour blocks
-        hourStep = 3;
-        displayHours = [0, 3, 6, 9, 12, 15, 18, 21];
-    }
-
-    const numDisplayRows = displayHours.length;
-    const svgWidth = hourLabelWidth + numDates * (cellSize + cellGap) + 10;
-    const svgHeight = topLabelHeight + numDisplayRows * (cellSize + cellGap) + 10;
-
-    // Aggregate hours into blocks if needed
-    function getBlockValue(dateIdx, hourIdx) {
-        const d = dateGrid[dateIdx];
-        if (hourStep === 1) return d.hours[hourIdx];
-        let sum = 0;
-        for (let h = hourIdx; h < Math.min(hourIdx + hourStep, 24); h++) {
-            sum += d.hours[h];
-        }
-        return sum;
-    }
-
-    function getBlockStatus(dateIdx, hourIdx) {
-        const d = dateGrid[dateIdx];
-        if (hourStep === 1) return d.statusHours[hourIdx];
-        let completed = 0, failed = 0, total = 0;
-        for (let h = hourIdx; h < Math.min(hourIdx + hourStep, 24); h++) {
-            completed += d.statusHours[h].completed;
-            failed += d.statusHours[h].failed;
-            total += d.statusHours[h].total;
-        }
-        return { completed, failed, total };
-    }
-
-    // Compute max for the block view
-    const blockMax = hourStep === 1 ? maxVal : Math.max(
-        ...dateGrid.flatMap((d, di) => displayHours.map(h => getBlockValue(di, h))), 1
-    );
-
-    // Date labels on top — show every Nth date to avoid crowding
-    const dateLabelStep = days <= 14 ? 1 : days <= 30 ? 3 : days <= 90 ? 7 : 30;
-
-    function handleMouseEnter(dateIdx, hour, e) {
-        const d = dateGrid[dateIdx];
-        const status = getBlockStatus(dateIdx, hour);
-        const rect = e.target.getBoundingClientRect();
-        const containerRect = containerRef.current.getBoundingClientRect();
-        const dateObj = new Date(d.date + 'T00:00:00');
-        setTooltip({
-            x: rect.left - containerRect.left + cellSize / 2,
-            y: rect.top - containerRect.top - 8,
-            date: formatDateShort(dateObj),
-            dayName: getDayLabel(dateObj),
-            hour: hourStep === 1
-                ? `${String(hour).padStart(2, '0')}:00`
-                : `${String(hour).padStart(2, '0')}:00–${String(hour + hourStep).padStart(2, '0')}:00`,
-            total: status.total,
-            completed: status.completed,
-            failed: status.failed,
-        });
-    }
+    const { dateGrid, totalExecutions } = data;
+    const useContributionView = days > 30;
 
     return (
         <div className="analytics-card" ref={containerRef}>
-            <div className="analytics-card-header">
-                <h3>
-                    <Icon name="calendar" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
-                    Activity Heatmap
-                </h3>
-                <div className="analytics-controls">
-                    <span className="analytics-total">{totalExecutions.toLocaleString()} executions</span>
-                    <div className="analytics-range-btns">
-                        {RANGES.map(r => (
-                            <button
-                                key={r.value}
-                                className={`analytics-range-btn ${days === r.value ? 'active' : ''}`}
-                                onClick={() => setDays(r.value)}
-                            >
-                                {r.label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            </div>
-
+            <HeatmapHeader days={days} setDays={setDays} totalExecutions={totalExecutions} />
             <div className="heatmap-container">
-                <svg width={svgWidth} height={svgHeight} style={{ display: 'block' }}>
-                    {/* Date labels (top) — rotated for readability */}
-                    {dateGrid.map((d, di) => {
-                        if (di % dateLabelStep !== 0) return null;
-                        const x = hourLabelWidth + di * (cellSize + cellGap) + cellSize / 2;
-                        const dateObj = new Date(d.date + 'T00:00:00');
-                        return (
-                            <text
-                                key={`dl-${di}`}
-                                x={x}
-                                y={topLabelHeight - 6}
-                                textAnchor={days <= 30 ? 'end' : 'middle'}
-                                className="heatmap-label"
-                                transform={days <= 30 ? `rotate(-45, ${x}, ${topLabelHeight - 6})` : ''}
-                            >
-                                {days <= 30
-                                    ? `${dateObj.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
-                                    : `${dateObj.toLocaleDateString([], { month: 'short' })}`
-                                }
-                            </text>
-                        );
-                    })}
-
-                    {/* Hour labels (left) + Data cells */}
-                    {displayHours.map((hour, rowIdx) => (
-                        <g key={`row-${hour}`}>
-                            <text
-                                x={hourLabelWidth - 6}
-                                y={topLabelHeight + rowIdx * (cellSize + cellGap) + cellSize / 2 + 4}
-                                textAnchor="end"
-                                className="heatmap-label"
-                            >
-                                {String(hour).padStart(2, '0')}h
-                            </text>
-                            {dateGrid.map((d, di) => {
-                                const val = getBlockValue(di, hour);
-                                return (
-                                    <rect
-                                        key={`${di}-${hour}`}
-                                        x={hourLabelWidth + di * (cellSize + cellGap)}
-                                        y={topLabelHeight + rowIdx * (cellSize + cellGap)}
-                                        width={cellSize}
-                                        height={cellSize}
-                                        rx={cellSize > 8 ? 3 : 1}
-                                        fill={getColor(val, blockMax)}
-                                        className="heatmap-cell"
-                                        onMouseEnter={(e) => handleMouseEnter(di, hour, e)}
-                                        onMouseLeave={() => setTooltip(null)}
-                                    />
-                                );
-                            })}
-                        </g>
-                    ))}
-                </svg>
+                {useContributionView
+                    ? <ContributionGraph dateGrid={dateGrid} days={days} containerRef={containerRef}
+                        tooltip={tooltip} setTooltip={setTooltip} />
+                    : <HourlyGrid dateGrid={dateGrid} days={days} containerRef={containerRef}
+                        tooltip={tooltip} setTooltip={setTooltip} />
+                }
 
                 {/* Color legend */}
                 <div className="heatmap-legend">
@@ -259,12 +98,10 @@ export default function ActivityHeatmap() {
 
                 {/* Tooltip */}
                 {tooltip && (
-                    <div
-                        className="heatmap-tooltip"
-                        style={{ left: tooltip.x, top: tooltip.y, transform: 'translate(-50%, -100%)' }}
-                    >
-                        <strong>{tooltip.dayName}, {tooltip.date}</strong>
-                        <div className="heatmap-tooltip-time">{tooltip.hour}</div>
+                    <div className="heatmap-tooltip"
+                        style={{ left: tooltip.x, top: tooltip.y, transform: 'translate(-50%, -100%)' }}>
+                        <strong>{tooltip.title}</strong>
+                        {tooltip.subtitle && <div className="heatmap-tooltip-time">{tooltip.subtitle}</div>}
                         <div>{tooltip.total} job{tooltip.total !== 1 ? 's' : ''}</div>
                         {tooltip.total > 0 && (
                             <div className="heatmap-tooltip-stats">
@@ -276,5 +113,238 @@ export default function ActivityHeatmap() {
                 )}
             </div>
         </div>
+    );
+}
+
+// ─── Header ──────────────────────────────────
+function HeatmapHeader({ days, setDays, totalExecutions }) {
+    return (
+        <div className="analytics-card-header">
+            <h3>
+                <Icon name="calendar" size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                Activity Heatmap
+            </h3>
+            <div className="analytics-controls">
+                <span className="analytics-total">{totalExecutions.toLocaleString()} executions</span>
+                <div className="analytics-range-btns">
+                    {RANGES.map(r => (
+                        <button key={r.value}
+                            className={`analytics-range-btn ${days === r.value ? 'active' : ''}`}
+                            onClick={() => setDays(r.value)}>
+                            {r.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ─── Hourly Grid (7d / 14d / 30d) ───────────
+// X = dates, Y = hours (every hour)
+function HourlyGrid({ dateGrid, days, containerRef, tooltip, setTooltip }) {
+    const cellSize = days <= 7 ? 28 : days <= 14 ? 22 : 18;
+    const cellGap = 2;
+    const hourLabelWidth = 40;
+    const topLabelHeight = 54;
+    const numDates = dateGrid.length;
+
+    // Show every Nth hour label to reduce clutter
+    const hourStep = 1;
+    const displayHours = Array.from({ length: 24 }, (_, i) => i);
+    // Show every Nth date label
+    const dateLabelStep = days <= 7 ? 1 : days <= 14 ? 2 : 3;
+
+    const svgWidth = hourLabelWidth + numDates * (cellSize + cellGap) + 10;
+    const svgHeight = topLabelHeight + 24 * (cellSize + cellGap) + 10;
+
+    const allCounts = dateGrid.flatMap(d => d.hours);
+    const maxVal = Math.max(...allCounts, 1);
+
+    function showTooltip(di, h, e) {
+        const d = dateGrid[di];
+        const rect = e.target.getBoundingClientRect();
+        const cr = containerRef.current.getBoundingClientRect();
+        setTooltip({
+            x: rect.left - cr.left + cellSize / 2,
+            y: rect.top - cr.top - 8,
+            title: `${getDayLabel(d.date)}, ${formatDateShort(d.date)}`,
+            subtitle: `${String(h).padStart(2, '0')}:00`,
+            total: d.statusHours[h].total,
+            completed: d.statusHours[h].completed,
+            failed: d.statusHours[h].failed,
+        });
+    }
+
+    return (
+        <svg width={svgWidth} height={svgHeight} style={{ display: 'block' }}>
+            {/* Date labels (top, rotated) */}
+            {dateGrid.map((d, di) => {
+                if (di % dateLabelStep !== 0) return null;
+                const x = hourLabelWidth + di * (cellSize + cellGap) + cellSize / 2;
+                return (
+                    <text key={`dl-${di}`} x={x} y={topLabelHeight - 8}
+                        textAnchor="end" className="heatmap-label"
+                        transform={`rotate(-50, ${x}, ${topLabelHeight - 8})`}>
+                        {formatDateShort(d.date)}
+                    </text>
+                );
+            })}
+
+            {/* Hour labels (left) + cells */}
+            {displayHours.map((hour, rowIdx) => (
+                <g key={`row-${hour}`}>
+                    {hour % 2 === 0 && (
+                        <text x={hourLabelWidth - 6}
+                            y={topLabelHeight + rowIdx * (cellSize + cellGap) + cellSize / 2 + 4}
+                            textAnchor="end" className="heatmap-label">
+                            {String(hour).padStart(2, '0')}h
+                        </text>
+                    )}
+                    {dateGrid.map((d, di) => (
+                        <rect key={`${di}-${hour}`}
+                            x={hourLabelWidth + di * (cellSize + cellGap)}
+                            y={topLabelHeight + rowIdx * (cellSize + cellGap)}
+                            width={cellSize} height={cellSize} rx={3}
+                            fill={getColor(d.hours[hour], maxVal)}
+                            className="heatmap-cell"
+                            onMouseEnter={(e) => showTooltip(di, hour, e)}
+                            onMouseLeave={() => setTooltip(null)}
+                        />
+                    ))}
+                </g>
+            ))}
+        </svg>
+    );
+}
+
+// ─── GitHub-style Contribution Graph (90d / 1y) ───
+// X = weeks, Y = day-of-week (Mon–Sun, 7 rows)
+// Each cell = total jobs for that specific calendar date
+function ContributionGraph({ dateGrid, days, containerRef, tooltip, setTooltip }) {
+    const cellSize = days <= 90 ? 14 : 12;
+    const cellGap = 2;
+    const dayLabelWidth = 36;
+    const topLabelHeight = 24;
+
+    // Build week-based grid from dateGrid
+    // Each entry in dateGrid has a date string "YYYY-MM-DD"
+    // Group into weeks (columns), with day-of-week as rows
+    const weeks = [];
+    let currentWeek = [];
+
+    for (const entry of dateGrid) {
+        const d = new Date(entry.date + 'T00:00:00');
+        const dow = d.getDay(); // 0=Sun
+
+        // Start a new week on Sunday
+        if (dow === 0 && currentWeek.length > 0) {
+            weeks.push(currentWeek);
+            currentWeek = [];
+        }
+
+        // For partial first week, pad with nulls
+        if (weeks.length === 0 && currentWeek.length === 0 && dow > 0) {
+            for (let i = 0; i < dow; i++) {
+                currentWeek.push(null);
+            }
+        }
+
+        const dayTotal = entry.hours.reduce((a, b) => a + b, 0);
+        const dayCompleted = entry.statusHours.reduce((a, s) => a + s.completed, 0);
+        const dayFailed = entry.statusHours.reduce((a, s) => a + s.failed, 0);
+        currentWeek.push({
+            date: entry.date,
+            total: dayTotal,
+            completed: dayCompleted,
+            failed: dayFailed,
+        });
+    }
+    if (currentWeek.length > 0) {
+        // Pad last week
+        while (currentWeek.length < 7) currentWeek.push(null);
+        weeks.push(currentWeek);
+    }
+
+    const numWeeks = weeks.length;
+    const svgWidth = dayLabelWidth + numWeeks * (cellSize + cellGap) + 10;
+    const svgHeight = topLabelHeight + 7 * (cellSize + cellGap) + 10;
+
+    // Max for color scale
+    const allDayTotals = weeks.flat().filter(Boolean).map(d => d.total);
+    const maxVal = Math.max(...allDayTotals, 1);
+
+    // Month labels on top
+    const monthLabels = [];
+    let lastMonth = '';
+    for (let wi = 0; wi < numWeeks; wi++) {
+        // Use the first non-null day in the week to determine the month
+        const firstDay = weeks[wi].find(d => d !== null);
+        if (firstDay) {
+            const d = new Date(firstDay.date + 'T00:00:00');
+            const monthStr = d.toLocaleDateString([], { month: 'short' });
+            if (monthStr !== lastMonth) {
+                monthLabels.push({ weekIdx: wi, label: monthStr });
+                lastMonth = monthStr;
+            }
+        }
+    }
+
+    function showTooltip(weekIdx, dayIdx, cell, e) {
+        const rect = e.target.getBoundingClientRect();
+        const cr = containerRef.current.getBoundingClientRect();
+        setTooltip({
+            x: rect.left - cr.left + cellSize / 2,
+            y: rect.top - cr.top - 8,
+            title: `${getDayLabel(cell.date)}, ${formatDateShort(cell.date)}`,
+            subtitle: null,
+            total: cell.total,
+            completed: cell.completed,
+            failed: cell.failed,
+        });
+    }
+
+    return (
+        <svg width={svgWidth} height={svgHeight} style={{ display: 'block' }}>
+            {/* Month labels */}
+            {monthLabels.map((ml, i) => (
+                <text key={i}
+                    x={dayLabelWidth + ml.weekIdx * (cellSize + cellGap) + cellSize / 2}
+                    y={topLabelHeight - 6}
+                    textAnchor="start" className="heatmap-label">
+                    {ml.label}
+                </text>
+            ))}
+
+            {/* Day-of-week labels (left) */}
+            {[1, 3, 5].map(dow => (
+                <text key={dow}
+                    x={dayLabelWidth - 6}
+                    y={topLabelHeight + dow * (cellSize + cellGap) + cellSize / 2 + 4}
+                    textAnchor="end" className="heatmap-label">
+                    {DAY_LABELS_SHORT[dow]}
+                </text>
+            ))}
+
+            {/* Week columns × day rows */}
+            {weeks.map((week, wi) => (
+                <g key={`w-${wi}`}>
+                    {week.map((cell, di) => {
+                        if (!cell) return null;
+                        return (
+                            <rect key={`${wi}-${di}`}
+                                x={dayLabelWidth + wi * (cellSize + cellGap)}
+                                y={topLabelHeight + di * (cellSize + cellGap)}
+                                width={cellSize} height={cellSize} rx={2}
+                                fill={getColor(cell.total, maxVal)}
+                                className="heatmap-cell"
+                                onMouseEnter={(e) => showTooltip(wi, di, cell, e)}
+                                onMouseLeave={() => setTooltip(null)}
+                            />
+                        );
+                    })}
+                </g>
+            ))}
+        </svg>
     );
 }
