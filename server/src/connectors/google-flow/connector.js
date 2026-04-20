@@ -1472,9 +1472,16 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         }
 
         // Strategy 1: tRPC redirect via Node.js fetch (needs Google session cookie)
+        // IMPORTANT: Only send __Secure-next-auth.session-token — sending ALL Google cookies
+        // causes 400 Bad Request because the endpoint rejects the bloated cookie header.
         try {
-            const cookieHeader = sessionCookies || '';
-            console.log(`[FlowVideo] Trying tRPC redirect via Node.js (cookies: ${cookieHeader ? 'yes (' + cookieHeader.length + ' chars)' : 'none'})...`);
+            const fullCookies = sessionCookies || '';
+            // Extract only the session token cookie (the only one tRPC needs)
+            const sessionTokenCookie = fullCookies.split(';')
+                .map(c => c.trim())
+                .find(c => c.startsWith('__Secure-next-auth.session-token='));
+            const cookieHeader = sessionTokenCookie || fullCookies;
+            console.log(`[FlowVideo] Trying tRPC redirect via Node.js (cookie: ${sessionTokenCookie ? 'session-token only' : 'full'}, ${cookieHeader.length} chars)...`);
             const tRPCHeaders = {
                 'Referer': 'https://labs.google/',
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
