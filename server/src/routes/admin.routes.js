@@ -576,18 +576,5 @@ router.get('/analytics/concurrency', async (req, res, next) => {
     }
 });
 
-// ─── DEBUG: Test Telegram notification (remove after diagnosis) ───
-router.post('/test-telegram', async (req, res, next) => {
-    try {
-        const { notifyTelegramUser } = await import('../services/telegram-bot.js');
-        const userId = req.user.id;
-        console.log(`[DEBUG] Triggering test notification for userId=${userId}`);
-        await notifyTelegramUser(userId, '🧪 *Test notification*\nThis is a debug test from admin panel.');
-        res.json({ ok: true, message: 'Notification triggered, check PM2 logs' });
-    } catch (err) {
-        console.error('[DEBUG] Test notification error:', err);
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
 export default router;
+
