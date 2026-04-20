@@ -133,7 +133,7 @@ async function executeViaUI(cookies, { prompt, model, customGptId, imagePaths })
 
         console.log('[ChatGPTNote] Navigating to', targetUrl);
         await page.goto(targetUrl, {
-            waitUntil: 'networkidle2',
+            waitUntil: 'domcontentloaded',
             timeout: 60000,
         });
 
