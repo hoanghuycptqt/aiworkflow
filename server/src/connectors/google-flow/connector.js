@@ -137,16 +137,40 @@ const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
 const RECAPTCHA_PAGE_IDLE_TIMEOUT = 10 * 60 * 1000; // 10 min idle → close browser
 const RECAPTCHA_BASE_PORT = 9339;  // Base port for Chrome debug
 
-// Chrome instance pool — each job gets its own Chrome instance
-// Key: instanceId (string), Value: { page, browser, chromeProcess, ready, idleTimer, initPromise, port, profileDir }
+// Chrome instance pool — 1 persistent profile per Google account (keyed by email)
+// Key: instanceId (string, derived from email), Value: { page, browser, chromeProcess, ready, idleTimer, initPromise, port, profileDir }
 const _chromePool = new Map();
 let _nextPortOffset = 0;
+
+/**
+ * Derive a stable Chrome instance ID from Google account email.
+ * Same email → same instanceId → same profile directory → profile reuse.
+ * This prevents creating new Chrome profiles per job (which caused disk bloat
+ * and low reCAPTCHA trust scores from fresh profiles).
+ */
+function getAccountInstanceId(credentials) {
+    // Handle both parsed and stringified metadata
+    let meta = credentials?.metadata;
+    if (typeof meta === 'string') {
+        try { meta = JSON.parse(meta); } catch { meta = {}; }
+    }
+    const email = meta?.userEmail;
+    if (email) {
+        // Sanitize email to be filesystem-safe: minababy17012004@gmail.com → minababy17012004_gmail_com
+        return email.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+    }
+    // Fallback: static 'default' (still better than UUID — reuses 1 profile)
+    console.warn('[reCAPTCHA] ⚠️ No userEmail in credentials.metadata — using default profile');
+    return 'default';
+}
 
 /**
  * Get or create a Chrome instance entry in the pool.
  */
 function _getOrCreateInstance(instanceId = 'default') {
     if (!_chromePool.has(instanceId)) {
+        const profileDir = join(process.cwd(), 'uploads', `.recaptcha-profile-${instanceId}`);
+        console.log(`[reCAPTCHA] 📁 Creating pool entry: account=${instanceId}, profileDir=${profileDir}`);
         _chromePool.set(instanceId, {
             page: null,
             browser: null,
@@ -155,8 +179,10 @@ function _getOrCreateInstance(instanceId = 'default') {
             idleTimer: null,
             initPromise: null,
             port: RECAPTCHA_BASE_PORT + (_nextPortOffset++),
-            profileDir: join(process.cwd(), 'uploads', `.recaptcha-profile-${instanceId.substring(0, 8)}`),
+            profileDir,
         });
+    } else {
+        console.log(`[reCAPTCHA] ♻️ Reusing existing pool entry: account=${instanceId}`);
     }
     return _chromePool.get(instanceId);
 }
@@ -801,10 +827,10 @@ export class GoogleFlowImageConnector extends BaseConnector {
         const sessionCookies = credentials.metadata?.sessionCookies || '';
         const batchId = uuidv4();
         const sessionId = `;${Date.now()}`;
-        const instanceId = context.executionId || uuidv4(); // Unique Chrome per job
+        const instanceId = getAccountInstanceId(credentials); // 1 persistent profile per Google account
         const allResults = [];
 
-        console.log(`[FlowImage] Starting batch of ${count} image(s), batchId=${batchId}, chrome=${instanceId.substring(0, 8)}`);
+        console.log(`[FlowImage] Starting batch of ${count} image(s), batchId=${batchId}, account=${instanceId}`);
 
         for (let i = 0; i < count; i++) {
             // Fresh reCAPTCHA token for each API call
@@ -917,10 +943,10 @@ export class GoogleFlowImageConnector extends BaseConnector {
             } catch (_) { }
         }
 
-        // Close Chrome after image batch completes
+        // Close Chrome process after image batch completes (profile directory preserved for reuse)
         await _closeRecaptchaBrowser(instanceId);
         _chromePool.delete(instanceId);
-        console.log(`[FlowImage] 🧹 Chrome ${instanceId.substring(0, 8)} closed after batch`);
+        console.log(`[FlowImage] 🧹 Chrome closed for account=${instanceId} (profile preserved on disk)`);
 
         return {
             text: prompt,
@@ -1100,7 +1126,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         const videoModelKey = VIDEO_MODELS[modelKey] || 'veo_3_1_i2v_s_fast_portrait_ultra_relaxed';
         const aspectRatio = VIDEO_ASPECT_RATIO_MAP[config.aspectRatio || '9:16'] || 'VIDEO_ASPECT_RATIO_PORTRAIT';
         const sessionId = `;${Date.now()}`;
-        const instanceId = context.executionId || uuidv4(); // Unique Chrome per job
+        const instanceId = getAccountInstanceId(credentials); // 1 persistent profile per Google account
 
         // ─── Get start frame from upstream Flow Image ───
         let startFrameMediaId = null;
@@ -1307,10 +1333,10 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             }
         }
 
-        // Close reCAPTCHA browser after batch completes
+        // Close Chrome process after video batch completes (profile directory preserved for reuse)
         await _closeRecaptchaBrowser(instanceId);
         _chromePool.delete(instanceId);
-        console.log(`[FlowVideo] 🧹 Chrome ${instanceId.substring(0, 8)} closed after batch`);
+        console.log(`[FlowVideo] 🧹 Chrome closed for account=${instanceId} (profile preserved on disk)`);
 
         return {
             text: prompt,
