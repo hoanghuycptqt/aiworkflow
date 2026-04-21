@@ -4,10 +4,114 @@
  */
 
 import { Router } from 'express';
+import { execSync } from 'child_process';
+import os from 'os';
 import { prisma } from '../index.js';
 import { hashPassword } from '../services/auth.service.js';
 
 const router = Router();
+
+// ─── System Info (Disk, RAM, CPU) ────────────────────────
+router.get('/system-info', async (req, res, next) => {
+    try {
+        // ── Disk usage via df ──
+        let disk = { total: 0, used: 0, free: 0, percent: 0 };
+        try {
+            const dfOutput = execSync('df -k / | tail -1', { encoding: 'utf8', timeout: 5000 });
+            const parts = dfOutput.trim().split(/\s+/);
+            // df -k output: Filesystem 1K-blocks Used Available Use% Mounted
+            if (parts.length >= 5) {
+                disk.total = parseInt(parts[1]) * 1024;
+                disk.used = parseInt(parts[2]) * 1024;
+                disk.free = parseInt(parts[3]) * 1024;
+                disk.percent = parseInt(parts[4]); // e.g. "42%"
+            }
+        } catch (e) {
+            console.warn('[SystemInfo] df failed:', e.message);
+        }
+
+        // ── Disk breakdown via du ──
+        const breakdown = [];
+        const duTargets = [
+            { path: 'uploads/jobs', label: 'Job Files' },
+            { path: 'uploads/user-uploads', label: 'User Uploads' },
+            { path: 'prisma/dev.db', label: 'Database', isFile: true },
+            { path: 'node_modules', label: 'Node Modules' },
+        ];
+
+        // Find reCAPTCHA profiles dynamically
+        try {
+            const profileDirs = execSync('ls -d uploads/.recaptcha-profile-* 2>/dev/null || true', {
+                encoding: 'utf8', timeout: 5000, cwd: process.cwd(),
+            }).trim();
+            if (profileDirs) {
+                duTargets.push({ path: profileDirs.split('\n').join(' '), label: 'Chrome Profiles', isGlob: true });
+            }
+        } catch { /* no profiles */ }
+
+        // Google login profiles
+        try {
+            const googleProfiles = execSync('ls -d uploads/.google-profiles 2>/dev/null || true', {
+                encoding: 'utf8', timeout: 5000, cwd: process.cwd(),
+            }).trim();
+            if (googleProfiles) {
+                duTargets.push({ path: 'uploads/.google-profiles', label: 'Google Login Profiles' });
+            }
+        } catch { /* ok */ }
+
+        // PM2 logs
+        try {
+            const logDir = process.env.PM2_LOG_DIR || '/opt/vcw/logs';
+            duTargets.push({ path: logDir, label: 'PM2 Logs', isAbsolute: true });
+        } catch { /* ok */ }
+
+        for (const target of duTargets) {
+            try {
+                let cmd;
+                if (target.isFile) {
+                    cmd = `stat -c '%s' ${target.path} 2>/dev/null || stat -f '%z' ${target.path} 2>/dev/null || echo 0`;
+                } else if (target.isGlob || target.isAbsolute) {
+                    cmd = `du -sb ${target.path} 2>/dev/null | awk '{s+=$1} END {print s+0}'`;
+                } else {
+                    cmd = `du -sb ${target.path} 2>/dev/null | tail -1 | awk '{print $1}'`;
+                }
+                const cwd = target.isAbsolute ? '/' : process.cwd();
+                const size = parseInt(execSync(cmd, { encoding: 'utf8', timeout: 10000, cwd }).trim()) || 0;
+                if (size > 0) {
+                    breakdown.push({ label: target.label, path: target.path, size });
+                }
+            } catch { /* skip */ }
+        }
+
+        // Sort breakdown by size descending
+        breakdown.sort((a, b) => b.size - a.size);
+
+        // ── RAM ──
+        const ram = {
+            total: os.totalmem(),
+            free: os.freemem(),
+            used: os.totalmem() - os.freemem(),
+            percent: Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100),
+        };
+
+        // ── CPU ──
+        const loadAvg = os.loadavg();
+        const cpu = {
+            cores: os.cpus().length,
+            load1m: loadAvg[0],
+            load5m: loadAvg[1],
+            load15m: loadAvg[2],
+            percent: Math.min(Math.round((loadAvg[0] / os.cpus().length) * 100), 100),
+        };
+
+        // ── Uptime ──
+        const uptime = os.uptime();
+
+        res.json({ disk, breakdown, ram, cpu, uptime });
+    } catch (err) {
+        next(err);
+    }
+});
 
 // ─── Dashboard Stats ─────────────────────────────────────
 router.get('/dashboard', async (req, res, next) => {

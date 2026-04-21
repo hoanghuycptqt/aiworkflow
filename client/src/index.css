@@ -1795,6 +1795,177 @@ body {
   font-size: 13px;
 }
 
+/* ─── System Monitor ─────── */
+.system-info-card {
+  margin-bottom: 20px;
+}
+
+.system-info-grid {
+  display: grid;
+  grid-template-columns: 180px 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.system-gauge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.gauge-ring {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+.gauge-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.gauge-bg {
+  fill: none;
+  stroke: var(--border-primary);
+  stroke-width: 8;
+}
+
+.gauge-fill {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.8s ease;
+}
+
+.gauge-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.gauge-value {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.gauge-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.gauge-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.system-bars-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.system-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.system-bar-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.system-bar-header span:first-child {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.system-bar-track {
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.system-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.8s ease;
+  min-width: 2px;
+}
+
+.system-breakdown-card {
+  padding-top: 4px;
+}
+
+.breakdown-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.breakdown-row:last-child {
+  margin-bottom: 0;
+}
+
+.breakdown-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.breakdown-color {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.breakdown-label {
+  flex: 1;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakdown-size {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.breakdown-bar-track {
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.breakdown-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s ease;
+  min-width: 2px;
+}
+
 /* ================================ */
 /* User Management                  */
 /* ================================ */
@@ -2498,6 +2669,25 @@ body {
   .admin-grid-2 {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  .system-info-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .system-gauge-card {
+    flex-direction: row;
+    gap: 16px;
+  }
+
+  .gauge-ring {
+    width: 80px;
+    height: 80px;
+  }
+
+  .gauge-value {
+    font-size: 18px;
   }
 
   .chart-container {
