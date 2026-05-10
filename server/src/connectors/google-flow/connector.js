@@ -254,6 +254,13 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
                     defaultViewport: null,
                 });
                 console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Reusing existing Chrome`);
+
+                // Close all existing pages (stale tabs from previous session)
+                const existingPages = await browser.pages();
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Closing ${existingPages.length} stale page(s)`);
+                for (const p of existingPages) {
+                    try { await p.close(); } catch { /* ok */ }
+                }
             }
         } catch { /* not running, will launch */ }
 
@@ -303,7 +310,7 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
         const page = await inst.browser.newPage();
 
         // Parse and set session cookies
-        const cookieParts = sessionCookies.split(';').map(c => c.trim()).filter(Boolean);
+        const cookieParts = sessionCookies ? sessionCookies.split(';').map(c => c.trim()).filter(Boolean) : [];
         const validCookies = [];
         for (const part of cookieParts) {
             const eqIdx = part.indexOf('=');
@@ -314,22 +321,34 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
             validCookies.push({ name, value });
         }
 
-        if (validCookies.length === 0) {
-            throw new Error('No valid cookies parsed from session cookies');
+        if (validCookies.length > 0) {
+            const cookiesForPuppeteer = validCookies.flatMap(c => [
+                { name: c.name, value: c.value, url: 'https://labs.google' },
+                { name: c.name, value: c.value, url: 'https://www.google.com' },
+            ]);
+            await page.setCookie(...cookiesForPuppeteer);
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Set ${validCookies.length} cookies`);
+        } else {
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] No cookies provided — relying on Chrome profile`);
         }
-
-        const cookiesForPuppeteer = validCookies.flatMap(c => [
-            { name: c.name, value: c.value, url: 'https://labs.google' },
-            { name: c.name, value: c.value, url: 'https://www.google.com' },
-        ]);
-        await page.setCookie(...cookiesForPuppeteer);
-        console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Set ${validCookies.length} cookies`);
 
         // Navigate to Flow page (loads reCAPTCHA Enterprise SDK)
         await page.goto('https://labs.google/fx/tools/flow/', {
             waitUntil: 'networkidle2',
             timeout: 30000,
         });
+
+        // Check if redirected to login page (session expired)
+        const currentUrl = page.url();
+        if (currentUrl.includes('accounts.google.com') || currentUrl.includes('/signin')) {
+            inst.page = page;
+            inst.ready = false;
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ⚠️ Google login required — session expired`);
+            throw new Error(
+                '🔐 Google session expired — Chrome profile needs re-login.\n' +
+                'Please login manually in the Chrome window on VPS.'
+            );
+        }
 
         // Wait for grecaptcha.enterprise to be available
         await page.waitForFunction(
@@ -363,7 +382,15 @@ async function _closeRecaptchaBrowser(instanceId = 'default') {
         inst.idleTimer = null;
     }
     if (inst.browser) {
-        try { await inst.browser.close(); } catch { /* ok */ }
+        try {
+            if (inst.chromeProcess) {
+                // We own this Chrome process — close everything
+                await inst.browser.close();
+            } else {
+                // We connected to existing Chrome — just disconnect, don't kill it
+                inst.browser.disconnect();
+            }
+        } catch { /* ok */ }
     }
     if (inst.chromeProcess) {
         try { inst.chromeProcess.kill(); } catch { /* ok */ }
@@ -943,10 +970,9 @@ export class GoogleFlowImageConnector extends BaseConnector {
             } catch (_) { }
         }
 
-        // Close Chrome process after image batch completes (profile directory preserved for reuse)
-        await _closeRecaptchaBrowser(instanceId);
-        _chromePool.delete(instanceId);
-        console.log(`[FlowImage] 🧹 Chrome closed for account=${instanceId} (profile preserved on disk)`);
+        // Keep Chrome alive for reCAPTCHA trust score accumulation — idle timer will auto-close after 10 min
+        _resetRecaptchaIdleTimer(instanceId);
+        console.log(`[FlowImage] ♻️ Chrome kept alive for account=${instanceId} (idle timer will auto-close)`);
 
         return {
             text: prompt,
@@ -1333,10 +1359,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             }
         }
 
-        // Close Chrome process after video batch completes (profile directory preserved for reuse)
-        await _closeRecaptchaBrowser(instanceId);
-        _chromePool.delete(instanceId);
-        console.log(`[FlowVideo] 🧹 Chrome closed for account=${instanceId} (profile preserved on disk)`);
+        // Keep Chrome alive for reCAPTCHA trust score accumulation — idle timer will auto-close after 10 min
+        _resetRecaptchaIdleTimer(instanceId);
+        console.log(`[FlowVideo] ♻️ Chrome kept alive for account=${instanceId} (idle timer will auto-close)`);
 
         return {
             text: prompt,
