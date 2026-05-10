@@ -309,27 +309,39 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
 
         const page = await inst.browser.newPage();
 
-        // Parse and set session cookies
-        const cookieParts = sessionCookies ? sessionCookies.split(';').map(c => c.trim()).filter(Boolean) : [];
-        const validCookies = [];
-        for (const part of cookieParts) {
-            const eqIdx = part.indexOf('=');
-            if (eqIdx <= 0) continue;
-            const name = part.substring(0, eqIdx).trim();
-            const value = part.substring(eqIdx + 1).trim();
-            if (!name) continue;
-            validCookies.push({ name, value });
-        }
+        // Check if Chrome profile already has Google login cookies on disk
+        // If it does, SKIP setCookie — profile cookies are on correct domain (.google.com)
+        // setCookie with url:'https://labs.google' creates cookies on wrong domain, which
+        // causes reCAPTCHA cookie inconsistency → low trust score → 403
+        const { existsSync } = await import('fs');
+        const profileCookiesPath = join(inst.profileDir, 'Default', 'Cookies');
+        const profileHasCookies = existsSync(profileCookiesPath);
 
-        if (validCookies.length > 0) {
-            const cookiesForPuppeteer = validCookies.flatMap(c => [
-                { name: c.name, value: c.value, url: 'https://labs.google' },
-                { name: c.name, value: c.value, url: 'https://www.google.com' },
-            ]);
-            await page.setCookie(...cookiesForPuppeteer);
-            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Set ${validCookies.length} cookies`);
+        if (profileHasCookies) {
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Chrome profile has cookies on disk — skipping setCookie to preserve domain integrity`);
         } else {
-            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] No cookies provided — relying on Chrome profile`);
+            // Fresh profile — need to set cookies from DB
+            const cookieParts = sessionCookies ? sessionCookies.split(';').map(c => c.trim()).filter(Boolean) : [];
+            const validCookies = [];
+            for (const part of cookieParts) {
+                const eqIdx = part.indexOf('=');
+                if (eqIdx <= 0) continue;
+                const name = part.substring(0, eqIdx).trim();
+                const value = part.substring(eqIdx + 1).trim();
+                if (!name) continue;
+                validCookies.push({ name, value });
+            }
+
+            if (validCookies.length > 0) {
+                const cookiesForPuppeteer = validCookies.flatMap(c => [
+                    { name: c.name, value: c.value, url: 'https://labs.google' },
+                    { name: c.name, value: c.value, url: 'https://www.google.com' },
+                ]);
+                await page.setCookie(...cookiesForPuppeteer);
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Set ${validCookies.length} cookies (fresh profile)`);
+            } else {
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] No cookies available — reCAPTCHA may have low trust score`);
+            }
         }
 
         // Navigate to Flow page (loads reCAPTCHA Enterprise SDK)
@@ -423,8 +435,7 @@ function _resetRecaptchaIdleTimer(instanceId = 'default') {
  */
 async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
     if (!sessionCookies) {
-        console.warn('[reCAPTCHA] No session cookies — cannot fetch token');
-        return '';
+        console.log('[reCAPTCHA] No session cookies — will rely on Chrome profile for auth');
     }
 
     try {
