@@ -353,13 +353,58 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
         // Check if redirected to login page (session expired)
         const currentUrl = page.url();
         if (currentUrl.includes('accounts.google.com') || currentUrl.includes('/signin')) {
-            inst.page = page;
-            inst.ready = false;
-            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ⚠️ Google login required — session expired`);
-            throw new Error(
-                '🔐 Google session expired — Chrome profile needs re-login.\n' +
-                'Please login manually in the Chrome window on VPS.'
-            );
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ⚠️ Profile cookies expired — attempting recovery with DB cookies...`);
+
+            // Delete stale profile cookies so next launch uses fresh ones
+            const { unlink } = await import('fs/promises');
+            try { await unlink(profileCookiesPath); } catch { /* ok if missing */ }
+            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] 🗑️ Deleted stale profile Cookies DB`);
+
+            // Inject fresh cookies from CookieHarvester DB
+            const cookieParts = sessionCookies ? sessionCookies.split(';').map(c => c.trim()).filter(Boolean) : [];
+            const freshCookies = [];
+            for (const part of cookieParts) {
+                const eqIdx = part.indexOf('=');
+                if (eqIdx <= 0) continue;
+                const name = part.substring(0, eqIdx).trim();
+                const value = part.substring(eqIdx + 1).trim();
+                if (!name) continue;
+                freshCookies.push({ name, value });
+            }
+
+            if (freshCookies.length > 0) {
+                const cookiesForPuppeteer = freshCookies.flatMap(c => [
+                    { name: c.name, value: c.value, url: 'https://labs.google' },
+                    { name: c.name, value: c.value, url: 'https://www.google.com' },
+                ]);
+                await page.setCookie(...cookiesForPuppeteer);
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] 🔄 Set ${freshCookies.length} fresh cookies from DB`);
+
+                // Retry navigation with fresh cookies
+                await page.goto('https://labs.google/fx/tools/flow/', {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000,
+                });
+
+                // Check again after retry
+                const retryUrl = page.url();
+                if (retryUrl.includes('accounts.google.com') || retryUrl.includes('/signin')) {
+                    inst.page = page;
+                    inst.ready = false;
+                    throw new Error(
+                        '🔐 Google session expired — both profile and DB cookies are stale.\n' +
+                        'CookieHarvester may need to refresh. Please login manually in Chrome on VPS.'
+                    );
+                }
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Recovery successful with DB cookies`);
+            } else {
+                inst.page = page;
+                inst.ready = false;
+                throw new Error(
+                    '🔐 Google session expired — no DB cookies available for recovery.\n' +
+                    'Please login manually in the Chrome window on VPS.'
+                );
+            }
         }
 
         // Wait for grecaptcha.enterprise to be available
