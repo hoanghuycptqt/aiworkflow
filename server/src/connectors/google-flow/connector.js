@@ -266,16 +266,47 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
 
         if (!browser) {
             const { spawn } = await import('child_process');
+
+            // Remove stale SingletonLock that prevents Chrome from starting after a crash
+            const { existsSync: lockExists } = await import('fs');
+            const lockPath = join(inst.profileDir, 'SingletonLock');
+            const lockSocketPath = join(inst.profileDir, 'SingletonSocket');
+            const lockCookiePath = join(inst.profileDir, 'SingletonCookie');
+            for (const lp of [lockPath, lockSocketPath, lockCookiePath]) {
+                if (lockExists(lp)) {
+                    try { await unlink(lp); console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] 🗑️ Removed stale ${lp.split('/').pop()}`); } catch { /* ok */ }
+                }
+            }
+
+            // Launch Chrome with stderr captured for diagnostics
+            let chromeStderr = '';
             inst.chromeProcess = spawn(chromePath, args, {
-                stdio: 'ignore',
+                stdio: ['ignore', 'ignore', 'pipe'],  // capture stderr
                 detached: true,
                 env: { ...process.env },
             });
+            inst.chromeProcess.stderr.on('data', (chunk) => {
+                chromeStderr += chunk.toString();
+            });
+            let chromeExited = false;
+            let chromeExitCode = null;
+            inst.chromeProcess.on('exit', (code) => {
+                chromeExited = true;
+                chromeExitCode = code;
+            });
             inst.chromeProcess.unref();
 
-            // Wait for Chrome to be ready
+            // Wait for Chrome to be ready (30 attempts × 500ms = 15s)
             for (let attempt = 0; attempt < 30; attempt++) {
                 await new Promise(r => setTimeout(r, 500));
+
+                // Early exit detection — Chrome crashed immediately
+                if (chromeExited) {
+                    console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] ❌ Chrome exited early (code=${chromeExitCode})`);
+                    if (chromeStderr) console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Chrome stderr: ${chromeStderr.substring(0, 500)}`);
+                    break;
+                }
+
                 try {
                     const res = await fetch(`http://127.0.0.1:${inst.port}/json/version`);
                     if (res.ok) {
@@ -289,12 +320,53 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
                 } catch { /* not ready yet */ }
             }
 
-            if (!browser) {
-                if (inst.chromeProcess) inst.chromeProcess.kill();
-                throw new Error('Chrome failed to start for reCAPTCHA');
+            // If first attempt failed, try with a FRESH profile (old one may be corrupted)
+            if (!browser && !chromeExited) {
+                console.warn(`[reCAPTCHA:${instanceId.substring(0, 8)}] ⚠️ Chrome started but not responding — killing`);
+                try { inst.chromeProcess.kill(); } catch { /* ok */ }
             }
+            if (!browser) {
+                // Retry once with a fresh temporary profile
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] 🔄 Retrying with fresh profile...`);
+                const freshProfileDir = join(inst.profileDir + '-fresh-' + Date.now());
+                await mkdir(freshProfileDir, { recursive: true });
+                const freshArgs = args.map(a => a.startsWith('--user-data-dir=') ? `--user-data-dir=${freshProfileDir}` : a);
 
-            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Chrome launched (port: ${inst.port})`);
+                const freshProc = spawn(chromePath, freshArgs, {
+                    stdio: ['ignore', 'ignore', 'pipe'],
+                    detached: true,
+                    env: { ...process.env },
+                });
+                let freshStderr = '';
+                freshProc.stderr.on('data', (chunk) => { freshStderr += chunk.toString(); });
+                freshProc.unref();
+
+                for (let attempt = 0; attempt < 20; attempt++) {
+                    await new Promise(r => setTimeout(r, 500));
+                    try {
+                        const res = await fetch(`http://127.0.0.1:${inst.port}/json/version`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            browser = await puppeteer.connect({
+                                browserWSEndpoint: data.webSocketDebuggerUrl,
+                                defaultViewport: null,
+                            });
+                            inst.chromeProcess = freshProc;
+                            inst.profileDir = freshProfileDir;
+                            console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Chrome launched with fresh profile`);
+                            break;
+                        }
+                    } catch { /* not ready yet */ }
+                }
+
+                if (!browser) {
+                    try { freshProc.kill(); } catch { /* ok */ }
+                    if (freshStderr) console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Fresh Chrome stderr: ${freshStderr.substring(0, 500)}`);
+                    throw new Error(`Chrome failed to start for reCAPTCHA. Original stderr: ${chromeStderr.substring(0, 300)}`);
+                }
+            } else if (browser) {
+                console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Chrome launched (port: ${inst.port})`);
+            }
         }
 
         inst.browser = browser;
