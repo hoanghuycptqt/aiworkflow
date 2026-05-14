@@ -12,6 +12,7 @@ node_modules/
 
 # Uploads (user files, not code)
 server/uploads/
+mcp-server/uploads/
 
 # Build output (regenerated)
 client/dist/
