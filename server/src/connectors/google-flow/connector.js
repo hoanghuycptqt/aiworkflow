@@ -142,6 +142,19 @@ const RECAPTCHA_BASE_PORT = 9339;  // Base port for Chrome debug
 const _chromePool = new Map();
 let _nextPortOffset = 0;
 
+// Per-account upscale serialization queue.
+// Google's upsampleImage/upscaleVideo endpoints rate-limit per account; a burst of concurrent
+// calls (observed: 8 simultaneous from 2 JobBatches on 2026-05-14) trips PUBLIC_ERROR_UNUSUAL_ACTIVITY
+// soft-block lasting 30+ min. Generate calls are fine concurrent; only upscale needs to be sequential.
+const _upscaleQueues = new Map(); // instanceId -> tail Promise
+
+function withUpscaleLock(instanceId, fn) {
+    const tail = _upscaleQueues.get(instanceId) || Promise.resolve();
+    const next = tail.then(fn, fn); // run fn whether previous resolved or rejected
+    _upscaleQueues.set(instanceId, next.catch(() => { /* swallow so chain never breaks */ }));
+    return next;
+}
+
 /**
  * Derive a stable Chrome instance ID from Google account email.
  * Same email → same instanceId → same profile directory → profile reuse.
@@ -541,6 +554,7 @@ function _resetRecaptchaIdleTimer(instanceId = 'default') {
         console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Idle timeout — closing browser`);
         await _closeRecaptchaBrowser(instanceId);
         _chromePool.delete(instanceId);
+        _upscaleQueues.delete(instanceId);
     }, RECAPTCHA_PAGE_IDLE_TIMEOUT);
 }
 
@@ -1033,11 +1047,16 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 if (resolution !== '1k' && r.mediaId) {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
-                        // Delay to avoid reCAPTCHA rate limiting
+                        // Delay to avoid reCAPTCHA rate limiting (kept as belt-and-suspenders; the lock below is the primary defense)
                         await new Promise(r => setTimeout(r, 5000));
-                        const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
-                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId);
-                        await clearRecaptchaToken(upscaleRecaptcha);
+                        // Per-account upscale lock: serializes upsampleImage calls across concurrent JobBatch runs
+                        // to prevent the rate-limit burst that trips PUBLIC_ERROR_UNUSUAL_ACTIVITY soft-block.
+                        const upscaleResult = await withUpscaleLock(instanceId, async () => {
+                            const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
+                            const out = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId);
+                            await clearRecaptchaToken(upscaleRecaptcha);
+                            return out;
+                        });
                         if (upscaleResult.encodedImage) {
                             const filename = `gflow_${resolution}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
                             const filepath = join(outputDir, filename);
@@ -1443,9 +1462,12 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         const resolution = config.resolution || '720p';
         if (resolution === '1080p') {
             console.log(`[FlowVideo] 🔄 Upscaling to 1080p...`);
-            // Fetch fresh reCAPTCHA token for upscale (previous one may have expired during generation)
-            const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
-            const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken, instanceId);
+            // Per-account upscale lock (same rationale as image upscale path): prevents concurrent
+            // JobBatches from bursting Google's upscale endpoint, which triggers PUBLIC_ERROR_UNUSUAL_ACTIVITY.
+            const upsampleResult = await withUpscaleLock(instanceId, async () => {
+                const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
+                return this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken, instanceId);
+            });
             if (upsampleResult.upsampledMediaId) {
                 const upsampledMediaId = upsampleResult.upsampledMediaId;
                 console.log(`[FlowVideo] Upscale submitted: ${upsampledMediaId}`);
