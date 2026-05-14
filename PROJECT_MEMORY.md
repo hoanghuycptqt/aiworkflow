@@ -13,6 +13,10 @@ Hệ thống tự động hóa sản xuất video AI quy mô lớn (Bulk Video P
 - **Thư mục ứng dụng**: `/opt/vcw/app`
 - **User hệ thống**: `truonghoanghuy`
 - **Môi trường**: Ubuntu, Xvfb (cho headless browser), Nginx (Reverse Proxy).
+- **Cách SSH vào VPS**: 
+  ```bash
+  gcloud compute ssh instance-template-20260309-20260309-113128-a --zone=asia-southeast1-a --tunnel-through-iap
+  ```
 
 ## 3. Kiến Trúc Kỹ Thuật
 - **Backend**: Node.js, Express, Prisma, SQLite.
