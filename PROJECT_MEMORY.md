@@ -5,7 +5,16 @@ Bản ghi nhớ toàn diện về kiến trúc, lịch sử xử lý lỗi và c
 ## 1. Tổng Quan Dự Án
 Hệ thống tự động hóa sản xuất video AI quy mô lớn (Bulk Video Production) sử dụng mô hình DAG (Directed Acyclic Graph) để kết nối các service AI (Gemini, ChatGPT, Google Flow).
 
-## 2. Kiến Trúc Kỹ Thuật
+## 2. Chi tiết Hạ tầng VPS
+- **Nhà cung cấp**: Google Cloud Platform (GCP).
+- **Tên Instance**: `instance-template-20260309-20260309-113128-a`
+- **Vùng (Zone)**: `asia-southeast1-a`
+- **Domain chính**: `thhflow.com`
+- **Thư mục ứng dụng**: `/opt/vcw/app`
+- **User hệ thống**: `truonghoanghuy`
+- **Môi trường**: Ubuntu, Xvfb (cho headless browser), Nginx (Reverse Proxy).
+
+## 3. Kiến Trúc Kỹ Thuật
 - **Backend**: Node.js, Express, Prisma, SQLite.
 - **Frontend**: React Flow (Canvas), Vite, Socket.IO (Real-time monitoring).
 - **Automation**: Puppeteer-core điều khiển Chrome thực (Native Chrome) để vượt qua các cơ chế chống bot.
