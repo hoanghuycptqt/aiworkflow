@@ -771,14 +771,13 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
 
         console.log(`[FlowImage] Error response (${result.status}): ${result.body.substring(0, 300)}`);
 
-        // Retry on 403 reCAPTCHA — close Chrome, wait, restart, get fresh token
+        // Retry on 403 reCAPTCHA — keep Chrome warm (preserves trust score), wait, get fresh token
+        // Closing Chrome on every 403 caused a self-reinforcing cold-launch loop → ~78% failure rate
         if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
-            console.log(`[FlowImage] ⚠️ reCAPTCHA 403 — closing Chrome, waiting 30s, then retrying (${attempt + 1}/${MAX_RETRIES})...`);
-            await _closeRecaptchaBrowser(instanceId);
+            console.log(`[FlowImage] ⚠️ reCAPTCHA 403 — waiting 30s then retrying with fresh token (${attempt + 1}/${MAX_RETRIES})...`);
             await new Promise(r => setTimeout(r, 30000));
-            // Get fresh token with fresh Chrome
+            // Reuse warm browser, just fetch a fresh single-use token
             const freshToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
-            // Update recaptchaContext in body
             body.clientContext.recaptchaContext = {
                 token: freshToken,
                 applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB',
@@ -1056,11 +1055,9 @@ export class GoogleFlowImageConnector extends BaseConnector {
                         }
                     } catch (e) {
                         console.warn(`[FlowImage] ⚠️ Upscale to ${resolution.toUpperCase()} failed: ${e.message}, downloading original`);
-                        // If 403 reCAPTCHA, close Chrome and wait before continuing
-                        // This prevents all subsequent upscales/video from also failing
+                        // If 403 reCAPTCHA, wait before continuing — keep Chrome warm to preserve trust score
                         if (e.message.includes('403') && e.message.includes('reCAPTCHA')) {
-                            console.log('[FlowImage] 🔄 reCAPTCHA 403 on upscale — closing Chrome, waiting 30s before next request...');
-                            await _closeRecaptchaBrowser(instanceId);
+                            console.log('[FlowImage] 🔄 reCAPTCHA 403 on upscale — waiting 30s before next request (keeping Chrome warm)...');
                             await new Promise(r => setTimeout(r, 30000));
                         }
                     }
@@ -1384,10 +1381,9 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
             if (result.ok) break;
 
-            // Retry on 403 reCAPTCHA — close Chrome, wait, restart, get fresh token
+            // Retry on 403 reCAPTCHA — keep Chrome warm (preserves trust score), wait, get fresh token
             if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
-                console.log(`[FlowVideo] ⚠️ reCAPTCHA 403 — closing Chrome, waiting 30s, then retrying (${attempt + 1}/${MAX_RETRIES})...`);
-                await _closeRecaptchaBrowser(instanceId);
+                console.log(`[FlowVideo] ⚠️ reCAPTCHA 403 — waiting 30s then retrying with fresh token (${attempt + 1}/${MAX_RETRIES})...`);
                 await new Promise(r => setTimeout(r, 30000));
                 const freshToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
                 body.clientContext.recaptchaContext = {
