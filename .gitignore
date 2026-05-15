@@ -46,3 +46,7 @@ screenshot_*.png
 
 # SSL certificates
 cert/
+
+# Diagnostic scripts (one-off investigation, not part of build)
+mcp-server/diagnose-*.mjs
+mcp-server/diagnose-screenshots/
