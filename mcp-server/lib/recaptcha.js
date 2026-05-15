@@ -352,13 +352,16 @@ export async function browserFetch(url, token, body, instanceId = 'default') {
             }, url, token, JSON.stringify(body));
 
             console.error(`[BrowserFetch:${instanceId.substring(0, 8)}] Response status: ${result.status}`);
-            return result;
+            // Only return browser result if successful — cookies can cause 403 reCAPTCHA
+            // failures even with a valid token, so fall through to Node.js on any error.
+            if (result.ok) return result;
+            console.error(`[BrowserFetch:${instanceId.substring(0, 8)}] Browser returned ${result.status} — falling back to Node.js fetch`);
         } catch (e) {
             console.error(`[BrowserFetch:${instanceId.substring(0, 8)}] Chrome fetch failed: ${e.message}, falling back`);
         }
     }
 
-    // Fallback to Node.js fetch
+    // Fallback to Node.js fetch (no cookies — Bearer token alone is sufficient)
     const res = await fetch(url, {
         method: 'POST',
         headers: buildHeaders(token),

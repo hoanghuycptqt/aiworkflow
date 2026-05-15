@@ -619,13 +619,16 @@ async function browserFetch(url, token, body, instanceId = 'default') {
             }, url, token, JSON.stringify(body));
 
             console.log(`[BrowserFetch:${instanceId.substring(0, 8)}] Response status: ${result.status}`);
-            return result;
+            // Only return browser result if successful — cookies can cause 403 reCAPTCHA
+            // failures even with a valid token, so fall through to Node.js on any error.
+            if (result.ok) return result;
+            console.warn(`[BrowserFetch:${instanceId.substring(0, 8)}] Browser returned ${result.status} — falling back to Node.js fetch`);
         } catch (e) {
             console.warn(`[BrowserFetch:${instanceId.substring(0, 8)}] Chrome fetch failed: ${e.message}, falling back`);
         }
     }
 
-    // Fallback to Node.js fetch
+    // Fallback to Node.js fetch (no cookies — Bearer token alone is sufficient)
     const res = await fetch(url, {
         method: 'POST',
         headers: buildHeaders(token),
@@ -1614,10 +1617,19 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                     return data;
                 }
                 if (status === 'MEDIA_GENERATION_STATUS_FAILED') {
-                    throw new Error('Video upscale failed');
+                    const mediaStatus = data?.media?.[0]?.mediaMetadata?.mediaStatus;
+                    const errCode = mediaStatus?.error?.code;
+                    const errMsg = mediaStatus?.error?.message;
+                    const reasons = mediaStatus?.failureReasons || [];
+                    const reason = errMsg || reasons[0] || 'FAILED';
+                    console.error(`[FlowVideo] ❌ Upscale FAILED: ${reason}${errCode ? ` (code=${errCode})` : ''}`);
+                    if (!errMsg && !reasons.length) {
+                        console.error('[FlowVideo] Full poll response:', JSON.stringify(data, null, 2));
+                    }
+                    throw new Error(`Video upscale failed: ${reason}`);
                 }
             } catch (e) {
-                if (e.message === 'Video upscale failed') throw e;
+                if (e.message.startsWith('Video upscale failed')) throw e;
                 console.warn(`[FlowVideo] Upscale poll error: ${e.message}`);
             }
 
@@ -1872,7 +1884,16 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
         // Check for error
         if (currentStatus === 'FAILED' || currentStatus === 'ERROR') {
-            throw new Error(`Video generation failed with status: ${currentStatus}`);
+            const mediaStatus = data?.media?.[0]?.mediaMetadata?.mediaStatus;
+            const errCode = mediaStatus?.error?.code;
+            const errMsg = mediaStatus?.error?.message;
+            const reasons = mediaStatus?.failureReasons || [];
+            const reason = errMsg || reasons[0] || currentStatus;
+            console.error(`[FlowVideo] ❌ Generation FAILED: ${reason}${errCode ? ` (code=${errCode})` : ''}`);
+            if (!errMsg && !reasons.length) {
+                console.error('[FlowVideo] Full poll response:', JSON.stringify(data, null, 2));
+            }
+            throw new Error(`Video generation failed: ${reason}`);
         }
 
         // Check media array for status

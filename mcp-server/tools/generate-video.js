@@ -45,7 +45,13 @@ CONSTRAINTS:
 
 ASPECT RATIO: Explicit aspect_ratio param overrides auto-detection from image. When image ratio differs from video ratio, center-crop is applied automatically.
 
-⚠️ CRITICAL — SEQUENTIAL ONLY: All Google Flow tools (generate_google_flow_image, generate_google_flow_video, upscale_google_flow_image, upscale_google_flow_video) share a SINGLE browser session. You MUST call them ONE AT A TIME, waiting for each call to fully complete before making the next. If you call multiple Google Flow tools in parallel, ALL calls WILL FAIL with timeouts and NO images/videos will be created. This is not a suggestion — it is a hard technical constraint.`;
+⚠️ CRITICAL — SEQUENTIAL ONLY: All Google Flow tools (generate_google_flow_image, generate_google_flow_video, upscale_google_flow_image, upscale_google_flow_video) share a SINGLE browser session. You MUST call them ONE AT A TIME, waiting for each call to fully complete before making the next. If you call multiple Google Flow tools in parallel, ALL calls WILL FAIL with timeouts and NO images/videos will be created. This is not a suggestion — it is a hard technical constraint.
+
+RETRY GUIDANCE — when this tool fails:
+- "PUBLIC_ERROR_HIGH_TRAFFIC" → Veo cluster is overloaded. RETRY WITH THE SAME PROMPT after a short wait (5-15s). DO NOT change the prompt — this is transient capacity, not a content issue.
+- "PUBLIC_ERROR_UNUSUAL_ACTIVITY" / reCAPTCHA 403 → trust-score blip. Retry once with the same prompt; if it persists, stop and report.
+- Anything mentioning "safety", "policy", "violation", "blocked", "filtered" → real content filter. Adjust the prompt.
+- Any other error → retry once with the same prompt; if it still fails, report the exact error to the user instead of guessing.`;
 
 export const schema = {
     prompt: z.string().describe('Video generation prompt describing the scene, motion, or style'),

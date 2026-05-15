@@ -603,7 +603,19 @@ export async function pollVideoCompletion(token, projectId, mediaId, maxAttempts
                     return data;
                 }
                 if (['FAILED', 'ERROR'].includes(currentStatus)) {
-                    throw new Error(`Video generation failed: ${currentStatus}`);
+                    // Surface the real reason from the payload — Veo returns this in
+                    // mediaStatus.error.message and/or mediaStatus.failureReasons[].
+                    const mediaStatus = data?.media?.[0]?.mediaMetadata?.mediaStatus;
+                    const errCode = mediaStatus?.error?.code;
+                    const errMsg = mediaStatus?.error?.message;
+                    const reasons = mediaStatus?.failureReasons || [];
+                    const reason = errMsg || reasons[0] || currentStatus;
+                    console.error(`[FlowVideo] ❌ Generation FAILED: ${reason}${errCode ? ` (code=${errCode})` : ''}`);
+                    if (!errMsg && !reasons.length) {
+                        // Couldn't extract a reason — dump full payload for inspection
+                        console.error('[FlowVideo] Full poll response:', JSON.stringify(data, null, 2));
+                    }
+                    throw new Error(`Video generation failed: ${reason}`);
                 }
             }
         } catch (e) {
@@ -670,10 +682,21 @@ export async function pollUpscaleCompletion(token, projectId, upsampledMediaId, 
                 const status = data.media?.[0]?.mediaMetadata?.mediaStatus?.mediaGenerationStatus || '';
                 console.error(`[FlowVideo] Upscale poll ${i + 1}: ${status}`);
                 if (status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL') return data;
-                if (status === 'MEDIA_GENERATION_STATUS_FAILED') throw new Error('Video upscale failed');
+                if (status === 'MEDIA_GENERATION_STATUS_FAILED') {
+                    const mediaStatus = data?.media?.[0]?.mediaMetadata?.mediaStatus;
+                    const errCode = mediaStatus?.error?.code;
+                    const errMsg = mediaStatus?.error?.message;
+                    const reasons = mediaStatus?.failureReasons || [];
+                    const reason = errMsg || reasons[0] || 'FAILED';
+                    console.error(`[FlowVideo] ❌ Upscale FAILED: ${reason}${errCode ? ` (code=${errCode})` : ''}`);
+                    if (!errMsg && !reasons.length) {
+                        console.error('[FlowVideo] Full poll response:', JSON.stringify(data, null, 2));
+                    }
+                    throw new Error(`Video upscale failed: ${reason}`);
+                }
             }
         } catch (e) {
-            if (e.message === 'Video upscale failed') throw e;
+            if (e.message.startsWith('Video upscale failed')) throw e;
         }
         await new Promise(r => setTimeout(r, 5000));
     }

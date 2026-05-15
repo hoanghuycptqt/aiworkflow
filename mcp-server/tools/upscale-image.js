@@ -15,7 +15,14 @@ import {
 import { lookupMediaId } from '../lib/media-cache.js';
 
 export const name = 'upscale_google_flow_image';
-export const description = 'Upscale an existing Google Flow image to 2K or 4K. Requires the media_id from generate_google_flow_image. ⚠️ CRITICAL — SEQUENTIAL ONLY: All Google Flow tools share a SINGLE browser session. You MUST call them ONE AT A TIME, waiting for each call to fully complete before making the next. If you call multiple Google Flow tools in parallel, ALL calls WILL FAIL with timeouts and NO images/videos will be created.';
+export const description = `Upscale an existing Google Flow image to 2K or 4K. Requires the media_id from generate_google_flow_image.
+
+⚠️ CRITICAL — SEQUENTIAL ONLY: All Google Flow tools share a SINGLE browser session. You MUST call them ONE AT A TIME, waiting for each call to fully complete before making the next. If you call multiple Google Flow tools in parallel, ALL calls WILL FAIL with timeouts and NO images/videos will be created.
+
+RETRY GUIDANCE — when this tool fails:
+- "PUBLIC_ERROR_HIGH_TRAFFIC" → cluster is overloaded. RETRY WITH THE SAME media_id after a short wait (5-15s). This is transient capacity, not anything wrong with the input.
+- "PUBLIC_ERROR_UNUSUAL_ACTIVITY" / reCAPTCHA 403 → trust-score blip. Retry once.
+- Any other error → retry once; if it still fails, report the exact error to the user instead of guessing.`;
 
 export const schema = {
     media_id: z.string().optional().describe('The media ID of the image to upscale (from generate_google_flow_image)'),

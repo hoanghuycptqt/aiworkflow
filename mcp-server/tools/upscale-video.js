@@ -18,7 +18,14 @@ import {
 import { lookupMediaId } from '../lib/media-cache.js';
 
 export const name = 'upscale_google_flow_video';
-export const description = 'Upscale an existing Google Flow video from 720p to 1080p. Requires the media_id from generate_google_flow_video. ⚠️ CRITICAL — SEQUENTIAL ONLY: All Google Flow tools share a SINGLE browser session. You MUST call them ONE AT A TIME, waiting for each call to fully complete before making the next. If you call multiple Google Flow tools in parallel, ALL calls WILL FAIL with timeouts and NO images/videos will be created.';
+export const description = `Upscale an existing Google Flow video from 720p to 1080p. Requires the media_id from generate_google_flow_video.
+
+⚠️ CRITICAL — SEQUENTIAL ONLY: All Google Flow tools share a SINGLE browser session. You MUST call them ONE AT A TIME, waiting for each call to fully complete before making the next. If you call multiple Google Flow tools in parallel, ALL calls WILL FAIL with timeouts and NO images/videos will be created.
+
+RETRY GUIDANCE — when this tool fails:
+- "PUBLIC_ERROR_HIGH_TRAFFIC" → Veo cluster is overloaded. RETRY WITH THE SAME media_id after a short wait (5-15s). This is transient capacity, not anything wrong with the input.
+- "PUBLIC_ERROR_UNUSUAL_ACTIVITY" / reCAPTCHA 403 → trust-score blip. Retry once.
+- Any other error → retry once; if it still fails, report the exact error to the user instead of guessing.`;
 
 export const schema = {
     media_id: z.string().optional().describe('The media ID of the video to upscale (from generate_google_flow_video)'),
@@ -59,8 +66,9 @@ export async function handler(params, extra) {
     const upResult = await submitVideoUpscale(token, projectId, mediaId, aspectRatio, recaptchaToken, instanceId);
 
     if (!upResult.upsampledMediaId) {
-        await closeRecaptchaBrowser(instanceId);
-        deleteChromePoolEntry(instanceId);
+        // Do NOT close Chrome here — keep the warm browser alive so the next call
+        // reuses the same logged-in profile (preserves reCAPTCHA trust score).
+        // The 10-min idle timer is the only sanctioned mid-life close path.
         return { content: [{ type: 'text', text: '⚠️ Video upscale failed.' }] };
     }
 
