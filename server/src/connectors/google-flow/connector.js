@@ -564,6 +564,28 @@ function _resetRecaptchaIdleTimer(instanceId = 'default') {
  * @param {string} action - reCAPTCHA action name (IMAGE_GENERATION or VIDEO_GENERATION)
  * @param {string} instanceId - Chrome instance ID (unique per job)
  */
+/**
+ * Simulate brief user activity (mouse moves + scroll) before fetching the
+ * reCAPTCHA token. Without gestures, Enterprise scores the page as bot-like
+ * and the resulting token gets PUBLIC_ERROR_UNUSUAL_ACTIVITY when used.
+ */
+async function _simulateUserGesture(page) {
+    try {
+        const viewport = page.viewport() || { width: 1280, height: 900 };
+        const moves = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < moves; i++) {
+            const x = 50 + Math.floor(Math.random() * (viewport.width - 100));
+            const y = 50 + Math.floor(Math.random() * (viewport.height - 100));
+            await page.mouse.move(x, y, { steps: 6 + Math.floor(Math.random() * 8) });
+            await new Promise(r => setTimeout(r, 80 + Math.random() * 150));
+        }
+        await page.evaluate(() => {
+            window.scrollBy(0, Math.floor(Math.random() * 200) - 100);
+        });
+        await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+    } catch { /* gestures are best-effort */ }
+}
+
 async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
     if (!sessionCookies) {
         console.log('[reCAPTCHA] No session cookies — will rely on Chrome profile for auth');
@@ -571,6 +593,9 @@ async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', 
 
     try {
         const page = await _ensureRecaptchaPage(sessionCookies, instanceId);
+
+        // Boost trust score with brief gesture simulation
+        await _simulateUserGesture(page);
 
         // Each call to execute() returns a FRESH single-use token
         const token = await page.evaluate(async (siteKey, act) => {

@@ -298,6 +298,28 @@ function _resetRecaptchaIdleTimer(instanceId = 'default') {
 }
 
 /**
+ * Simulate brief user activity (mouse moves + scroll) on the reCAPTCHA page.
+ * reCAPTCHA Enterprise scores based on user gestures; an idle headless page
+ * yields a low score → PUBLIC_ERROR_UNUSUAL_ACTIVITY. Gestures push it up.
+ */
+async function _simulateUserGesture(page) {
+    try {
+        const viewport = page.viewport() || { width: 1280, height: 900 };
+        const moves = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < moves; i++) {
+            const x = 50 + Math.floor(Math.random() * (viewport.width - 100));
+            const y = 50 + Math.floor(Math.random() * (viewport.height - 100));
+            await page.mouse.move(x, y, { steps: 6 + Math.floor(Math.random() * 8) });
+            await new Promise(r => setTimeout(r, 80 + Math.random() * 150));
+        }
+        await page.evaluate(() => {
+            window.scrollBy(0, Math.floor(Math.random() * 200) - 100);
+        });
+        await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+    } catch { /* gestures are best-effort */ }
+}
+
+/**
  * Fetch a FRESH reCAPTCHA Enterprise token using a specific Chrome instance.
  */
 export async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
@@ -307,6 +329,9 @@ export async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERA
 
     try {
         const page = await _ensureRecaptchaPage(sessionCookies, instanceId);
+
+        // Boost trust score with brief gesture simulation before evaluating token
+        await _simulateUserGesture(page);
 
         const token = await page.evaluate(async (siteKey, act) => {
             return await grecaptcha.enterprise.execute(siteKey, { action: act });
