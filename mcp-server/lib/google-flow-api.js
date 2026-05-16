@@ -234,8 +234,9 @@ export async function batchGenerateImages(token, projectId, opts) {
 
         if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
             console.error(`[FlowImage] ⚠️ reCAPTCHA 403 — retrying (${attempt + 1}/${MAX_RETRIES})...`);
-            await closeRecaptchaBrowser(instanceId);
-            await new Promise(r => setTimeout(r, 30000));
+            // Don't close Chrome — warm browser preserves trust score (commit 6f03021).
+            // Gesture sim on next token fetch already boosts score; 15s is enough cooldown.
+            await new Promise(r => setTimeout(r, 15000));
             const freshToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
             body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
             continue;
@@ -394,8 +395,9 @@ export async function submitVideoGeneration(token, projectId, opts) {
 
         if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
             console.error(`[FlowVideo] ⚠️ reCAPTCHA 403 — retrying...`);
-            await closeRecaptchaBrowser(instanceId);
-            await new Promise(r => setTimeout(r, 30000));
+            // Don't close Chrome — warm browser preserves trust score (commit 6f03021).
+            // Gesture sim on next token fetch already boosts score; 15s is enough cooldown.
+            await new Promise(r => setTimeout(r, 15000));
             const freshToken = await fetchRecaptchaToken(sessionCookies, 'VIDEO_GENERATION', instanceId);
             body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
             continue;
@@ -468,8 +470,9 @@ export async function submitVideoGenerationStartEnd(token, projectId, opts) {
 
         if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
             console.error(`[FlowVideo] ⚠️ reCAPTCHA 403 — retrying...`);
-            await closeRecaptchaBrowser(instanceId);
-            await new Promise(r => setTimeout(r, 30000));
+            // Don't close Chrome — warm browser preserves trust score (commit 6f03021).
+            // Gesture sim on next token fetch already boosts score; 15s is enough cooldown.
+            await new Promise(r => setTimeout(r, 15000));
             const freshToken = await fetchRecaptchaToken(sessionCookies, 'VIDEO_GENERATION', instanceId);
             body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
             continue;
@@ -539,8 +542,9 @@ export async function submitVideoGenerationReference(token, projectId, opts) {
 
         if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
             console.error(`[FlowVideo] ⚠️ reCAPTCHA 403 — retrying...`);
-            await closeRecaptchaBrowser(instanceId);
-            await new Promise(r => setTimeout(r, 30000));
+            // Don't close Chrome — warm browser preserves trust score (commit 6f03021).
+            // Gesture sim on next token fetch already boosts score; 15s is enough cooldown.
+            await new Promise(r => setTimeout(r, 15000));
             const freshToken = await fetchRecaptchaToken(sessionCookies, 'VIDEO_GENERATION', instanceId);
             body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
             continue;
@@ -567,7 +571,8 @@ export async function pollVideoCompletion(token, projectId, mediaId, maxAttempts
     const POLL_URL = `${API_BASE}/v1/video:batchCheckAsyncVideoGenerationStatus`;
     const pollBody = JSON.stringify({ media: [{ name: mediaId, projectId }] });
 
-    await new Promise(r => setTimeout(r, 15000));
+    // Veo render typically takes 30-60s; start polling at 8s to catch the early-finish case.
+    await new Promise(r => setTimeout(r, 8000));
 
     for (let i = 0; i < maxAttempts; i++) {
         try {

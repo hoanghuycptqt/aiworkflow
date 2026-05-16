@@ -572,17 +572,17 @@ function _resetRecaptchaIdleTimer(instanceId = 'default') {
 async function _simulateUserGesture(page) {
     try {
         const viewport = page.viewport() || { width: 1280, height: 900 };
-        const moves = 3 + Math.floor(Math.random() * 3);
-        for (let i = 0; i < moves; i++) {
+        // 2 mouse moves is enough to register interaction signal without much latency
+        for (let i = 0; i < 2; i++) {
             const x = 50 + Math.floor(Math.random() * (viewport.width - 100));
             const y = 50 + Math.floor(Math.random() * (viewport.height - 100));
-            await page.mouse.move(x, y, { steps: 6 + Math.floor(Math.random() * 8) });
-            await new Promise(r => setTimeout(r, 80 + Math.random() * 150));
+            await page.mouse.move(x, y, { steps: 4 + Math.floor(Math.random() * 4) });
+            await new Promise(r => setTimeout(r, 50 + Math.random() * 80));
         }
         await page.evaluate(() => {
             window.scrollBy(0, Math.floor(Math.random() * 200) - 100);
         });
-        await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+        await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
     } catch { /* gestures are best-effort */ }
 }
 
@@ -816,8 +816,8 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         // Retry on 403 reCAPTCHA — keep Chrome warm (preserves trust score), wait, get fresh token
         // Closing Chrome on every 403 caused a self-reinforcing cold-launch loop → ~78% failure rate
         if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
-            console.log(`[FlowImage] ⚠️ reCAPTCHA 403 — waiting 30s then retrying with fresh token (${attempt + 1}/${MAX_RETRIES})...`);
-            await new Promise(r => setTimeout(r, 30000));
+            console.log(`[FlowImage] ⚠️ reCAPTCHA 403 — waiting 15s then retrying with fresh token (${attempt + 1}/${MAX_RETRIES})...`);
+            await new Promise(r => setTimeout(r, 15000));
             // Reuse warm browser, just fetch a fresh single-use token
             const freshToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
             body.clientContext.recaptchaContext = {
@@ -1104,8 +1104,8 @@ export class GoogleFlowImageConnector extends BaseConnector {
                         console.warn(`[FlowImage] ⚠️ Upscale to ${resolution.toUpperCase()} failed: ${e.message}, downloading original`);
                         // If 403 reCAPTCHA, wait before continuing — keep Chrome warm to preserve trust score
                         if (e.message.includes('403') && e.message.includes('reCAPTCHA')) {
-                            console.log('[FlowImage] 🔄 reCAPTCHA 403 on upscale — waiting 30s before next request (keeping Chrome warm)...');
-                            await new Promise(r => setTimeout(r, 30000));
+                            console.log('[FlowImage] 🔄 reCAPTCHA 403 on upscale — waiting 15s before next request (keeping Chrome warm)...');
+                            await new Promise(r => setTimeout(r, 15000));
                         }
                     }
                 }
@@ -1430,8 +1430,8 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
             // Retry on 403 reCAPTCHA — keep Chrome warm (preserves trust score), wait, get fresh token
             if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
-                console.log(`[FlowVideo] ⚠️ reCAPTCHA 403 — waiting 30s then retrying with fresh token (${attempt + 1}/${MAX_RETRIES})...`);
-                await new Promise(r => setTimeout(r, 30000));
+                console.log(`[FlowVideo] ⚠️ reCAPTCHA 403 — waiting 15s then retrying with fresh token (${attempt + 1}/${MAX_RETRIES})...`);
+                await new Promise(r => setTimeout(r, 15000));
                 const freshToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
                 body.clientContext.recaptchaContext = {
                     token: freshToken,
@@ -1815,8 +1815,8 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         console.log(`[FlowVideo] Polling endpoint: ${POLL_URL}`);
         console.log(`[FlowVideo] Poll body: ${pollBody}`);
 
-        // Wait 15s before first poll
-        await new Promise(r => setTimeout(r, 15000));
+        // Veo render typically takes 30-60s; start polling at 8s to catch the early-finish case.
+        await new Promise(r => setTimeout(r, 8000));
 
         for (let i = 0; i < maxAttempts; i++) {
             try {

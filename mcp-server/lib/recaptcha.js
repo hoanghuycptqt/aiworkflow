@@ -305,17 +305,17 @@ function _resetRecaptchaIdleTimer(instanceId = 'default') {
 async function _simulateUserGesture(page) {
     try {
         const viewport = page.viewport() || { width: 1280, height: 900 };
-        const moves = 3 + Math.floor(Math.random() * 3);
-        for (let i = 0; i < moves; i++) {
+        // 2 mouse moves is enough to register interaction signal without much latency
+        for (let i = 0; i < 2; i++) {
             const x = 50 + Math.floor(Math.random() * (viewport.width - 100));
             const y = 50 + Math.floor(Math.random() * (viewport.height - 100));
-            await page.mouse.move(x, y, { steps: 6 + Math.floor(Math.random() * 8) });
-            await new Promise(r => setTimeout(r, 80 + Math.random() * 150));
+            await page.mouse.move(x, y, { steps: 4 + Math.floor(Math.random() * 4) });
+            await new Promise(r => setTimeout(r, 50 + Math.random() * 80));
         }
         await page.evaluate(() => {
             window.scrollBy(0, Math.floor(Math.random() * 200) - 100);
         });
-        await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+        await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
     } catch { /* gestures are best-effort */ }
 }
 
