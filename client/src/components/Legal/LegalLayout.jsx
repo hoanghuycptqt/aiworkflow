@@ -17,7 +17,9 @@ export default function LegalLayout({ title, lastUpdated, children }) {
     }
 
     useEffect(() => {
+        document.documentElement.classList.add('public-page');
         window.scrollTo(0, 0);
+        return () => document.documentElement.classList.remove('public-page');
     }, []);
 
     return (
@@ -27,14 +29,21 @@ export default function LegalLayout({ title, lastUpdated, children }) {
                     <img src="/icon.png" alt="THHFlow" />
                     <span>THHFlow</span>
                 </Link>
-                <button
-                    className="auth-theme-toggle"
-                    onClick={toggleTheme}
-                    title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                    style={{ position: 'static' }}
-                >
-                    <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
-                </button>
+                <div className="legal-header-actions">
+                    <Link to="/" className="legal-back-link">
+                        <Icon name="arrow-left" size={16} /> Back to home
+                    </Link>
+                    <Link to="/privacy" className="legal-header-link">Privacy</Link>
+                    <Link to="/terms" className="legal-header-link">Terms</Link>
+                    <button
+                        className="auth-theme-toggle"
+                        onClick={toggleTheme}
+                        title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                        style={{ position: 'static' }}
+                    >
+                        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
+                    </button>
+                </div>
             </header>
             <main className="legal-content">
                 <h1>{title}</h1>

@@ -97,7 +97,9 @@ export default function Homepage() {
     }
 
     useEffect(() => {
+        document.documentElement.classList.add('public-page');
         window.scrollTo(0, 0);
+        return () => document.documentElement.classList.remove('public-page');
     }, []);
 
     return (
