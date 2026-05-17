@@ -9,6 +9,8 @@ import Dashboard from './components/Dashboard/Dashboard.jsx';
 import WorkflowBuilder from './components/WorkflowBuilder/WorkflowBuilder.jsx';
 import CredentialsPage from './components/Credentials/CredentialsPage.jsx';
 import AdminPage from './components/Admin/AdminPage.jsx';
+import PrivacyPolicy from './components/Legal/PrivacyPolicy.jsx';
+import TermsOfService from './components/Legal/TermsOfService.jsx';
 import './index.css';
 
 function App() {
@@ -88,6 +90,9 @@ function App() {
         }}
       />
       <Routes>
+        {/* Public legal pages — accessible without login */}
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<TermsOfService />} />
         {!user ? (
           <>
             <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import Icon from '../../services/icons.jsx';
 
 export default function AppLayout({ user, onLogout }) {
@@ -91,6 +91,11 @@ export default function AppLayout({ user, onLogout }) {
                         <span className="nav-icon"><Icon name="logout" size={18} /></span>
                         Logout
                     </button>
+                    <div className="auth-legal-links" style={{ marginTop: 12 }}>
+                        <Link to="/privacy">Privacy</Link>
+                        <span>·</span>
+                        <Link to="/terms">Terms</Link>
+                    </div>
                 </div>
             </aside>
 

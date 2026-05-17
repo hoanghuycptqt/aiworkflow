@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { api, SERVER } from '../../services/api.js';
 import Icon from '../../services/icons.jsx';
 import toast from 'react-hot-toast';
@@ -284,6 +285,12 @@ export default function AuthPage({ onLogin }) {
                         {isLogin ? 'Sign Up' : 'Sign In'}
                     </a>
                 </p>
+
+                <div className="auth-legal-links">
+                    <Link to="/privacy">Privacy Policy</Link>
+                    <span>·</span>
+                    <Link to="/terms">Terms of Service</Link>
+                </div>
             </div>
         </div>
     );
