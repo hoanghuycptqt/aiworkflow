@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
     fetchRecaptchaToken, clearRecaptchaToken, browserFetch,
     closeRecaptchaBrowser, deleteChromePoolEntry, getAccountInstanceId,
-    buildHeaders, getChromePoolInstance,
+    buildHeaders, getChromePoolInstance, reloadRecaptchaPage,
 } from './recaptcha.js';
 import { refreshToken } from './token-refresh.js';
 
@@ -280,7 +280,7 @@ export async function downloadAndSaveImage(fifeUrl, outputDir, prefix = 'gflow')
 /**
  * Upscale an image to 2K or 4K.
  */
-export async function upscaleImage(token, projectId, mediaId, resolution, recaptchaToken = '', instanceId = 'default') {
+export async function upscaleImage(token, projectId, mediaId, resolution, recaptchaToken = '', instanceId = 'default', sessionCookies = '') {
     const targetResolution = resolution === '4k' ? 'UPSAMPLE_IMAGE_RESOLUTION_4K' : 'UPSAMPLE_IMAGE_RESOLUTION_2K';
     const body = {
         mediaId,
@@ -294,13 +294,25 @@ export async function upscaleImage(token, projectId, mediaId, resolution, recapt
     };
 
     console.error(`[FlowImage] Upscale request: ${targetResolution}`);
-    let result = await browserFetch(`${API_BASE}/v1/flow/upsampleImage`, token, body, instanceId);
+    const endpoint = `${API_BASE}/v1/flow/upsampleImage`;
+    let result;
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        result = await browserFetch(endpoint, token, body, instanceId);
+        if (result.ok) break;
 
-    if (!result.ok && result.status === 401) {
-        token = await handle401(instanceId);
-        result = await browserFetch(`${API_BASE}/v1/flow/upsampleImage`, token, body, instanceId);
-    }
-    if (!result.ok) {
+        if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
+            console.error(`[FlowImage] ⚠️ Upscale reCAPTCHA 403 — reloading page + retrying (${attempt + 1}/${MAX_RETRIES})...`);
+            // Page reload resets the SDK trust-score state — fetchRecaptchaToken alone
+            // is not enough once the page lifetime gets flagged (manual UI also fails).
+            await reloadRecaptchaPage(instanceId);
+            await new Promise(r => setTimeout(r, 5000));
+            const freshToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
+            body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
+            continue;
+        }
+        if (result.status >= 500 && attempt < MAX_RETRIES) { await new Promise(r => setTimeout(r, 3000)); continue; }
+        if (result.status === 401 && attempt < MAX_RETRIES) { token = await handle401(instanceId); continue; }
         throw new Error(`Image upscale failed (${result.status}): ${result.body.substring(0, 300)}`);
     }
 
@@ -369,7 +381,7 @@ export async function submitVideoGeneration(token, projectId, opts) {
     const body = {
         mediaGenerationContext: {
             batchId,
-            audioFailurePreference: 'BLOCK_SILENCED_VIDEOS',
+            audioFailurePreference: 'RETURN_SILENCED_VIDEOS',
         },
         clientContext: {
             projectId, tool: TOOL,
@@ -445,7 +457,7 @@ export async function submitVideoGenerationStartEnd(token, projectId, opts) {
     const body = {
         mediaGenerationContext: {
             batchId,
-            audioFailurePreference: 'BLOCK_SILENCED_VIDEOS',
+            audioFailurePreference: 'RETURN_SILENCED_VIDEOS',
         },
         clientContext: {
             projectId, tool: TOOL,
@@ -517,7 +529,7 @@ export async function submitVideoGenerationReference(token, projectId, opts) {
     const body = {
         mediaGenerationContext: {
             batchId,
-            audioFailurePreference: 'BLOCK_SILENCED_VIDEOS',
+            audioFailurePreference: 'RETURN_SILENCED_VIDEOS',
         },
         clientContext: {
             projectId, tool: TOOL,
@@ -637,7 +649,7 @@ export async function pollVideoCompletion(token, projectId, mediaId, maxAttempts
 /**
  * Submit video upscale to 1080p.
  */
-export async function submitVideoUpscale(token, projectId, mediaId, aspectRatio, recaptchaToken = '', instanceId = 'default') {
+export async function submitVideoUpscale(token, projectId, mediaId, aspectRatio, recaptchaToken = '', instanceId = 'default', sessionCookies = '') {
     const body = {
         mediaGenerationContext: { batchId: uuidv4() },
         clientContext: {
@@ -657,8 +669,28 @@ export async function submitVideoUpscale(token, projectId, mediaId, aspectRatio,
         useV2ModelConfig: true,
     };
 
-    const result = await browserFetch(`${API_BASE}/v1/video:batchAsyncGenerateVideoUpsampleVideo`, token, body, instanceId);
-    if (!result.ok) return { upsampledMediaId: null };
+    const endpoint = `${API_BASE}/v1/video:batchAsyncGenerateVideoUpsampleVideo`;
+    let result;
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        result = await browserFetch(endpoint, token, body, instanceId);
+        if (result.ok) break;
+
+        if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
+            console.error(`[FlowVideo] ⚠️ Upscale reCAPTCHA 403 — reloading page + retrying (${attempt + 1}/${MAX_RETRIES})...`);
+            // Page reload resets the SDK trust-score state — fetchRecaptchaToken alone
+            // is not enough once the page lifetime gets flagged (manual UI also fails).
+            await reloadRecaptchaPage(instanceId);
+            await new Promise(r => setTimeout(r, 5000));
+            const freshToken = await fetchRecaptchaToken(sessionCookies, 'VIDEO_GENERATION', instanceId);
+            body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
+            continue;
+        }
+        if (result.status >= 500 && attempt < MAX_RETRIES) { await new Promise(r => setTimeout(r, 3000)); continue; }
+        if (result.status === 401 && attempt < MAX_RETRIES) { token = await handle401(instanceId); continue; }
+        console.error(`[FlowVideo] Upscale API error: ${result.status} - ${result.body.substring(0, 300)}`);
+        return { upsampledMediaId: null };
+    }
 
     const data = JSON.parse(result.body);
     return {
@@ -810,4 +842,4 @@ export async function fetchVideoDownloadUrl(token, projectId, mediaId, sessionCo
 }
 
 // Re-export for convenience
-export { getAccountInstanceId, fetchRecaptchaToken, clearRecaptchaToken, closeRecaptchaBrowser, deleteChromePoolEntry };
+export { getAccountInstanceId, fetchRecaptchaToken, clearRecaptchaToken, closeRecaptchaBrowser, deleteChromePoolEntry, reloadRecaptchaPage };

@@ -252,6 +252,39 @@ async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
 }
 
 /**
+ * Reload the Flow page to reset reCAPTCHA Enterprise SDK state.
+ *
+ * Why: after a few failed upscale attempts, the SDK on a single page lifetime
+ * gets stuck on a low trust score — even fresh `grecaptcha.enterprise.execute`
+ * calls return tokens Google then rejects, and the official UI on the same
+ * page also fails. A hard reload reinitializes the SDK and recovers the
+ * session without losing cookies/login.
+ */
+export async function reloadRecaptchaPage(instanceId = 'default') {
+    const inst = _chromePool.get(instanceId);
+    if (!inst?.page || !inst?.browser?.isConnected()) {
+        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] No active page to reload`);
+        return false;
+    }
+    try {
+        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] 🔄 Reloading page to reset reCAPTCHA SDK state...`);
+        inst.ready = false;
+        await inst.page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
+        await inst.page.waitForFunction(
+            () => typeof grecaptcha !== 'undefined' && typeof grecaptcha.enterprise !== 'undefined' && typeof grecaptcha.enterprise.execute === 'function',
+            { timeout: 15000 }
+        );
+        inst.ready = true;
+        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Page reloaded — SDK re-initialized`);
+        return true;
+    } catch (e) {
+        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Reload failed: ${e.message}`);
+        inst.ready = false;
+        return false;
+    }
+}
+
+/**
  * Close a specific reCAPTCHA browser instance.
  */
 export async function closeRecaptchaBrowser(instanceId = 'default') {

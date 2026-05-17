@@ -544,6 +544,37 @@ async function _closeRecaptchaBrowser(instanceId = 'default') {
 }
 
 /**
+ * Reload the Flow page to reset reCAPTCHA Enterprise SDK state without
+ * killing Chrome. Once the SDK on a single page lifetime accumulates a
+ * low trust floor, fresh `grecaptcha.enterprise.execute` tokens are still
+ * rejected and even the official Flow UI fails on that page — only F5
+ * recovers. This helper is the programmatic equivalent.
+ */
+async function _reloadRecaptchaPage(instanceId = 'default') {
+    const inst = _chromePool.get(instanceId);
+    if (!inst?.page || !inst?.browser?.isConnected()) {
+        console.warn(`[reCAPTCHA:${instanceId.substring(0, 8)}] No active page to reload`);
+        return false;
+    }
+    try {
+        console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] 🔄 Reloading page to reset reCAPTCHA SDK state...`);
+        inst.ready = false;
+        await inst.page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
+        await inst.page.waitForFunction(
+            () => typeof grecaptcha !== 'undefined' && typeof grecaptcha.enterprise !== 'undefined' && typeof grecaptcha.enterprise.execute === 'function',
+            { timeout: 15000 }
+        );
+        inst.ready = true;
+        console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Page reloaded — SDK re-initialized`);
+        return true;
+    } catch (e) {
+        console.warn(`[reCAPTCHA:${instanceId.substring(0, 8)}] Reload failed: ${e.message}`);
+        inst.ready = false;
+        return false;
+    }
+}
+
+/**
  * Reset the idle timer for a specific instance.
  */
 function _resetRecaptchaIdleTimer(instanceId = 'default') {
@@ -1081,7 +1112,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                         // to prevent the rate-limit burst that trips PUBLIC_ERROR_UNUSUAL_ACTIVITY soft-block.
                         const upscaleResult = await withUpscaleLock(instanceId, async () => {
                             const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
-                            const out = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId);
+                            const out = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId, sessionCookies);
                             await clearRecaptchaToken(upscaleRecaptcha);
                             return out;
                         });
@@ -1164,7 +1195,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
      * POST /v1/flow/upsampleImage
      * Response returns { encodedImage: "<base64 JPEG>" }
      */
-    async _upscaleImage(token, projectId, mediaId, resolution, recaptchaToken = '', instanceId = 'default') {
+    async _upscaleImage(token, projectId, mediaId, resolution, recaptchaToken = '', instanceId = 'default', sessionCookies = '') {
         const targetResolution = resolution === '4k'
             ? 'UPSAMPLE_IMAGE_RESOLUTION_4K'
             : 'UPSAMPLE_IMAGE_RESOLUTION_2K';
@@ -1186,9 +1217,24 @@ export class GoogleFlowImageConnector extends BaseConnector {
         };
 
         console.log(`[FlowImage] Upscale request: POST /v1/flow/upsampleImage (${targetResolution})`);
-        const result = await browserFetch(`${API_BASE}/v1/flow/upsampleImage`, token, body, instanceId);
+        const endpoint = `${API_BASE}/v1/flow/upsampleImage`;
+        let result;
+        const MAX_RETRIES = 2;
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            result = await browserFetch(endpoint, token, body, instanceId);
+            if (result.ok) break;
 
-        if (!result.ok) {
+            if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
+                console.warn(`[FlowImage] ⚠️ Upscale reCAPTCHA 403 — reloading page + retrying (${attempt + 1}/${MAX_RETRIES})...`);
+                // Page reload resets the SDK trust-score state — fetchRecaptchaToken alone
+                // is not enough once the page lifetime gets flagged (manual UI also fails).
+                await _reloadRecaptchaPage(instanceId);
+                await new Promise(r => setTimeout(r, 5000));
+                const freshToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
+                body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
+                continue;
+            }
+            if (result.status >= 500 && attempt < MAX_RETRIES) { await new Promise(r => setTimeout(r, 3000)); continue; }
             if (result.status === 401) {
                 throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
             }
@@ -1398,7 +1444,11 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         }
 
         const body = {
-            mediaGenerationContext: { batchId },
+            // RETURN_SILENCED_VIDEOS: keep the video even if Veo's auto-generated
+            // audio fails Google's RAI safety classifier. Default behavior
+            // (BLOCK_SILENCED_VIDEOS) nukes the whole video on audio-only false
+            // positives, which is what mcp-server hit on cooking-video prompts.
+            mediaGenerationContext: { batchId, audioFailurePreference: 'RETURN_SILENCED_VIDEOS' },
             clientContext: {
                 projectId,
                 tool: TOOL,
@@ -1490,17 +1540,38 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         const resolution = config.resolution || '720p';
         if (resolution === '1080p') {
             console.log(`[FlowVideo] 🔄 Upscaling to 1080p...`);
-            // Per-account upscale lock (same rationale as image upscale path): prevents concurrent
-            // JobBatches from bursting Google's upscale endpoint, which triggers PUBLIC_ERROR_UNUSUAL_ACTIVITY.
-            const upsampleResult = await withUpscaleLock(instanceId, async () => {
-                const upscaleRecaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
-                return this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken, instanceId);
+            // Sticky-failure recovery: once the reCAPTCHA SDK on this page lifetime is flagged,
+            // submit-time 403s and poll-time PUBLIC_ERROR_UNUSUAL_ACTIVITY come back-to-back until
+            // the page is reloaded. Outer retry below does that reload programmatically.
+            const MAX_OUTER_RETRIES = 1;
+            const upscaleSessionCookies = credentials.metadata?.sessionCookies || '';
+            let upsampledMediaId = null;
+            await withUpscaleLock(instanceId, async () => {
+                for (let outerAttempt = 0; outerAttempt <= MAX_OUTER_RETRIES; outerAttempt++) {
+                    if (outerAttempt > 0) {
+                        console.warn(`[FlowVideo] Reloading Chrome page and retrying upscale (attempt ${outerAttempt + 1})...`);
+                        await _reloadRecaptchaPage(instanceId);
+                        await new Promise(r => setTimeout(r, 5000));
+                    }
+                    const upscaleRecaptchaToken = await fetchRecaptchaToken(upscaleSessionCookies, 'VIDEO_GENERATION', instanceId);
+                    const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken, instanceId, upscaleSessionCookies);
+                    if (!upsampleResult.upsampledMediaId) {
+                        console.warn(`[FlowVideo] Upscale submit returned null (attempt ${outerAttempt + 1})`);
+                        continue;
+                    }
+                    console.log(`[FlowVideo] Upscale submitted: ${upsampleResult.upsampledMediaId}`);
+                    try {
+                        await this._pollUpscaleStatus(token, projectId, upsampleResult.upsampledMediaId);
+                        upsampledMediaId = upsampleResult.upsampledMediaId;
+                        return;
+                    } catch (e) {
+                        const isStickyFailure = /UNUSUAL_ACTIVITY|HIGH_TRAFFIC|reCAPTCHA|UNKNOWN/i.test(e.message);
+                        if (outerAttempt >= MAX_OUTER_RETRIES || !isStickyFailure) throw e;
+                        console.warn(`[FlowVideo] Poll failed (${e.message}) — will reload page and retry once`);
+                    }
+                }
             });
-            if (upsampleResult.upsampledMediaId) {
-                const upsampledMediaId = upsampleResult.upsampledMediaId;
-                console.log(`[FlowVideo] Upscale submitted: ${upsampledMediaId}`);
-                // Poll upscale status
-                await this._pollUpscaleStatus(token, projectId, upsampledMediaId);
+            if (upsampledMediaId) {
                 downloadMediaId = upsampledMediaId;
                 console.log(`[FlowVideo] ✅ Upscale to 1080p complete!`);
             } else {
@@ -1555,7 +1626,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
      * Upscale a completed video from 720p to 1080p.
      * POST /v1/video:batchAsyncGenerateVideoUpsampleVideo
      */
-    async _upscaleVideo(token, projectId, mediaId, aspectRatio, recaptchaToken = '', instanceId = 'default') {
+    async _upscaleVideo(token, projectId, mediaId, aspectRatio, recaptchaToken = '', instanceId = 'default', sessionCookies = '') {
         const url = `${API_BASE}/v1/video:batchAsyncGenerateVideoUpsampleVideo`;
         const sessionId = `;${Date.now()}`;
         const body = {
@@ -1582,9 +1653,23 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         };
 
         console.log(`[FlowVideo] Upscale request: POST ${url}`);
-        const result = await browserFetch(url, token, body, instanceId);
+        let result;
+        const MAX_RETRIES = 2;
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            result = await browserFetch(url, token, body, instanceId);
+            if (result.ok) break;
 
-        if (!result.ok) {
+            if (result.status === 403 && result.body.includes('reCAPTCHA') && attempt < MAX_RETRIES) {
+                console.warn(`[FlowVideo] ⚠️ Upscale reCAPTCHA 403 — reloading page + retrying (${attempt + 1}/${MAX_RETRIES})...`);
+                // Page reload resets the SDK trust-score state — fetchRecaptchaToken alone
+                // is not enough once the page lifetime gets flagged (manual UI also fails).
+                await _reloadRecaptchaPage(instanceId);
+                await new Promise(r => setTimeout(r, 5000));
+                const freshToken = await fetchRecaptchaToken(sessionCookies, 'VIDEO_GENERATION', instanceId);
+                body.clientContext.recaptchaContext = { token: freshToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
+                continue;
+            }
+            if (result.status >= 500 && attempt < MAX_RETRIES) { await new Promise(r => setTimeout(r, 3000)); continue; }
             console.error(`[FlowVideo] Upscale API error: ${result.status} - ${result.body.substring(0, 300)}`);
             return { upsampledMediaId: null };
         }
