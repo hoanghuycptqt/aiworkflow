@@ -11,6 +11,7 @@ import CredentialsPage from './components/Credentials/CredentialsPage.jsx';
 import AdminPage from './components/Admin/AdminPage.jsx';
 import PrivacyPolicy from './components/Legal/PrivacyPolicy.jsx';
 import TermsOfService from './components/Legal/TermsOfService.jsx';
+import Homepage from './components/Home/Homepage.jsx';
 import './index.css';
 
 function App() {
@@ -90,17 +91,19 @@ function App() {
         }}
       />
       <Routes>
-        {/* Public legal pages — accessible without login */}
+        {/* Public pages — accessible without login */}
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />
         {!user ? (
           <>
+            <Route path="/" element={<Homepage />} />
             <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
             <Route path="/auth/verify" element={<AuthPage onLogin={handleLogin} />} />
-            <Route path="*" element={<Navigate to="/auth" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </>
         ) : (
           <>
+            <Route path="/home" element={<Homepage />} />
             <Route path="/" element={<AppLayout user={user} onLogout={handleLogout} />}>
               <Route index element={<Dashboard />} />
               <Route path="credentials" element={<CredentialsPage />} />
