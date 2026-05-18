@@ -142,16 +142,21 @@ const RECAPTCHA_BASE_PORT = 9339;  // Base port for Chrome debug
 const _chromePool = new Map();
 let _nextPortOffset = 0;
 
-// Per-account upscale serialization queue.
-// Google's upsampleImage/upscaleVideo endpoints rate-limit per account; a burst of concurrent
-// calls (observed: 8 simultaneous from 2 JobBatches on 2026-05-14) trips PUBLIC_ERROR_UNUSUAL_ACTIVITY
-// soft-block lasting 30+ min. Generate calls are fine concurrent; only upscale needs to be sequential.
-const _upscaleQueues = new Map(); // instanceId -> tail Promise
+// Per-account Flow operation queue.
+// reCAPTCHA Enterprise's risk engine scores per-profile lifetime traffic; concurrent
+// submits from one account (observed: JobBatch parallel mode runs 3 workflows at once on
+// the same Chrome profile) trip both PUBLIC_ERROR_UNUSUAL_ACTIVITY (upscale, 2026-05-14)
+// and reCAPTCHA-eval 403s at generate-time. Earlier scope was upscale-only; widened to
+// cover the entire execute() body of each connector after field reports of frequent
+// 403s on parallel generate calls. Net effect: parallel JobBatches on the same Google
+// account run sequentially; different accounts (different instanceId → different profile)
+// still parallelize.
+const _flowQueues = new Map(); // instanceId -> tail Promise
 
-function withUpscaleLock(instanceId, fn) {
-    const tail = _upscaleQueues.get(instanceId) || Promise.resolve();
+function withFlowLock(instanceId, fn) {
+    const tail = _flowQueues.get(instanceId) || Promise.resolve();
     const next = tail.then(fn, fn); // run fn whether previous resolved or rejected
-    _upscaleQueues.set(instanceId, next.catch(() => { /* swallow so chain never breaks */ }));
+    _flowQueues.set(instanceId, next.catch(() => { /* swallow so chain never breaks */ }));
     return next;
 }
 
@@ -585,7 +590,7 @@ function _resetRecaptchaIdleTimer(instanceId = 'default') {
         console.log(`[reCAPTCHA:${instanceId.substring(0, 8)}] Idle timeout — closing browser`);
         await _closeRecaptchaBrowser(instanceId);
         _chromePool.delete(instanceId);
-        _upscaleQueues.delete(instanceId);
+        _flowQueues.delete(instanceId);
     }, RECAPTCHA_PAGE_IDLE_TIMEOUT);
 }
 
@@ -987,10 +992,16 @@ export class GoogleFlowImageConnector extends BaseConnector {
         if (!credentials?.token) {
             throw new Error('Google Flow credentials required (Bearer token).');
         }
-
         // Auto-refresh token if expired or near expiry
         credentials = await ensureFreshToken(credentials);
+        const instanceId = getAccountInstanceId(credentials);
+        // Per-account serialization: see _flowQueues comment. Wraps the whole
+        // generate→poll→upscale→download pipeline so two workflows on the same
+        // Google account never overlap Chrome/reCAPTCHA traffic.
+        return withFlowLock(instanceId, () => this._executeLocked(input, credentials, config, context, instanceId));
+    }
 
+    async _executeLocked(input, credentials, config, context, instanceId) {
         const token = credentials.token;
         const projectId = config.projectId;
         if (!projectId) {
@@ -1054,7 +1065,6 @@ export class GoogleFlowImageConnector extends BaseConnector {
         const sessionCookies = credentials.metadata?.sessionCookies || '';
         const batchId = uuidv4();
         const sessionId = `;${Date.now()}`;
-        const instanceId = getAccountInstanceId(credentials); // 1 persistent profile per Google account
         const allResults = [];
 
         console.log(`[FlowImage] Starting batch of ${count} image(s), batchId=${batchId}, account=${instanceId}`);
@@ -1106,16 +1116,12 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 if (resolution !== '1k' && r.mediaId) {
                     try {
                         console.log(`[FlowImage] 🔄 Upscaling image to ${resolution.toUpperCase()}...`);
-                        // Delay to avoid reCAPTCHA rate limiting (kept as belt-and-suspenders; the lock below is the primary defense)
+                        // Delay to avoid reCAPTCHA rate limiting between gen and upscale on same profile.
                         await new Promise(r => setTimeout(r, 5000));
-                        // Per-account upscale lock: serializes upsampleImage calls across concurrent JobBatch runs
-                        // to prevent the rate-limit burst that trips PUBLIC_ERROR_UNUSUAL_ACTIVITY soft-block.
-                        const upscaleResult = await withUpscaleLock(instanceId, async () => {
-                            const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
-                            const out = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId, sessionCookies);
-                            await clearRecaptchaToken(upscaleRecaptcha);
-                            return out;
-                        });
+                        // No inner lock: outer withFlowLock in execute() already serializes per-account.
+                        const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
+                        const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId, sessionCookies);
+                        await clearRecaptchaToken(upscaleRecaptcha);
                         if (upscaleResult.encodedImage) {
                             const filename = `gflow_${resolution}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
                             const filepath = join(outputDir, filename);
@@ -1355,10 +1361,14 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         if (!credentials?.token) {
             throw new Error('Google Flow credentials required (Bearer token).');
         }
-
         // Auto-refresh token if expired or near expiry
         credentials = await ensureFreshToken(credentials);
+        const instanceId = getAccountInstanceId(credentials);
+        // Per-account serialization — see _flowQueues comment.
+        return withFlowLock(instanceId, () => this._executeLocked(input, credentials, config, context, instanceId));
+    }
 
+    async _executeLocked(input, credentials, config, context, instanceId) {
         const token = credentials.token;
         const projectId = config.projectId;
         if (!projectId) throw new Error('Project ID is required.');
@@ -1370,7 +1380,6 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         const videoModelKey = VIDEO_MODELS[modelKey] || 'veo_3_1_i2v_s_fast_portrait_ultra_relaxed';
         const aspectRatio = VIDEO_ASPECT_RATIO_MAP[config.aspectRatio || '9:16'] || 'VIDEO_ASPECT_RATIO_PORTRAIT';
         const sessionId = `;${Date.now()}`;
-        const instanceId = getAccountInstanceId(credentials); // 1 persistent profile per Google account
 
         // ─── Get start frame from upstream Flow Image ───
         let startFrameMediaId = null;
@@ -1546,31 +1555,30 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             const MAX_OUTER_RETRIES = 1;
             const upscaleSessionCookies = credentials.metadata?.sessionCookies || '';
             let upsampledMediaId = null;
-            await withUpscaleLock(instanceId, async () => {
-                for (let outerAttempt = 0; outerAttempt <= MAX_OUTER_RETRIES; outerAttempt++) {
-                    if (outerAttempt > 0) {
-                        console.warn(`[FlowVideo] Reloading Chrome page and retrying upscale (attempt ${outerAttempt + 1})...`);
-                        await _reloadRecaptchaPage(instanceId);
-                        await new Promise(r => setTimeout(r, 5000));
-                    }
-                    const upscaleRecaptchaToken = await fetchRecaptchaToken(upscaleSessionCookies, 'VIDEO_GENERATION', instanceId);
-                    const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken, instanceId, upscaleSessionCookies);
-                    if (!upsampleResult.upsampledMediaId) {
-                        console.warn(`[FlowVideo] Upscale submit returned null (attempt ${outerAttempt + 1})`);
-                        continue;
-                    }
-                    console.log(`[FlowVideo] Upscale submitted: ${upsampleResult.upsampledMediaId}`);
-                    try {
-                        await this._pollUpscaleStatus(token, projectId, upsampleResult.upsampledMediaId);
-                        upsampledMediaId = upsampleResult.upsampledMediaId;
-                        return;
-                    } catch (e) {
-                        const isStickyFailure = /UNUSUAL_ACTIVITY|HIGH_TRAFFIC|reCAPTCHA|UNKNOWN/i.test(e.message);
-                        if (outerAttempt >= MAX_OUTER_RETRIES || !isStickyFailure) throw e;
-                        console.warn(`[FlowVideo] Poll failed (${e.message}) — will reload page and retry once`);
-                    }
+            // No inner lock: outer withFlowLock in execute() already serializes per-account.
+            for (let outerAttempt = 0; outerAttempt <= MAX_OUTER_RETRIES; outerAttempt++) {
+                if (outerAttempt > 0) {
+                    console.warn(`[FlowVideo] Reloading Chrome page and retrying upscale (attempt ${outerAttempt + 1})...`);
+                    await _reloadRecaptchaPage(instanceId);
+                    await new Promise(r => setTimeout(r, 5000));
                 }
-            });
+                const upscaleRecaptchaToken = await fetchRecaptchaToken(upscaleSessionCookies, 'VIDEO_GENERATION', instanceId);
+                const upsampleResult = await this._upscaleVideo(token, projectId, mediaId, aspectRatio, upscaleRecaptchaToken, instanceId, upscaleSessionCookies);
+                if (!upsampleResult.upsampledMediaId) {
+                    console.warn(`[FlowVideo] Upscale submit returned null (attempt ${outerAttempt + 1})`);
+                    continue;
+                }
+                console.log(`[FlowVideo] Upscale submitted: ${upsampleResult.upsampledMediaId}`);
+                try {
+                    await this._pollUpscaleStatus(token, projectId, upsampleResult.upsampledMediaId);
+                    upsampledMediaId = upsampleResult.upsampledMediaId;
+                    break;
+                } catch (e) {
+                    const isStickyFailure = /UNUSUAL_ACTIVITY|HIGH_TRAFFIC|reCAPTCHA|UNKNOWN/i.test(e.message);
+                    if (outerAttempt >= MAX_OUTER_RETRIES || !isStickyFailure) throw e;
+                    console.warn(`[FlowVideo] Poll failed (${e.message}) — will reload page and retry once`);
+                }
+            }
             if (upsampledMediaId) {
                 downloadMediaId = upsampledMediaId;
                 console.log(`[FlowVideo] ✅ Upscale to 1080p complete!`);
