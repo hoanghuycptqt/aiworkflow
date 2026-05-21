@@ -2089,26 +2089,209 @@ body {
 /* ================================ */
 .dashboard {
   flex: 1;
-  padding: 32px;
+  padding: 40px 40px 56px;
   overflow-y: auto;
+  background: var(--cream-100);
 }
 
+/* — Editorial header — */
 .dashboard-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 36px;
+}
+
+.dashboard-header-body {
+  max-width: 640px;
+}
+
+.dashboard-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 14px;
+}
+
+.dashboard-eyebrow::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--peach);
+}
+
+.dashboard-header h1 {
+  font-family: var(--font-serif);
+  font-size: 56px;
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+
+.dashboard-header h1 em,
+.dashboard-header h1 .serif-em {
+  font-style: italic;
+  color: var(--tomato);
+}
+
+.dashboard-header p {
+  color: var(--ink-soft);
+  font-size: 14.5px;
+  line-height: 1.6;
+  max-width: 560px;
+  margin: 0;
+}
+
+.dashboard-header-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* — Header — legacy h2 fallback for the skeleton screen — */
+.dashboard-header h2 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 38px;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+/* — Stats row — */
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 36px;
+}
+
+/* — Toolbar above the workflow grid — */
+.dashboard-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 32px;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
-.dashboard-header h2 {
-  font-size: 24px;
-  font-weight: 700;
+.dashboard-toolbar h2 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 32px;
+  font-weight: 400;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+
+.dashboard-toolbar h2 em { color: var(--tomato); }
+
+.dashboard-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dashboard-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--cream-50);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+}
+
+.dashboard-filter {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background-color var(--transition-normal), color var(--transition-normal);
+}
+
+.dashboard-filter:hover { color: var(--ink); }
+.dashboard-filter.active { background: var(--ink); color: var(--cream-50); }
+
+.dashboard-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dashboard-search .input {
+  width: 240px;
+  padding-left: 36px;
+}
+
+.dashboard-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-muted);
+  pointer-events: none;
 }
 
 .workflow-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 16px;
+}
+
+/* — Empty state — */
+.dashboard-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--r-lg);
+  color: var(--ink-muted);
+  text-align: center;
+  gap: 10px;
+}
+
+.dashboard-empty h3 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 24px;
+  font-weight: 400;
+  margin: 0;
+  color: var(--ink);
+}
+
+/* Dashboard responsive */
+@media (max-width: 960px) {
+  .dashboard { padding: 24px; }
+  .dashboard-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .dashboard-header h1 { font-size: 40px; }
+  .dashboard-stats { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 520px) {
+  .dashboard-stats { grid-template-columns: 1fr; }
+  .dashboard-search .input { width: 100%; }
 }
 
 .workflow-card {
