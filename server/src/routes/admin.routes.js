@@ -337,7 +337,7 @@ const GEMINI_MODELS = [
     { group: 'Gemini 3 (Latest)', models: [
         { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', desc: 'Advanced reasoning, coding, agentic' },
         { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', desc: 'Frontier-class, cost-effective' },
-        { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite', desc: 'Lightweight, fast' },
+        { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (GA)', desc: 'Lightweight, fast' },
     ]},
     { group: 'Gemini 2.5', models: [
         { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Low-latency, high-volume, reasoning' },

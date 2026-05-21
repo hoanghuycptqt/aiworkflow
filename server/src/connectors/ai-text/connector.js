@@ -10,6 +10,7 @@
  */
 
 import { BaseConnector } from '../base-connector.js';
+import { normalizeGeminiModel } from '../gemini/model-alias.js';
 
 // ─── Model Lists ─────────────────────────────────────────
 const OPENROUTER_MODELS = [
@@ -22,7 +23,84 @@ const OPENROUTER_MODELS = [
     'meta-llama/llama-3.2-3b-instruct:free',
 ];
 
+const GEMINI_VALID_MODELS = [
+    'gemini-3-flash-preview',
+    'gemini-3-pro-preview',
+    'gemini-3.1-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+];
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_TIMEOUT_MS = parseInt(process.env.GEMINI_TIMEOUT_MS || '60000', 10);
+const GEMINI_RETRY_DELAY_MS = 10000;
+
+/** Retry transient errors (timeout / 503 high demand) once. */
+async function geminiCallWithRetry(url, body, model) {
+    const attempt = async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+        let response;
+        try {
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                const err = new Error(`Gemini request timed out (${GEMINI_TIMEOUT_MS / 1000}s)`);
+                err.transient = true;
+                throw err;
+            }
+            const err = new Error(`Network error calling Gemini API: ${e.message}`);
+            err.transient = true;
+            throw err;
+        } finally {
+            clearTimeout(timer);
+        }
+        if (!response.ok) {
+            const text = await response.text();
+            if (response.status === 401 || response.status === 403) {
+                throw new Error('Invalid Gemini API key. Get a key at https://aistudio.google.com/apikey');
+            }
+            if (response.status === 429) {
+                throw new Error(`Rate limited on ${model}. Please wait and try again.`);
+            }
+            if (response.status === 400) {
+                let detail = '';
+                try { detail = JSON.parse(text).error?.message || text; } catch { detail = text; }
+                throw new Error(`Bad request: ${detail.substring(0, 300)}`);
+            }
+            if (response.status === 503) {
+                const err = new Error(`Gemini model temporarily unavailable (503 high demand)`);
+                err.transient = true;
+                throw err;
+            }
+            throw new Error(`Gemini API error (${response.status}): ${text.substring(0, 300)}`);
+        }
+        return response.json();
+    };
+
+    try {
+        return await attempt();
+    } catch (e) {
+        if (!e.transient) throw e;
+        console.warn(`[AI-Text/Gemini] ⚠️ Transient error on ${model}: ${e.message}. Retrying in ${GEMINI_RETRY_DELAY_MS / 1000}s...`);
+        await new Promise(r => setTimeout(r, GEMINI_RETRY_DELAY_MS));
+        try {
+            return await attempt();
+        } catch (e2) {
+            if (e2.transient) {
+                throw new Error(
+                    `Gemini API ${e2.message.includes('timed out') ? 'timeout' : 'unavailable'} after retry (model: ${model}). ` +
+                    `Google's API may be temporarily overloaded. Try again in a few minutes, switch to a stable GA model (gemini-2.5-flash), or use OpenRouter.`,
+                );
+            }
+            throw e2;
+        }
+    }
+}
 
 export class AITextConnector extends BaseConnector {
     static get metadata() {
@@ -235,9 +313,8 @@ export class AITextConnector extends BaseConnector {
     async _executeGemini(input, credentials, config) {
         const apiKey = credentials.token;
         const prompt = config.prompt || '';
-        const validModels = ['gemini-3-flash-preview', 'gemini-3-pro-preview'];
-        let model = config.model || 'gemini-3-flash-preview';
-        if (!validModels.includes(model)) {
+        let model = normalizeGeminiModel(config.model || 'gemini-3-flash-preview');
+        if (!GEMINI_VALID_MODELS.includes(model)) {
             console.log(`[AI-Text/Gemini] ⚠️ Model "${model}" not in valid list, falling back to gemini-3-flash-preview`);
             model = 'gemini-3-flash-preview';
         }
@@ -285,48 +362,7 @@ export class AITextConnector extends BaseConnector {
         const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${apiKey}`;
         console.log(`[AI-Text/Gemini] 📤 Calling ${model}...`);
 
-        // Timeout after 30s (Gemini API may be geo-blocked in some regions)
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30000);
-
-        let response;
-        try {
-            response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-                signal: controller.signal,
-            });
-        } catch (fetchErr) {
-            clearTimeout(timeout);
-            if (fetchErr.name === 'AbortError') {
-                throw new Error(
-                    'Gemini API request timed out (30s). ' +
-                    'This may be due to geo-blocking — Google Gemini API is not available in all regions. ' +
-                    'Try using a VPN, or switch to OpenRouter provider.'
-                );
-            }
-            throw new Error(`Network error calling Gemini API: ${fetchErr.message}`);
-        }
-        clearTimeout(timeout);
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            if (response.status === 401 || response.status === 403) {
-                throw new Error('Invalid Gemini API key. Get a key at https://aistudio.google.com/apikey');
-            }
-            if (response.status === 429) {
-                throw new Error(`Rate limited on ${model}. Please wait and try again.`);
-            }
-            if (response.status === 400) {
-                let detail = '';
-                try { detail = JSON.parse(errorText).error?.message || errorText; } catch { detail = errorText; }
-                throw new Error(`Bad request: ${detail.substring(0, 300)}`);
-            }
-            throw new Error(`Gemini API error (${response.status}): ${errorText.substring(0, 300)}`);
-        }
-
-        const data = await response.json();
+        const data = await geminiCallWithRetry(url, body, model);
         const candidates = data.candidates;
 
         if (!candidates || candidates.length === 0) {

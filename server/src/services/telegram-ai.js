@@ -555,12 +555,16 @@ async function callGemini(messages) {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // Read model from admin settings (DB), fallback to default
+    // Read model from admin settings (DB), fallback to default. Normalize through the
+    // shared alias map so a saved gemini-3.1-flash-lite-preview value still works after
+    // Google's 2026-05-25 GA migration.
+    const { normalizeGeminiModel } = await import('../connectors/gemini/model-alias.js');
     let selectedModel = 'gemini-3-flash-preview';
     try {
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_model' } });
         if (setting?.value) selectedModel = setting.value;
     } catch { /* use default */ }
+    selectedModel = normalizeGeminiModel(selectedModel);
 
     // Build history for chat (all messages except the last one)
     const history = messages.slice(0, -1)
