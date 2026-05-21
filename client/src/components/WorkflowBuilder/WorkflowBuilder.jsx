@@ -56,6 +56,7 @@ function WorkflowBuilderInner() {
     const [expandedNodes, setExpandedNodes] = useState({});
     const [activeTab, setActiveTab] = useState('canvas');
     const [jobCount, setJobCount] = useState(0);
+    const [paletteSearch, setPaletteSearch] = useState('');
     const [historyKey, setHistoryKey] = useState(0); // bump to force refresh
     const [showMobilePalette, setShowMobilePalette] = useState(false);
 
@@ -310,60 +311,67 @@ function WorkflowBuilderInner() {
     const hasResults = Object.keys(nodeOutputs).length > 0;
 
     return (
-        <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
-            {/* Header */}
+        <div className="builder-layout">
+            {/* Top bar — shared across Canvas / Jobs / History */}
             <div className="builder-header">
                 <div className="builder-header-left">
-                    <button className="builder-back-btn" onClick={() => navigate('/')}>←</button>
-                    <input
-                        className="builder-title-input"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Workflow name"
-                    />
-                    {executionStatus && (
-                        <span className={`badge badge-${executionStatus === 'running' ? 'warning' : executionStatus === 'completed' ? 'success' : executionStatus === 'failed' ? 'error' : 'info'}`}>
-                            {executionStatus === 'running' && <><Icon name="zap" size={12} /> </>}
-                            {executionStatus}
+                    <button className="builder-back-btn" onClick={() => navigate('/')} title="Back to workflows">
+                        <Icon name="chevron-left" size={16} />
+                    </button>
+                    <div className="builder-title-block">
+                        <input
+                            className="builder-title-input"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder="Untitled flow"
+                        />
+                        <span className="builder-title-meta">
+                            {saving ? 'SAVING…' : <><span className="saved-dot" /> SAVED · v1</>}
+                            {executionStatus && (
+                                <>
+                                    <span style={{ color: 'var(--ink-faint)' }}>·</span>
+                                    <span style={{ color: executionStatus === 'failed' ? 'var(--error)' : executionStatus === 'completed' ? 'var(--success)' : 'var(--warning)' }}>
+                                        {executionStatus.toUpperCase()}
+                                    </span>
+                                </>
+                            )}
                         </span>
-                    )}
+                    </div>
                 </div>
                 <div className="builder-header-actions">
+                    {/* Tab pill group */}
+                    <div className="tab-bar" role="tablist" aria-label="Workflow view">
+                        {['canvas', 'jobs', 'history'].map((tab) => {
+                            const labels = {
+                                canvas: 'Canvas',
+                                jobs: `Jobs${jobCount > 0 ? ` · ${jobCount}` : ''}`,
+                                history: 'History',
+                            };
+                            return (
+                                <button
+                                    key={tab}
+                                    className={`tab-item${activeTab === tab ? ' active' : ''}`}
+                                    onClick={() => setActiveTab(tab)}
+                                    role="tab"
+                                    aria-selected={activeTab === tab}
+                                >
+                                    {labels[tab]}
+                                </button>
+                            );
+                        })}
+                    </div>
                     {hasResults && activeTab === 'canvas' && (
-                        <button className="btn btn-sm" onClick={() => setShowResults(!showResults)}>
-                            <Icon name={showResults ? 'chevron-down' : 'chevron-up'} size={14} /> {showResults ? 'Hide Results' : 'Show Results'}
+                        <button className="btn btn-ghost btn-sm" onClick={() => setShowResults(!showResults)}>
+                            <Icon name={showResults ? 'chevron-down' : 'chevron-up'} size={14} /> Results
                         </button>
                     )}
-                    <button className="btn btn-sm" onClick={saveWorkflow} disabled={saving}>
-                        {saving ? <span className="loading-spinner" /> : <Icon name="save" size={14} />} Save
+                    <button className="btn btn-ghost btn-sm" onClick={saveWorkflow} disabled={saving} title="Save">
+                        <Icon name="save" size={14} /> Save
                     </button>
-                    <button className="btn btn-sm btn-primary" onClick={() => setShowRunModal(true)}>
-                        <Icon name="play" size={14} /> Quick Run
+                    <button className="btn btn-primary btn-sm" onClick={() => setShowRunModal(true)}>
+                        <Icon name="play" size={14} /> Run flow
                     </button>
                 </div>
-            </div>
-
-            {/* Tab bar */}
-            <div className="tab-bar">
-                {['canvas', 'jobs', 'history'].map((tab) => {
-                    const labels = {
-                        canvas: 'Canvas',
-                        jobs: `Jobs${jobCount > 0 ? ` (${jobCount})` : ''}`,
-                        history: 'History',
-                    };
-                    const icons = {
-                        canvas: 'palette',
-                        jobs: 'list-ordered',
-                        history: 'clock',
-                    };
-                    return (
-                        <button
-                            key={tab}
-                            className={`tab-item${activeTab === tab ? ' active' : ''}`}
-                            onClick={() => setActiveTab(tab)}
-                        ><Icon name={icons[tab]} size={14} />{labels[tab]}</button>
-                    );
-                })}
             </div>
 
             {/* Canvas tab */}
@@ -372,14 +380,32 @@ function WorkflowBuilderInner() {
                     <div className="builder-content" style={{ flex: showResults ? '1 1 50%' : '1 1 100%' }}>
                         {/* Node palette */}
                         <div className="node-palette">
-                            {NODE_CATEGORIES.map((cat) => (
-                                <div key={cat.id} className="palette-section">
-                                    <div className="palette-section-title">
-                                        <Icon name={cat.icon} size={14} /> {cat.label}
-                                    </div>
-                                    {Object.values(NODE_TYPES)
-                                        .filter((nt) => nt.category === cat.id)
-                                        .map((nt) => (
+                            <div className="palette-search">
+                                <span className="palette-search-icon"><Icon name="search" size={14} /></span>
+                                <input
+                                    className="input"
+                                    type="text"
+                                    placeholder="Search nodes…"
+                                    value={paletteSearch}
+                                    onChange={(e) => setPaletteSearch(e.target.value)}
+                                />
+                            </div>
+                            {NODE_CATEGORIES.map((cat) => {
+                                const matchesSearch = (nt) =>
+                                    !paletteSearch.trim() ||
+                                    nt.label.toLowerCase().includes(paletteSearch.trim().toLowerCase()) ||
+                                    nt.description.toLowerCase().includes(paletteSearch.trim().toLowerCase());
+                                const items = Object.values(NODE_TYPES)
+                                    .filter((nt) => nt.category === cat.id)
+                                    .filter(matchesSearch);
+                                if (items.length === 0) return null;
+                                return (
+                                    <div key={cat.id} className="palette-section">
+                                        <div className="palette-section-title">
+                                            <span>{cat.label}</span>
+                                            <span className="palette-section-title-count">· {items.length}</span>
+                                        </div>
+                                        {items.map((nt) => (
                                             <div
                                                 key={nt.type}
                                                 className="palette-node"
@@ -389,8 +415,11 @@ function WorkflowBuilderInner() {
                                                     e.dataTransfer.effectAllowed = 'move';
                                                 }}
                                             >
-                                                <div className="palette-node-icon" style={{ background: `${nt.color}15`, color: nt.color }}>
-                                                    <Icon name={nt.icon} size={18} />
+                                                <div
+                                                    className="palette-node-icon"
+                                                    style={{ background: `color-mix(in srgb, ${nt.color} 30%, var(--cream-100))` }}
+                                                >
+                                                    <Icon name={nt.icon} size={16} color="var(--ink)" />
                                                 </div>
                                                 <div className="palette-node-info">
                                                     <div className="palette-node-name">{nt.label}</div>
@@ -398,8 +427,9 @@ function WorkflowBuilderInner() {
                                                 </div>
                                             </div>
                                         ))}
-                                </div>
-                            ))}
+                                    </div>
+                                );
+                            })}
                         </div>
 
                         {/* React Flow canvas */}
