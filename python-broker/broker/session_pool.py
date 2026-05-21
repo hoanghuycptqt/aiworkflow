@@ -59,6 +59,7 @@ class Session:
         self.login_error: Optional[str] = None
         self.login_cookies: Optional[str] = None
         self._login_task: Optional[asyncio.Task] = None
+        self._login_page: Optional[Any] = None  # holds page during _run_login for failure debug
 
     async def ensure_ready(self) -> None:
         """Lazy launch browser + initial context. Caller MUST hold self.lock.
@@ -275,6 +276,7 @@ class Session:
                 self.browser = await self._invisible_cm.__aenter__()
                 self.context = await self.browser.new_context()
                 page = await self.context.new_page()
+                self._login_page = page  # tracked for failure screenshot
 
                 async def on_2fa(path: str) -> None:
                     self.login_screenshot_path = path
@@ -296,12 +298,13 @@ class Session:
             self.login_error = str(e)
             self.login_state = LoginState.FAILED
             logger.warning(f"[{self.account_id}] login flow FAILED: {e}")
-            # Debug snapshot before teardown — helps diagnose stuck navigations.
+            # Capture page state on the login page (not self.page which is the
+            # pre-login working page) so we can see where the nav got stuck.
             try:
-                if self.page is not None and not self.page.is_closed():
+                if self._login_page is not None and not self._login_page.is_closed():
                     dump_path = f"/tmp/login-fail-{self.account_id}-{int(time.time())}.png"
-                    await self.page.screenshot(path=dump_path, full_page=False)
-                    cur_url = self.page.url
+                    await self._login_page.screenshot(path=dump_path, full_page=False)
+                    cur_url = self._login_page.url
                     logger.info(f"[{self.account_id}] failure debug: url={cur_url} screenshot={dump_path}")
             except Exception as dbg_err:
                 logger.warning(f"[{self.account_id}] could not capture failure debug: {dbg_err}")

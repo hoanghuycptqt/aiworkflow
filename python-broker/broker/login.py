@@ -49,37 +49,39 @@ async def _is_already_signed_in(context) -> bool:
 async def _click_sign_in_with_google(page) -> bool:
     """Try to click the Sign in with Google button on labs.google/fx landing.
 
-    Mirrors worker's 3 strategies: text scan → role-based → coordinate fallback.
+    IMPORTANT: must use Playwright `locator.click()` — Firefox blocks synthetic
+    `el.click()` via page.evaluate from triggering navigation (no user activation).
+    The legacy Chrome worker used the same JS approach and it worked there
+    because Chrome treats synthetic clicks as activated by default.
     """
-    # Strategy 1: text search across leaf elements
-    clicked = await page.evaluate("""
-        () => {
-            const els = [...document.querySelectorAll('*')];
-            for (const el of els) {
-                if (el.children.length > 5) continue;
-                const t = (el.textContent || '').trim();
-                if ((t === 'Sign in with Google' || t === 'Sign in') && t.length < 40) {
-                    el.click();
-                    return true;
-                }
-            }
-            return false;
-        }
-    """)
-    if clicked:
-        logger.info("clicked Sign in (text strategy)")
+    # Strategy 1: exact text "Sign in with Google"
+    try:
+        loc = page.get_by_text("Sign in with Google", exact=True)
+        await loc.first.click(timeout=5000)
+        logger.info("clicked Sign in (text-exact strategy)")
         return True
+    except Exception as e:
+        logger.info(f"text-exact strategy missed: {e}")
 
-    # Strategy 2: Playwright locator with text role
+    # Strategy 2: role=button name=Sign in
     try:
         loc = page.get_by_role("button", name="Sign in")
-        await loc.first.click(timeout=3000)
+        await loc.first.click(timeout=5000)
         logger.info("clicked Sign in (role strategy)")
         return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.info(f"role strategy missed: {e}")
 
-    # Strategy 3: coordinate click at top-right (button position on 1280x900)
+    # Strategy 3: any element with text "Sign in" or "Sign in with Google"
+    try:
+        loc = page.locator("text=/^Sign in( with Google)?$/").first
+        await loc.click(timeout=5000)
+        logger.info("clicked Sign in (locator-regex strategy)")
+        return True
+    except Exception as e:
+        logger.info(f"locator-regex strategy missed: {e}")
+
+    # Strategy 4: coordinate click at top-right (button position on 1280x900)
     try:
         await page.mouse.click(1130, 40)
         logger.info("clicked Sign in (coordinate strategy)")
@@ -203,10 +205,12 @@ async def perform_login(
     clicked = await _click_sign_in_with_google(page)
     if clicked:
         try:
-            await page.wait_for_load_state(LOGIN_WAIT_UNTIL, timeout=10000)
-        except Exception:
-            pass
+            # 20s for the nav to settle — Google's accounts page can be slow.
+            await page.wait_for_load_state(LOGIN_WAIT_UNTIL, timeout=20000)
+        except Exception as e:
+            logger.info(f"post-click wait_for_load_state didn't settle: {e}")
         await _delay(2.0, 3.0)
+        logger.info(f"after click URL: {page.url[:120]}")
 
     # If still on labs.google after click, post NextAuth signin form.
     if "labs.google" in page.url:
