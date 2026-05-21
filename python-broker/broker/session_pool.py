@@ -256,12 +256,14 @@ class Session:
 
     async def _run_login(self, email: str, password: str) -> None:
         from broker.login import perform_login
+        # CRITICAL: hold the Session lock for the ENTIRE login flow (including the
+        # 2FA wait, up to ~120s). Without this, a concurrent refresh_cookies /
+        # mint_token / flow_fetch call would acquire the lock between our setup
+        # and perform_login's page.goto, then call _teardown_invisible inside
+        # ensure_ready, killing the browser mid-login — observed 2026-05-21 12:49
+        # as "Target page, context or browser has been closed".
         try:
-            # Need a browser, but NOT pre-injected cookies (we want a signed-out start).
             async with self.lock:
-                # Tear down any existing browser fully — login needs a fresh
-                # invisible_playwright launch so we don't carry stale fingerprint
-                # context or stuck pages from previous failed refresh attempts.
                 await self._teardown_invisible(reason="login starts fresh")
                 from invisible_playwright.async_api import InvisiblePlaywright
                 self._invisible_cm = InvisiblePlaywright()
@@ -269,18 +271,16 @@ class Session:
                 self.context = await self.browser.new_context()
                 page = await self.context.new_page()
 
-            async def on_2fa(path: str) -> None:
-                self.login_screenshot_path = path
-                self.login_state = LoginState.AWAITING_2FA
+                async def on_2fa(path: str) -> None:
+                    self.login_screenshot_path = path
+                    self.login_state = LoginState.AWAITING_2FA
 
-            cookies_str = await perform_login(page, email, password, on_2fa)
+                cookies_str = await perform_login(page, email, password, on_2fa)
 
-            async with self.lock:
                 # Promote login session as the working context for runtime ops.
                 self.page = page
                 self.request_count = 0
                 self.ready = True
-                # Update cached cookies for future runtime auto-init.
                 self.cookies = parse_cookie_string(cookies_str)
 
             self.login_cookies = cookies_str
@@ -291,6 +291,14 @@ class Session:
             self.login_error = str(e)
             self.login_state = LoginState.FAILED
             logger.warning(f"[{self.account_id}] login flow FAILED: {e}")
+            # Failed login leaves the browser in a half-broken state — tear it
+            # down so the next attempt starts clean. Acquire the lock again
+            # since we released it on exception (the `async with` above exited).
+            try:
+                async with self.lock:
+                    await self._teardown_invisible(reason="login failed cleanup")
+            except Exception as cleanup_err:
+                logger.warning(f"[{self.account_id}] failed-login cleanup error: {cleanup_err}")
 
     def login_status_snapshot(self) -> dict:
         return {
