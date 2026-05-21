@@ -13,7 +13,7 @@ import logging
 import time
 from typing import Any, Optional
 
-from broker.config import IDLE_TIMEOUT_S, ROTATION_THRESHOLD
+from broker.config import IDLE_TIMEOUT_S, PAGE_NAV_TIMEOUT_MS, ROTATION_THRESHOLD
 from broker.cookies import parse_cookie_string, stringify_cookies
 from broker.flow import (
     FLOW_URL,
@@ -76,7 +76,7 @@ class Session:
 
         self.page = await self.context.new_page()
         logger.info(f"[{self.account_id}] goto {FLOW_URL}")
-        await self.page.goto(FLOW_URL, wait_until="networkidle", timeout=30000)
+        await self.page.goto(FLOW_URL, wait_until="networkidle", timeout=PAGE_NAV_TIMEOUT_MS)
 
         if await is_signin_redirect(self.page):
             url = self.page.url
@@ -131,7 +131,7 @@ class Session:
         """
         async with self.lock:
             await self.ensure_ready()
-            await self.page.reload(wait_until="networkidle", timeout=30000)
+            await self.page.reload(wait_until="networkidle", timeout=PAGE_NAV_TIMEOUT_MS)
             await wait_for_grecaptcha(self.page)
             self.last_used = time.monotonic()
             self._restart_idle_timer()

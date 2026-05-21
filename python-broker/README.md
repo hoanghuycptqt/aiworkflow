@@ -90,6 +90,7 @@ curl -s -X POST http://127.0.0.1:8002/sessions/test_user/recaptcha-token \
 | `BROKER_AUTH_TOKEN` | (empty) | Optional bearer secret; empty disables auth |
 | `BROKER_ROTATION_THRESHOLD` | `15` | Requests before context rotation. Don't raise above 18. |
 | `BROKER_IDLE_TIMEOUT_S` | `600` | Seconds of idle before fully closing browser |
+| `BROKER_PAGE_NAV_TIMEOUT_MS` | `60000` | `page.goto` / `page.reload` timeout. Bumped from 30s after Phase 2 saw cold-start hit 30s ceiling on the VPS. |
 
 ## Deployment (VPS)
 

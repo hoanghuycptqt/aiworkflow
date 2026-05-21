@@ -15,3 +15,7 @@ ROTATION_THRESHOLD = int(os.environ.get("BROKER_ROTATION_THRESHOLD", "15"))
 
 # Idle close timeout — matches Chrome connector's 10-min (preserves trust-score architecture).
 IDLE_TIMEOUT_S = int(os.environ.get("BROKER_IDLE_TIMEOUT_S", str(10 * 60)))
+
+# Page nav timeout — Firefox cold-launch + Xvfb + heavy Flow SPA can exceed 30s on
+# the VPS. Phase 2 e2e observed ~16-20s typical cold-start; 60s provides headroom.
+PAGE_NAV_TIMEOUT_MS = int(os.environ.get("BROKER_PAGE_NAV_TIMEOUT_MS", "60000"))
