@@ -1,9 +1,62 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { api, SERVER } from '../../services/api.js';
+import { api } from '../../services/api.js';
 import Icon from '../../services/icons.jsx';
 import Logo, { Wordmark } from '../../services/Logo.jsx';
 import toast from 'react-hot-toast';
+
+function passwordStrength(pw) {
+    if (!pw) return 0;
+    let score = 0;
+    if (pw.length >= 8) score++;
+    if (pw.length >= 12) score++;
+    if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+    if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) score++;
+    return score; // 0..4
+}
+
+function AuthAside() {
+    return (
+        <aside className="auth-aside" aria-hidden="true">
+            <div className="auth-aside-top">
+                <Link to="/" className="auth-aside-brand">
+                    <Logo chip size={30} />
+                    <Wordmark size={22} />
+                </Link>
+                <div className="auth-aside-stamp">
+                    EST. 2025<br />VISUAL AI WORKFLOWS
+                </div>
+            </div>
+            <div className="auth-aside-art">
+                {/* Editorial SVG composition — wired flow nodes */}
+                <svg viewBox="0 0 360 320" width="100%" style={{ maxWidth: 360 }}>
+                    {/* Dot grid background */}
+                    <defs>
+                        <pattern id="auth-dots" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+                            <circle cx="1" cy="1" r="1" fill="rgba(42,37,32,0.08)" />
+                        </pattern>
+                    </defs>
+                    <rect width="360" height="320" fill="url(#auth-dots)" />
+                    {/* Flow curves */}
+                    <path d="M 60 80 Q 140 60 200 130 T 320 200" stroke="var(--ink)" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+                    <path d="M 60 200 Q 130 240 220 220 T 320 130" stroke="var(--ink)" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeDasharray="2 4" />
+                    {/* Nodes */}
+                    <g>
+                        <circle cx="60" cy="80" r="18" fill="var(--peach)" stroke="var(--ink)" strokeWidth="1.5" />
+                        <circle cx="200" cy="130" r="22" fill="var(--lavender)" stroke="var(--ink)" strokeWidth="1.5" />
+                        <circle cx="320" cy="200" r="18" fill="var(--butter)" stroke="var(--ink)" strokeWidth="1.5" />
+                        <circle cx="60" cy="200" r="14" fill="var(--sage)" stroke="var(--ink)" strokeWidth="1.5" />
+                        <circle cx="220" cy="220" r="14" fill="var(--sky)" stroke="var(--ink)" strokeWidth="1.5" />
+                        <circle cx="320" cy="130" r="14" fill="var(--peach-soft)" stroke="var(--ink)" strokeWidth="1.5" />
+                    </g>
+                </svg>
+            </div>
+            <p className="auth-aside-quote">
+                &ldquo;Wire the idea once. Run it <em>a hundred times.</em>&rdquo;
+            </p>
+        </aside>
+    );
+}
 
 export default function AuthPage({ onLogin }) {
     const [isLogin, setIsLogin] = useState(true);
@@ -13,7 +66,7 @@ export default function AuthPage({ onLogin }) {
     const [verifyStatus, setVerifyStatus] = useState(null); // null | 'success' | 'error'
     const [unverifiedEmail, setUnverifiedEmail] = useState('');
     const [theme, setTheme] = useState(
-        () => document.documentElement.getAttribute('data-theme') || 'dark'
+        () => document.documentElement.getAttribute('data-theme') || 'light'
     );
     const googleBtnRef = useRef(null);
     const googleInitRef = useRef(false);
@@ -33,7 +86,6 @@ export default function AuthPage({ onLogin }) {
 
         function initGoogle() {
             if (!window.google?.accounts?.id) {
-                // GIS script not loaded yet, retry
                 setTimeout(initGoogle, 200);
                 return;
             }
@@ -48,7 +100,7 @@ export default function AuthPage({ onLogin }) {
                     size: 'large',
                     width: '100%',
                     text: 'signin_with',
-                    shape: 'rectangular',
+                    shape: 'pill',
                 });
             }
         }
@@ -58,14 +110,13 @@ export default function AuthPage({ onLogin }) {
     // Re-render Google button when theme changes
     useEffect(() => {
         if (!googleInitRef.current || !window.google?.accounts?.id || !googleBtnRef.current) return;
-        // Clear and re-render with new theme
         googleBtnRef.current.innerHTML = '';
         window.google.accounts.id.renderButton(googleBtnRef.current, {
             theme: theme === 'light' ? 'outline' : 'filled_black',
             size: 'large',
             width: '100%',
             text: 'signin_with',
-            shape: 'rectangular',
+            shape: 'pill',
         });
     }, [theme]);
 
@@ -99,7 +150,6 @@ export default function AuthPage({ onLogin }) {
             const data = await api.request(`/auth/verify?token=${token}`);
             setVerifyStatus('success');
             toast.success(data.message || 'Email verified!');
-            // Clean URL
             window.history.replaceState({}, '', '/auth');
         } catch (err) {
             setVerifyStatus('error');
@@ -122,7 +172,6 @@ export default function AuthPage({ onLogin }) {
                     setVerificationSent(true);
                     toast.success('Check your email!');
                 } else {
-                    // First user: auto-login
                     toast.success('Account created!');
                     onLogin(data);
                 }
@@ -150,149 +199,215 @@ export default function AuthPage({ onLogin }) {
         }
     }
 
-    // Verification sent screen
+    // — Verification-sent state —
     if (verificationSent) {
         return (
             <div className="auth-container">
-                <div className="auth-card" style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 48, marginBottom: 16 }}><Icon name="mail" size={48} color="var(--accent-primary)" /></div>
-                    <h1 style={{ background: 'none', WebkitTextFillColor: 'var(--text-primary)', fontSize: 22 }}>
-                        Check your email
-                    </h1>
-                    <p className="subtitle" style={{ marginBottom: 24 }}>
-                        We sent a verification link to <br />
-                        <strong style={{ color: 'var(--accent-primary)' }}>{form.email}</strong>
-                    </p>
-                    <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 20 }}>
-                        Click the link in the email to activate your account.
-                    </p>
-                    <button className="btn btn-secondary" onClick={handleResendVerification} style={{ marginBottom: 12 }}>
-                        Resend verification email
+                <AuthAside />
+                <main className="auth-main">
+                    <button
+                        className="auth-theme-toggle"
+                        onClick={toggleTheme}
+                        title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                    >
+                        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
                     </button>
-                    <p className="auth-switch">
-                        <a href="#" onClick={(e) => { e.preventDefault(); setVerificationSent(false); setIsLogin(true); }}>
-                            Back to Sign In
-                        </a>
-                    </p>
-                </div>
+                    <div className="auth-card auth-state">
+                        <div className="auth-state-circle auth-state-circle--butter">
+                            <Icon name="mail" size={40} />
+                            <span className="auth-state-circle-badge">1</span>
+                        </div>
+                        <h1>Check your <em>inbox.</em></h1>
+                        <p className="subtitle" style={{ textAlign: 'center' }}>
+                            We sent a verification link to{' '}
+                            <strong style={{ color: 'var(--ink)' }}>{form.email}</strong>. Click the
+                            link to activate your account.
+                        </p>
+                        <div className="auth-state-timer">
+                            <Icon name="timer" size={12} /> Link expires in 59 min 42 sec
+                        </div>
+                        <button className="btn btn-primary" onClick={handleResendVerification} style={{ width: '100%' }}>
+                            Resend verification email
+                        </button>
+                        <p className="auth-switch" style={{ marginTop: 18, textAlign: 'center', fontSize: 13, color: 'var(--ink-muted)' }}>
+                            <a href="#" onClick={(e) => { e.preventDefault(); setVerificationSent(false); setIsLogin(true); }}
+                                style={{ color: 'var(--ink)' }}>
+                                ← Back to sign in
+                            </a>
+                        </p>
+                    </div>
+                </main>
             </div>
         );
     }
 
-    // Verify success screen
+    // — Verified state —
     if (verifyStatus === 'success') {
         return (
             <div className="auth-container">
-                <div className="auth-card" style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 48, marginBottom: 16 }}><Icon name="mail-check" size={48} color="var(--success)" /></div>
-                    <h1 style={{ background: 'none', WebkitTextFillColor: 'var(--text-primary)', fontSize: 22 }}>
-                        Email verified!
-                    </h1>
-                    <p className="subtitle" style={{ marginBottom: 24 }}>
-                        Your account is now active. You can log in.
-                    </p>
-                    <button className="btn btn-primary" onClick={() => setVerifyStatus(null)}>
-                        Sign In
+                <AuthAside />
+                <main className="auth-main">
+                    <button
+                        className="auth-theme-toggle"
+                        onClick={toggleTheme}
+                        title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                    >
+                        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
                     </button>
-                </div>
+                    <div className="auth-card auth-state">
+                        <div className="auth-state-circle auth-state-circle--sage">
+                            <Icon name="check-circle" size={40} />
+                            {/* Decorative ring (dashed) */}
+                            <svg
+                                width="120" height="120" viewBox="0 0 120 120"
+                                style={{ position: 'absolute', inset: -12, pointerEvents: 'none' }}
+                                aria-hidden="true"
+                            >
+                                <circle cx="60" cy="60" r="56" fill="none" stroke="var(--sage)" strokeWidth="1.5" strokeDasharray="2 6">
+                                    <animateTransform attributeName="transform" attributeType="XML" type="rotate"
+                                        from="0 60 60" to="360 60 60" dur="14s" repeatCount="indefinite" />
+                                </circle>
+                            </svg>
+                        </div>
+                        <h1><em>Verified.</em> Welcome aboard.</h1>
+                        <p className="subtitle" style={{ textAlign: 'center' }}>
+                            Your account is now active. Time to open the canvas.
+                        </p>
+                        <button className="btn btn-primary" onClick={() => setVerifyStatus(null)} style={{ width: '100%' }}>
+                            Open the canvas
+                        </button>
+                    </div>
+                </main>
             </div>
         );
     }
 
+    // — Default: sign-in / create-account form —
+    const strength = !isLogin ? passwordStrength(form.password) : 0;
+
     return (
         <div className="auth-container">
-            <button
-                className="auth-theme-toggle"
-                onClick={toggleTheme}
-                title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            >
-                <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
-            </button>
-            <div className="auth-card">
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <Logo chip size={56} />
-                    <Wordmark size={28} />
-                </div>
-                <p className="subtitle">AI Workflow Automation</p>
+            <AuthAside />
+            <main className="auth-main">
+                <button
+                    className="auth-theme-toggle"
+                    onClick={toggleTheme}
+                    title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                >
+                    <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
+                </button>
+                <div className="auth-card">
+                    <span className="auth-eyebrow">{isLogin ? 'WELCOME BACK' : 'CREATE YOUR ACCOUNT'}</span>
+                    <h1>Open the <em>canvas.</em></h1>
+                    <p className="subtitle">
+                        {isLogin
+                            ? 'Sign in to pick up where you left off — drafts, runs, and credentials are all where you left them.'
+                            : 'Spin up an account in seconds. No credit card, bring your own AI keys, cancel any time.'}
+                    </p>
 
-                <form className="auth-form" onSubmit={handleSubmit}>
-                    {!isLogin && (
+                    <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+                        <button
+                            type="button"
+                            className={`auth-tab${isLogin ? ' active' : ''}`}
+                            role="tab"
+                            aria-selected={isLogin}
+                            onClick={() => { setIsLogin(true); setUnverifiedEmail(''); }}
+                        >
+                            Sign in
+                        </button>
+                        <button
+                            type="button"
+                            className={`auth-tab${!isLogin ? ' active' : ''}`}
+                            role="tab"
+                            aria-selected={!isLogin}
+                            onClick={() => { setIsLogin(false); setUnverifiedEmail(''); }}
+                        >
+                            Create account
+                        </button>
+                    </div>
+
+                    <form className="auth-form" onSubmit={handleSubmit}>
+                        {!isLogin && (
+                            <div className="form-group">
+                                <label className="form-label">Name</label>
+                                <input
+                                    className="input"
+                                    type="text"
+                                    placeholder="Your name"
+                                    value={form.name}
+                                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                                    required={!isLogin}
+                                />
+                            </div>
+                        )}
+
                         <div className="form-group">
-                            <label className="form-label">Name</label>
+                            <label className="form-label">Email</label>
                             <input
                                 className="input"
-                                type="text"
-                                placeholder="Your name"
-                                value={form.name}
-                                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                                required={!isLogin}
+                                type="email"
+                                placeholder="you@example.com"
+                                value={form.email}
+                                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                                required
                             />
+                        </div>
+
+                        <div className="form-group">
+                            <label className="form-label">Password</label>
+                            <input
+                                className="input"
+                                type="password"
+                                placeholder="••••••••"
+                                value={form.password}
+                                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                                required
+                                minLength={6}
+                            />
+                            {!isLogin && (
+                                <div className="auth-strength" aria-label={`Password strength ${strength} of 4`}>
+                                    {[0, 1, 2, 3].map((i) => (
+                                        <span
+                                            key={i}
+                                            className={`auth-strength-seg${i < strength ? ' lit' : ''}${i < strength && strength === 4 ? ' strong' : ''}`}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <button className="btn btn-primary" type="submit" disabled={loading}>
+                            {loading ? <span className="loading-spinner" /> : null}
+                            {isLogin ? 'Open the canvas' : 'Create my account'}
+                        </button>
+                    </form>
+
+                    {/* Google Sign-In */}
+                    <div className="auth-divider">
+                        <div className="auth-divider-line" />
+                        <span className="auth-divider-label">OR</span>
+                        <div className="auth-divider-line" />
+                    </div>
+                    <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center' }} />
+
+                    {unverifiedEmail && (
+                        <div style={{ marginTop: 16, padding: 12, background: 'var(--butter-soft)', border: '1px solid var(--butter)', borderRadius: 'var(--r-md)', textAlign: 'center' }}>
+                            <p style={{ fontSize: 13, color: 'var(--ink)', marginBottom: 8 }}>
+                                <Icon name="alert-triangle" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Email not verified yet
+                            </p>
+                            <button className="btn btn-ghost btn-sm" onClick={handleResendVerification}>
+                                Resend verification email
+                            </button>
                         </div>
                     )}
 
-                    <div className="form-group">
-                        <label className="form-label">Email</label>
-                        <input
-                            className="input"
-                            type="email"
-                            placeholder="you@example.com"
-                            value={form.email}
-                            onChange={(e) => setForm({ ...form, email: e.target.value })}
-                            required
-                        />
+                    <div className="auth-legal-links">
+                        <Link to="/privacy">Privacy</Link>
+                        <span>·</span>
+                        <Link to="/terms">Terms</Link>
                     </div>
-
-                    <div className="form-group">
-                        <label className="form-label">Password</label>
-                        <input
-                            className="input"
-                            type="password"
-                            placeholder="••••••••"
-                            value={form.password}
-                            onChange={(e) => setForm({ ...form, password: e.target.value })}
-                            required
-                            minLength={6}
-                        />
-                    </div>
-
-                    <button className="btn btn-primary" type="submit" disabled={loading}>
-                        {loading ? <span className="loading-spinner" /> : null}
-                        {isLogin ? 'Sign In' : 'Create Account'}
-                    </button>
-                </form>
-
-                {/* Google Sign-In */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '16px 0 12px' }}>
-                    <div style={{ flex: 1, height: 1, background: 'var(--border-primary)' }} />
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>or</span>
-                    <div style={{ flex: 1, height: 1, background: 'var(--border-primary)' }} />
                 </div>
-                <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center' }} />
-
-                {unverifiedEmail && (
-                    <div style={{ marginTop: 16, padding: 12, background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: 8, textAlign: 'center' }}>
-                        <p style={{ fontSize: 13, color: '#f59e0b', marginBottom: 8 }}>
-                            <Icon name="alert-triangle" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Email not verified yet
-                        </p>
-                        <button className="btn btn-secondary" onClick={handleResendVerification} style={{ fontSize: 12 }}>
-                            Resend verification email
-                        </button>
-                    </div>
-                )}
-
-                <p className="auth-switch">
-                    {isLogin ? "Don't have an account? " : 'Already have an account? '}
-                    <a href="#" onClick={(e) => { e.preventDefault(); setIsLogin(!isLogin); setUnverifiedEmail(''); }}>
-                        {isLogin ? 'Sign Up' : 'Sign In'}
-                    </a>
-                </p>
-
-                <div className="auth-legal-links">
-                    <Link to="/privacy">Privacy Policy</Link>
-                    <span>·</span>
-                    <Link to="/terms">Terms of Service</Link>
-                </div>
-            </div>
+            </main>
         </div>
     );
 }
