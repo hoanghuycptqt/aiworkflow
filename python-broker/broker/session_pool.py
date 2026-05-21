@@ -60,6 +60,7 @@ class Session:
         self.login_cookies: Optional[str] = None
         self._login_task: Optional[asyncio.Task] = None
         self._login_page: Optional[Any] = None  # holds page during _run_login for failure debug
+        self._context_opened_at: float = 0.0  # monotonic time of last _open_context completion
 
     async def ensure_ready(self) -> None:
         """Lazy launch browser + initial context. Caller MUST hold self.lock.
@@ -141,6 +142,7 @@ class Session:
 
         await wait_for_grecaptcha(self.page)
         self.request_count = 0
+        self._context_opened_at = time.monotonic()
         logger.info(f"[{self.account_id}] context ready, counter reset")
 
     async def _rotate_if_needed(self) -> None:
@@ -220,15 +222,25 @@ class Session:
                     f"[{self.account_id}] no NextAuth session-token in context — auth required"
                 )
 
-            # We're authenticated. Force a fresh Set-Cookie cycle via reload.
-            try:
-                await self.page.reload(wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
-                cookies = await self._harvest_cookies_locked()
-            except Exception as e:
-                logger.warning(
-                    f"[{self.account_id}] reload during refresh failed: {e}; "
-                    "using cookies from the initial navigate"
+            # Skip reload if ensure_ready just navigated — cookies are already
+            # fresh from Google's Set-Cookie on the initial response. Reloading
+            # within 30s typically just stalls page.reload until timeout (the
+            # page is still loading subresources from the first nav).
+            context_age = time.monotonic() - self._context_opened_at
+            if context_age < 30:
+                logger.info(
+                    f"[{self.account_id}] context age {context_age:.1f}s — "
+                    "skipping reload, cookies are fresh"
                 )
+            else:
+                try:
+                    await self.page.reload(wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
+                    cookies = await self._harvest_cookies_locked()
+                except Exception as e:
+                    logger.warning(
+                        f"[{self.account_id}] reload during refresh failed: {e}; "
+                        "using cookies from before reload"
+                    )
 
             self.last_used = time.monotonic()
             self._restart_idle_timer()
