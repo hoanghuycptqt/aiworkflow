@@ -189,6 +189,10 @@
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.40);
   --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.50);
   --shadow-glow: 0 0 40px rgba(244, 163, 129, 0.18);
+  --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --sh-md: 0 4px 14px rgba(0, 0, 0, 0.40);
+  --sh-lg: 0 14px 40px rgba(0, 0, 0, 0.50);
+  --sh-card: 0 1px 0 rgba(255,255,255,0.04) inset, 0 6px 18px rgba(0,0,0,0.40);
 }
 
 /* Editorial type baseline — Geist body, Instrument Serif for display */
@@ -319,12 +323,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--cream-300);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--ink-faint);
 }
 
 /* ================================ */
@@ -3893,7 +3897,7 @@ body {
 
 .toggle.active .toggle-thumb {
   left: 20px;
-  background: white;
+  background: var(--cream-50);
 }
 
 /* ================================ */
@@ -3947,9 +3951,9 @@ body {
 }
 
 .role-user {
-  background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  background: var(--cream-200);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
 }
 
 .role-viewer {
@@ -4254,13 +4258,13 @@ body {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: var(--accent-gradient);
+  background: var(--peach);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
   font-weight: 600;
-  color: white;
+  color: var(--ink);
   flex-shrink: 0;
 }
 
@@ -4521,7 +4525,7 @@ body {
 }
 
 .um-table tbody tr:hover td {
-  background: rgba(129, 140, 248, 0.06);
+  background: var(--cream-50);
 }
 
 .disabled-row td {
@@ -4570,7 +4574,7 @@ body {
 }
 
 .um-btn:hover {
-  background: rgba(129, 140, 248, 0.12);
+  background: rgba(244, 163, 129, 0.15);
   border-color: var(--accent-primary);
   color: var(--accent-primary);
 }
@@ -4690,7 +4694,7 @@ body {
 
 .model-option.active {
   border-color: var(--accent-primary);
-  background: rgba(99, 102, 241, 0.06);
+  background: rgba(244, 163, 129, 0.06);
   box-shadow: 0 0 0 1px var(--accent-primary);
 }
 
@@ -4761,7 +4765,7 @@ body {
 .settings-active-model code {
   font-size: 11px;
   color: var(--accent-primary);
-  background: rgba(99, 102, 241, 0.1);
+  background: rgba(244, 163, 129, 0.10);
   padding: 2px 6px;
   border-radius: 4px;
   margin-left: auto;
@@ -4922,12 +4926,12 @@ body {
     width: 56px;
     height: 56px;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary, #818cf8));
-    color: #fff;
+    background: var(--peach);
+    color: var(--ink);
     border: none;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+    box-shadow: var(--sh-md);
     z-index: var(--z-overlay);
     cursor: pointer;
     transition: transform var(--transition-fast), box-shadow var(--transition-fast);
@@ -5663,10 +5667,10 @@ a:focus-visible {
 
 .waterfall-inspect-btn {
   padding: 9px 16px;
-  background: var(--accent-primary);
-  color: white;
+  background: var(--ink);
+  color: var(--cream-50);
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--r-md);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -5677,8 +5681,8 @@ a:focus-visible {
 }
 
 .waterfall-inspect-btn:hover:not(:disabled) {
-  background: #4f46e5;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+  background: #1F1B17;
+  box-shadow: var(--sh-md);
 }
 
 .waterfall-inspect-btn:disabled {
@@ -5738,7 +5742,7 @@ a:focus-visible {
 }
 
 .connector-table tbody tr:hover td {
-  background: rgba(99, 102, 241, 0.04);
+  background: rgba(244, 163, 129, 0.04);
 }
 
 .connector-name {
@@ -5793,7 +5797,7 @@ a:focus-visible {
 
 .duration-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #818cf8);
+  background: var(--peach);
   border-radius: 2px;
   transition: width 0.3s ease;
 }
