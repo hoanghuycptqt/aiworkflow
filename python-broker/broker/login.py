@@ -22,11 +22,12 @@ LABS_FLOW = "https://labs.google/fx/tools/flow/"
 TWOFA_SCREENSHOT_DIR = "/tmp"
 TWOFA_POLL_INTERVAL_S = 5
 TWOFA_TIMEOUT_S = 120
-# Use `load` instead of `networkidle` — Google's signin/Flow pages have
-# long-polling analytics that never go idle. Bump timeout to 60s to match
-# Phase 2 PAGE_NAV_TIMEOUT_MS for cold-start headroom.
+# Use `domcontentloaded` — Google's signin page has long-loading 3rd party
+# scripts (Google analytics, recaptcha enterprise SDK) that prevent the
+# `load` event from firing within 60s. DOMContentLoaded fires as soon as
+# the HTML is parsed, well before subresources finish.
 LOGIN_NAV_TIMEOUT_MS = 60000
-LOGIN_WAIT_UNTIL = "load"
+LOGIN_WAIT_UNTIL = "domcontentloaded"
 LOGIN_LOOP_MAX_ATTEMPTS = 20  # safety net
 
 

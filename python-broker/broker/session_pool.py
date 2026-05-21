@@ -296,9 +296,16 @@ class Session:
             self.login_error = str(e)
             self.login_state = LoginState.FAILED
             logger.warning(f"[{self.account_id}] login flow FAILED: {e}")
-            # Failed login leaves the browser in a half-broken state — tear it
-            # down so the next attempt starts clean. Acquire the lock again
-            # since we released it on exception (the `async with` above exited).
+            # Debug snapshot before teardown — helps diagnose stuck navigations.
+            try:
+                if self.page is not None and not self.page.is_closed():
+                    dump_path = f"/tmp/login-fail-{self.account_id}-{int(time.time())}.png"
+                    await self.page.screenshot(path=dump_path, full_page=False)
+                    cur_url = self.page.url
+                    logger.info(f"[{self.account_id}] failure debug: url={cur_url} screenshot={dump_path}")
+            except Exception as dbg_err:
+                logger.warning(f"[{self.account_id}] could not capture failure debug: {dbg_err}")
+            # Tear down so next attempt starts clean.
             try:
                 async with self.lock:
                     await self._teardown_invisible(reason="login failed cleanup")
