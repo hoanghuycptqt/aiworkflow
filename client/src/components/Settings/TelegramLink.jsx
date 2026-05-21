@@ -49,37 +49,25 @@ export default function TelegramLink() {
     }
 
     return (
-        <div style={{
-            borderTop: '1px solid var(--border-primary)',
-            paddingTop: 24,
-            marginTop: 24,
-        }}>
-            <h3 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>
-                <Icon name="bot" size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Telegram Bot
-            </h3>
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
-                Link your Telegram account to receive job notifications, create jobs, and manage workflows via chat.
-            </p>
+        <section className="tg-section">
+            <div className="tg-section-inner">
+                <span className="dashboard-eyebrow">RUN FROM YOUR PHONE · ANY TIME</span>
+                <h2>Open in <em>Telegram.</em></h2>
+                <p>
+                    Link your Telegram account to receive job notifications, create jobs, and
+                    manage workflows from chat — perfect for kicking off long-running renders
+                    while you're away from the canvas.
+                </p>
 
-            {/* Generate Link Button */}
-            <button
-                onClick={generateLink}
-                disabled={loading}
-                style={{
-                    padding: '10px 20px',
-                    background: 'linear-gradient(135deg, #0088cc, #00a8e8)',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 8,
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                    fontSize: 14,
-                    fontWeight: 600,
-                    opacity: loading ? 0.7 : 1,
-                    marginBottom: 16,
-                }}
-            >
-                {loading ? <><Icon name="loader" size={14} className="loading-spinner" style={{ marginRight: 4 }} /> Generating...</> : <><Icon name="smartphone" size={14} style={{ marginRight: 4 }} /> Link Telegram Account</>}
-            </button>
+                {/* Generate Link Button */}
+                <button
+                    className="btn btn-primary"
+                    onClick={generateLink}
+                    disabled={loading}
+                    style={{ marginBottom: 18 }}
+                >
+                    {loading ? <><Icon name="loader" size={14} className="loading-spinner" style={{ marginRight: 4 }} /> Generating…</> : <><Icon name="smartphone" size={14} style={{ marginRight: 4 }} /> Link Telegram account</>}
+                </button>
 
             {/* Deep Link Display */}
             {linkData && (
@@ -164,10 +152,11 @@ export default function TelegramLink() {
             )}
 
             {accounts.length === 0 && (
-                <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                <div style={{ fontSize: 13, color: 'var(--ink-muted)', fontFamily: 'var(--font-serif)', fontStyle: 'italic' }}>
                     No Telegram accounts linked yet.
                 </div>
             )}
-        </div>
+            </div>
+        </section>
     );
 }

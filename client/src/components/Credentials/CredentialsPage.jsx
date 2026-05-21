@@ -203,16 +203,49 @@ export default function CredentialsPage() {
 
     return (
         <div className="credentials-page">
-            <div className="dashboard-header">
-                <div>
-                    <h2>Credentials</h2>
-                    <p style={{ color: 'var(--text-muted)', fontSize: 14, marginTop: 4 }}>
-                        Manage your API keys for OpenRouter, Google Flow and ChatGPT
+            <header className="dashboard-header">
+                <div className="dashboard-header-body">
+                    <span className="dashboard-eyebrow">YOUR KEYS · ENCRYPTED AT REST</span>
+                    <h1>Credentials, <em>kept quietly.</em></h1>
+                    <p>
+                        Add API keys and session cookies for OpenRouter, Gemini, Google Flow, and
+                        ChatGPT. They're encrypted on disk and only ever leave the server to call
+                        the provider you point them at.
                     </p>
                 </div>
-                <button className="btn btn-primary" onClick={() => { setEditingId(null); setForm({ provider: 'openrouter', label: '', token: '', metadata: {} }); setShowModal(true); }}>
-                    + Add Credential
-                </button>
+                <div className="dashboard-header-actions">
+                    <button
+                        className="btn btn-primary"
+                        onClick={() => { setEditingId(null); setForm({ provider: 'openrouter', label: '', token: '', metadata: {} }); setShowModal(true); }}
+                    >
+                        <Icon name="plus" size={14} /> Add credential
+                    </button>
+                </div>
+            </header>
+
+            {/* Provider quick-add grid */}
+            <div className="providers-grid">
+                {PROVIDERS.map((p) => {
+                    const count = credentials.filter((c) => c.provider === p.id).length;
+                    return (
+                        <div
+                            key={p.id}
+                            className={`providers-card${count > 0 ? ' active' : ''}`}
+                            onClick={() => { setEditingId(null); setForm({ provider: p.id, label: '', token: '', metadata: {} }); setShowModal(true); }}
+                        >
+                            <span className="credential-provider-icon" style={{ background: count > 0 ? 'var(--peach-soft)' : 'var(--cream-100)' }}>
+                                <Icon name={p.icon} size={16} />
+                            </span>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--ink)' }}>{p.label}</div>
+                                <div style={{ fontSize: 11.5, color: 'var(--ink-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {p.description.split(' — ')[0]}
+                                </div>
+                            </div>
+                            <span className="providers-card-count">{count}</span>
+                        </div>
+                    );
+                })}
             </div>
 
             {credentials.length === 0 ? (
