@@ -7,7 +7,7 @@ export default function AppLayout({ user, onLogout }) {
     const location = useLocation();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [theme, setTheme] = useState(
-        () => document.documentElement.getAttribute('data-theme') || 'dark'
+        () => document.documentElement.getAttribute('data-theme') || 'light'
     );
 
     function toggleTheme() {
@@ -41,13 +41,13 @@ export default function AppLayout({ user, onLogout }) {
             />
 
             <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''}`}>
-                <div className="app-sidebar-header">
-                    <Logo chip size={36} />
+                <Link to="/" className="app-sidebar-header">
+                    <Logo chip size={30} />
                     <div>
                         <Wordmark size={22} />
-                        <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--ink-muted)' }}>AI Workflow Automation</p>
+                        <p>AI WORKFLOW AUTOMATION</p>
                     </div>
-                </div>
+                </Link>
 
                 <nav className="app-sidebar-nav">
                     <NavLink to="/" end className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
@@ -62,6 +62,7 @@ export default function AppLayout({ user, onLogout }) {
                         <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                             <span className="nav-icon"><Icon name="settings" size={18} /></span>
                             Admin
+                            <span className="nav-item-badge">ADMIN</span>
                         </NavLink>
                     )}
                 </nav>
@@ -81,11 +82,11 @@ export default function AppLayout({ user, onLogout }) {
                     </div>
                     <button className="nav-item" onClick={toggleTheme} style={{ marginTop: 4 }} title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
                         <span className="nav-icon"><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} /></span>
-                        {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+                        {theme === 'dark' ? 'Light mode' : 'Dark mode'}
                     </button>
                     <button className="nav-item" onClick={onLogout} style={{ marginTop: 4 }}>
                         <span className="nav-icon"><Icon name="logout" size={18} /></span>
-                        Logout
+                        Sign out
                     </button>
                     <div className="auth-legal-links" style={{ marginTop: 12 }}>
                         <Link to="/privacy">Privacy</Link>
