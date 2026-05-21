@@ -3117,13 +3117,13 @@ body {
 }
 
 /* ================================ */
-/* Results Panel                    */
+/* Results Panel — bottom drawer    */
 /* ================================ */
 .results-panel {
-  border-top: 2px solid var(--border-primary);
-  max-height: 40vh;
+  border-top: 1px solid var(--line);
+  max-height: 280px;
   overflow: hidden;
-  background: var(--bg-secondary);
+  background: var(--cream-50);
   display: flex;
   flex-direction: column;
 }
@@ -3132,61 +3132,203 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-primary);
-  background: var(--bg-tertiary);
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--paper);
 }
 
 .results-panel-header h3 {
   margin: 0;
-  font-size: 14px;
-  color: var(--text-primary);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--ink);
 }
 
 .results-panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 14px 18px;
 }
 
 /* ================================ */
-/* History Header                   */
+/* Jobs / History headers           */
 /* ================================ */
+.wb-hero-band {
+  padding: 28px 28px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--cream-100);
+}
+
+.wb-hero-band .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+
+.wb-hero-band .eyebrow::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--peach);
+}
+
+.wb-hero-band h2 {
+  font-family: var(--font-serif);
+  font-size: 38px;
+  font-weight: 400;
+  line-height: 1.05;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.wb-hero-band h2 em,
+.wb-hero-band h2 .serif-em {
+  font-style: italic;
+  color: var(--tomato);
+}
+
+.wb-hero-band p {
+  margin: 10px 0 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 .history-header {
-  padding: 10px 20px;
-  border-bottom: 1px solid var(--border-primary);
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line-soft);
   display: flex;
   align-items: center;
   gap: 12px;
-  background: var(--bg-tertiary);
+  background: var(--paper);
+  flex-wrap: wrap;
 }
 
-/* ================================ */
-/* Execution Monitor                */
-/* ================================ */
+/* — Run-mode card (Jobs tab) — */
+.run-mode-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 18px;
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  padding: 22px;
+  margin: 20px 28px;
+}
+
+.run-mode-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+
+.run-mode-eta {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+
+/* — Jobs list table — */
+.jobs-list-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  margin: 0 28px 28px;
+  overflow: hidden;
+}
+
+.jobs-list-card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+/* — Status dots / pills (used by Jobs + History) — */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.status-dot--done { background: var(--success); }
+.status-dot--running { background: var(--warning); animation: pulse 1.5s infinite; }
+.status-dot--failed { background: var(--error); }
+.status-dot--idle { background: var(--ink-faint); }
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-pill--done { background: var(--sage-soft); color: var(--success); }
+.status-pill--running { background: var(--butter-soft); color: var(--warning); }
+.status-pill--failed { background: var(--peach-soft); color: var(--error); }
+
+/* — Execution Monitor (shared) — */
 .execution-panel {
-  padding: 20px;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border-primary);
-  max-height: 300px;
+  padding: 24px 28px;
+  background: var(--cream-100);
+  border-top: 1px solid var(--line-soft);
   overflow-y: auto;
 }
 
 .execution-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .execution-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--sh-card);
   font-size: 13px;
+}
+
+.execution-item-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
 }
 
 /* ================================ */
@@ -3290,7 +3432,7 @@ body {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: var(--text-muted);
+  color: var(--ink-muted);
   text-align: center;
 }
 
@@ -3298,8 +3440,9 @@ body {
   width: 80px;
   height: 80px;
   border-radius: 50%;
-  background: linear-gradient(135deg, rgba(129, 140, 248, 0.12) 0%, rgba(99, 102, 241, 0.06) 100%);
-  border: 1px solid rgba(129, 140, 248, 0.15);
+  background: var(--peach-soft);
+  border: 1px solid var(--peach-soft);
+  color: var(--ink);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3307,16 +3450,19 @@ body {
 }
 
 .empty-state h3 {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--ink);
+  margin: 0 0 8px;
 }
 
 .empty-state p {
   font-size: 14px;
   max-width: 360px;
-  line-height: 1.5;
+  line-height: 1.55;
+  color: var(--ink-soft);
 }
 
 /* ================================ */
@@ -3330,25 +3476,25 @@ body {
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--bg-tertiary) 25%,
-    rgba(255, 255, 255, 0.06) 50%,
-    var(--bg-tertiary) 75%
+    var(--cream-200) 25%,
+    var(--cream-100) 50%,
+    var(--cream-200) 75%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.5s ease-in-out infinite;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
 }
 
 .skeleton-card {
-  height: 160px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-primary);
+  height: 180px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
 }
 
 .skeleton-stat {
   height: 100px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-primary);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
 }
 
 .skeleton-text {
