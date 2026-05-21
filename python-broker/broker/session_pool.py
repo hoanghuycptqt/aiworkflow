@@ -96,7 +96,14 @@ class Session:
             raise
 
     async def _teardown_invisible(self, reason: str = "") -> None:
-        """Best-effort cleanup of browser + InvisiblePlaywright wrapper. Idempotent."""
+        """Best-effort cleanup of browser + InvisiblePlaywright wrapper. Idempotent.
+
+        If `__aexit__` hangs (observed 2026-05-21 16:15 production: Firefox
+        stuck after Page.goto timeout caused __aexit__ to wait forever, holding
+        Session.lock and leaking driver+Firefox processes until systemd memory
+        ceiling), we abandon the await after 10s and force-kill the driver
+        subprocess group. The OS reaps Firefox children.
+        """
         cm = self._invisible_cm
         if cm is None and self.browser is None:
             return
@@ -104,7 +111,13 @@ class Session:
             logger.info(f"[{self.account_id}] tearing down invisible_playwright ({reason})")
         if cm is not None:
             try:
-                await cm.__aexit__(None, None, None)
+                await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{self.account_id}] teardown __aexit__ hung >10s — "
+                    "force-killing driver subprocess"
+                )
+                await self._force_kill_browser_processes()
             except Exception as e:
                 logger.warning(f"[{self.account_id}] teardown error: {e}")
         self._invisible_cm = None
@@ -112,6 +125,43 @@ class Session:
         self.context = None
         self.page = None
         self.ready = False
+
+    async def _force_kill_browser_processes(self) -> None:
+        """SIGKILL any orphan playwright/driver/node + Firefox processes.
+
+        Last resort when __aexit__ hangs. Uses pkill on patterns specific to
+        invisible_playwright's binary layout. The driver subprocess is the
+        parent of Firefox; killing it makes the kernel reap the browser.
+        """
+        import shutil
+        if not shutil.which("pkill"):
+            logger.warning(f"[{self.account_id}] pkill not available; cannot force-kill")
+            return
+        patterns = [
+            "playwright/driver/node",
+            "playwright_firefoxdev_profile",
+            "firefox-4/firefox",
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            "pkill", "-9", "-f", "|".join(patterns).replace("|", "\\|"),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        # pkill returns 0 if it killed something, 1 if nothing matched. Either is fine.
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+        # Fallback: pkill each pattern individually (in case the OR pattern didn't work)
+        for pat in patterns:
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    "pkill", "-9", "-f", pat,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(p.wait(), timeout=3.0)
+            except Exception:
+                pass
+        logger.info(f"[{self.account_id}] force-killed orphan browser processes")
 
     async def _open_context(self) -> None:
         """(Re)open BrowserContext, inject cookies, navigate, wait for grecaptcha SDK."""
