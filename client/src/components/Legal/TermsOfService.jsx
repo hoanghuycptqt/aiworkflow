@@ -2,7 +2,7 @@ import LegalLayout from './LegalLayout.jsx';
 
 export default function TermsOfService() {
     return (
-        <LegalLayout title="Terms of Service" lastUpdated="May 17, 2026">
+        <LegalLayout title="Terms of Service" lastUpdated="May 17, 2026" effectiveDate="May 17, 2026" version="1.0">
             <p>
                 These Terms of Service ("Terms") govern your access to and use of THHFlow ("the Service", "we",
                 "our"), an AI workflow automation platform operated at <a href="https://thhflow.com">thhflow.com</a>.

@@ -2,7 +2,7 @@ import LegalLayout from './LegalLayout.jsx';
 
 export default function PrivacyPolicy() {
     return (
-        <LegalLayout title="Privacy Policy" lastUpdated="May 17, 2026">
+        <LegalLayout title="Privacy Policy" lastUpdated="May 17, 2026" effectiveDate="May 17, 2026" version="1.0">
             <p>
                 This Privacy Policy explains how THHFlow ("we", "our", or "the Service"), operated at
                 <a href="https://thhflow.com"> thhflow.com</a>, collects, uses, stores, and protects information when
