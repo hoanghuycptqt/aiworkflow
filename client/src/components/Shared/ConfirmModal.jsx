@@ -17,40 +17,67 @@ export default function ConfirmModal({
     onConfirm,
     onCancel,
 }) {
-    const iconName = variant === 'danger' ? 'trash' : variant === 'warning' ? 'alert-triangle' : 'help-circle';
-    const iconColor = variant === 'danger' ? '#ef4444' : variant === 'warning' ? '#f59e0b' : 'var(--accent-primary)';
-    const btnStyle =
-        variant === 'danger'
-            ? { background: '#ef4444', color: '#fff', border: 'none' }
-            : variant === 'warning'
-              ? { background: '#f59e0b', color: '#000', border: 'none' }
-              : {};
+    const iconName =
+        variant === 'danger' ? 'alert-triangle' :
+        variant === 'warning' ? 'alert-triangle' :
+        'help-circle';
+
+    const circleClass =
+        variant === 'danger' ? 'auth-state-circle--butter' :
+        variant === 'warning' ? 'auth-state-circle--butter' :
+        'auth-state-circle--sage';
+
+    const confirmClass =
+        variant === 'danger' ? 'btn btn-danger-solid' :
+        variant === 'warning' ? 'btn btn-primary' :
+        'btn btn-primary';
 
     return (
         <div className="modal-overlay" onClick={onCancel}>
             <div
                 className="modal"
                 onClick={(e) => e.stopPropagation()}
-                style={{ maxWidth: 380, textAlign: 'center', padding: '28px 32px' }}
+                style={{ textAlign: 'center' }}
             >
-                <div style={{ marginBottom: 16 }}>
-                    <Icon name={iconName} size={36} color={iconColor} />
+                <button
+                    type="button"
+                    onClick={onCancel}
+                    aria-label="Close"
+                    style={{
+                        position: 'absolute',
+                        top: 14,
+                        right: 14,
+                        width: 28,
+                        height: 28,
+                        borderRadius: 'var(--r-md)',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--ink-muted)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                    }}
+                >
+                    <Icon name="x" size={16} />
+                </button>
+                <div
+                    className={`auth-state-circle ${circleClass}`}
+                    style={{ width: 52, height: 52, marginBottom: 16 }}
+                >
+                    <Icon name={iconName} size={22} />
                 </div>
-                <h3 style={{ margin: '0 0 8px', fontSize: 16, color: 'var(--text-primary)' }}>{title}</h3>
+                <h2 style={{ marginBottom: 8 }}>{title}</h2>
                 {message && (
-                    <p style={{ margin: '0 0 24px', fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    <p style={{ margin: '0 0 24px', fontSize: 13.5, color: 'var(--ink-soft)', lineHeight: 1.6 }}>
                         {message}
                     </p>
                 )}
                 <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
-                    <button className="btn" onClick={onCancel} style={{ padding: '8px 24px', fontSize: 13 }}>
+                    <button className="btn btn-ghost" onClick={onCancel}>
                         Cancel
                     </button>
-                    <button
-                        className="btn btn-primary"
-                        onClick={onConfirm}
-                        style={{ padding: '8px 24px', fontSize: 13, ...btnStyle }}
-                    >
+                    <button className={confirmClass} onClick={onConfirm}>
                         {confirmLabel}
                     </button>
                 </div>
