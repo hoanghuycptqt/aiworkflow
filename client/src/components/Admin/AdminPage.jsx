@@ -18,7 +18,10 @@ export default function AdminPage() {
     return (
         <div className="admin-page">
             <div className="admin-header">
-                <h1><Icon name="settings" size={22} style={{ marginRight: 8, verticalAlign: 'middle' }} /> Admin Panel</h1>
+                <div className="dashboard-header-body">
+                    <span className="dashboard-eyebrow">OPERATIONS · THE BACK OFFICE</span>
+                    <h1>Admin <em>panel.</em></h1>
+                </div>
                 <div className="admin-tabs">
                     {TABS.map(tab => (
                         <button
@@ -26,7 +29,6 @@ export default function AdminPage() {
                             className={`admin-tab ${activeTab === tab.id ? 'active' : ''}`}
                             onClick={() => setActiveTab(tab.id)}
                         >
-                            <Icon name={tab.icon} size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />
                             {tab.label}
                         </button>
                     ))}

@@ -3767,49 +3767,70 @@ body {
 .admin-page {
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
+  padding: 40px 40px 56px;
+  background: var(--cream-100);
 }
 
 .admin-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 28px;
+  gap: 24px;
+  margin-bottom: 32px;
+  flex-wrap: wrap;
 }
 
 .admin-header h1 {
-  font-size: 24px;
-  font-weight: 700;
+  font-family: var(--font-serif);
+  font-size: 48px;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.05;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-header h1 em,
+.admin-header h1 .serif-em {
+  font-style: italic;
+  color: var(--tomato);
 }
 
 .admin-tabs {
-  display: flex;
-  gap: 4px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
-  padding: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--cream-50);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
 }
 
 .admin-tab {
-  padding: 8px 20px;
-  border-radius: var(--radius-sm);
+  padding: 7px 16px;
+  border-radius: var(--r-pill);
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--ink-muted);
   font-size: 13px;
   font-weight: 500;
+  font-family: var(--font-sans);
+  letter-spacing: -0.005em;
   cursor: pointer;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+  transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
 .admin-tab:hover {
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 .admin-tab.active {
-  background: var(--bg-card);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
+  background: var(--ink);
+  color: var(--cream-50);
+  box-shadow: none;
 }
 
 .admin-loading {
@@ -3827,56 +3848,72 @@ body {
 /* ─── Stat Cards ──────────── */
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
   margin-bottom: 24px;
 }
 
 .stat-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  text-align: center;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 22px;
+  text-align: left;
+  box-shadow: var(--sh-card);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-fast);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .stat-card:hover {
-  border-color: var(--border-secondary);
+  border-color: var(--ink-faint);
   transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--sh-md);
 }
 
 .stat-icon {
-  font-size: 28px;
-  margin-bottom: 8px;
+  font-size: 22px;
+  margin: 0 0 6px;
+  color: var(--ink-muted);
 }
 
 .stat-value {
-  font-size: 28px;
-  font-weight: 800;
-  color: var(--text-primary);
+  font-family: var(--font-serif);
+  font-size: 44px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--ink);
 }
 
 .stat-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0;
 }
 
 /* ─── Admin Card ─────────── */
 .admin-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
   padding: 24px;
   margin-bottom: 20px;
+  box-shadow: var(--sh-card);
 }
 
 .admin-card h3 {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 16px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--ink);
+  margin: 0 0 16px;
+  letter-spacing: -0.005em;
 }
 
 .admin-grid-2 {
@@ -3912,7 +3949,7 @@ body {
 .chart-bar {
   width: 100%;
   max-width: 40px;
-  background: var(--accent-gradient);
+  background: var(--peach);
   border-radius: 4px 4px 0 0;
   min-height: 4px;
   transition: height 0.5s ease;
@@ -5038,29 +5075,33 @@ a:focus-visible {
 }
 
 .analytics-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
-  padding: 20px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 22px;
   position: relative;
+  box-shadow: var(--sh-card);
 }
 
 .analytics-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   flex-wrap: wrap;
   gap: 12px;
 }
 
 .analytics-card-header h3 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--ink);
   margin: 0;
   display: flex;
   align-items: center;
+  letter-spacing: -0.005em;
 }
 
 .analytics-controls {
@@ -5081,32 +5122,31 @@ a:focus-visible {
 .analytics-range-btns {
   display: flex;
   gap: 2px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
-  padding: 2px;
+  background: var(--cream-50);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 3px;
 }
 
 .analytics-range-btn {
-  padding: 5px 10px;
+  padding: 5px 12px;
   font-size: 11px;
   font-weight: 500;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  border-radius: var(--r-pill);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
 .analytics-range-btn:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
 }
 
 .analytics-range-btn.active {
-  background: var(--accent-primary);
-  color: white;
-  box-shadow: 0 1px 4px rgba(99, 102, 241, 0.3);
+  background: var(--ink);
+  color: var(--cream-50);
 }
 
 .analytics-loading {
