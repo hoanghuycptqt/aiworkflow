@@ -22,7 +22,11 @@ LABS_FLOW = "https://labs.google/fx/tools/flow/"
 TWOFA_SCREENSHOT_DIR = "/tmp"
 TWOFA_POLL_INTERVAL_S = 5
 TWOFA_TIMEOUT_S = 120
-LOGIN_NAV_TIMEOUT_MS = 30000
+# Use `load` instead of `networkidle` — Google's signin/Flow pages have
+# long-polling analytics that never go idle. Bump timeout to 60s to match
+# Phase 2 PAGE_NAV_TIMEOUT_MS for cold-start headroom.
+LOGIN_NAV_TIMEOUT_MS = 60000
+LOGIN_WAIT_UNTIL = "load"
 LOGIN_LOOP_MAX_ATTEMPTS = 20  # safety net
 
 
@@ -187,18 +191,18 @@ async def perform_login(
     """
     # 1. Already signed in?
     logger.info(f"navigating to {LABS_HOME}")
-    await page.goto(LABS_HOME, wait_until="networkidle", timeout=LOGIN_NAV_TIMEOUT_MS)
+    await page.goto(LABS_HOME, wait_until=LOGIN_WAIT_UNTIL, timeout=LOGIN_NAV_TIMEOUT_MS)
     await _delay(2.0, 3.0)
     if await _is_already_signed_in(page.context):
         logger.info("already signed in — skipping login")
-        await page.goto(LABS_FLOW, wait_until="networkidle", timeout=LOGIN_NAV_TIMEOUT_MS)
+        await page.goto(LABS_FLOW, wait_until=LOGIN_WAIT_UNTIL, timeout=LOGIN_NAV_TIMEOUT_MS)
         return await _serialize_cookies(page.context)
 
     # 2. Click Sign in with Google
     clicked = await _click_sign_in_with_google(page)
     if clicked:
         try:
-            await page.wait_for_load_state("networkidle", timeout=10000)
+            await page.wait_for_load_state(LOGIN_WAIT_UNTIL, timeout=10000)
         except Exception:
             pass
         await _delay(2.0, 3.0)
@@ -206,7 +210,7 @@ async def perform_login(
     # If still on labs.google after click, post NextAuth signin form.
     if "labs.google" in page.url:
         logger.info("still on labs.google — using NextAuth signin form fallback")
-        await page.goto(LABS_SIGNIN, wait_until="networkidle", timeout=LOGIN_NAV_TIMEOUT_MS)
+        await page.goto(LABS_SIGNIN, wait_until=LOGIN_WAIT_UNTIL, timeout=LOGIN_NAV_TIMEOUT_MS)
         await _delay(1.0, 2.0)
         # Try clicking a Google provider button on signin page
         await page.evaluate(
