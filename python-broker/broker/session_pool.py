@@ -120,7 +120,10 @@ class Session:
             except Exception as e:
                 logger.warning(f"[{self.account_id}] error closing old context: {e}")
 
-        self.context = await self.browser.new_context()
+        # bypass_csp=True is REQUIRED — labs.google's strict CSP would otherwise
+        # block our page.evaluate() / wait_for_function() calls with "call to
+        # eval() blocked by CSP" (observed 2026-05-21 13:21 on login flow).
+        self.context = await self.browser.new_context(bypass_csp=True)
         if self.cookies:
             await self.context.add_cookies(self.cookies)
             logger.info(f"[{self.account_id}] injected {len(self.cookies)} cookies")
@@ -274,7 +277,7 @@ class Session:
                 from invisible_playwright.async_api import InvisiblePlaywright
                 self._invisible_cm = InvisiblePlaywright()
                 self.browser = await self._invisible_cm.__aenter__()
-                self.context = await self.browser.new_context()
+                self.context = await self.browser.new_context(bypass_csp=True)
                 page = await self.context.new_page()
                 self._login_page = page  # tracked for failure screenshot
 
