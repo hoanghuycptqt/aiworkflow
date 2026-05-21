@@ -7,7 +7,7 @@ import TelegramLink from '../Settings/TelegramLink.jsx';
 
 const PROVIDERS = [
     { id: 'openrouter', label: 'OpenRouter', icon: 'shuffle', description: 'AI via OpenRouter — supports Gemini, Llama, DeepSeek & more' },
-    { id: 'gemini', label: 'Google Gemini', icon: 'sparkles', description: 'Official Google Gemini API — Gemini 3 Flash & Pro' },
+    { id: 'gemini', label: 'Google Gemini', icon: 'sparkles', description: 'Official Google Gemini API — Gemini 2.5 (GA) & 3.x' },
     { id: 'google-flow', label: 'Google Flow', icon: 'clapperboard', description: 'Auth token for Google Flow (labs.google/fx)' },
     { id: 'google-account', label: 'Google Account', icon: 'user', description: 'Email & password for auto-login Google Flow via Telegram bot' },
     { id: 'chatgpt', label: 'ChatGPT', icon: 'message-square', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },

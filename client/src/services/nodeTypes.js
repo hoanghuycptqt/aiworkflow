@@ -5,6 +5,10 @@
 /**
  * Models available per credential provider — used by AI Text node
  * for dynamic model selection based on selected credential.
+ *
+ * GA models listed first (stable, recommended). Preview models still work
+ * but may be deprecated by Google (e.g. gemini-3.1-flash-lite-preview was
+ * sunset 2026-05-25 — server-side normalizeGeminiModel auto-remaps old IDs).
  */
 export const PROVIDER_MODELS = {
     openrouter: [
@@ -17,9 +21,21 @@ export const PROVIDER_MODELS = {
         'meta-llama/llama-3.2-3b-instruct:free',
     ],
     gemini: [
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-3.1-flash-lite',
         'gemini-3-flash-preview',
         'gemini-3-pro-preview',
     ],
+};
+
+/** Human-friendly labels for model IDs in dropdowns. Falls back to the raw ID. */
+export const MODEL_LABELS = {
+    'gemini-2.5-flash': 'Gemini 2.5 Flash (GA, recommended)',
+    'gemini-2.5-pro': 'Gemini 2.5 Pro (GA, advanced)',
+    'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite (GA, fast)',
+    'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
+    'gemini-3-pro-preview': 'Gemini 3 Pro (Preview)',
 };
 
 export const NODE_TYPES = {

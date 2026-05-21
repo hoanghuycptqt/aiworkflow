@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getNodeType, PROVIDER_MODELS } from '../../services/nodeTypes.js';
+import { getNodeType, PROVIDER_MODELS, MODEL_LABELS } from '../../services/nodeTypes.js';
 import { api } from '../../services/api.js';
 import Icon from '../../services/icons.jsx';
 
@@ -158,9 +158,15 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                         {!value && <option value="">Select model...</option>}
                         {options.map((opt) => {
                             const optValue = typeof opt === 'object' ? opt.value : opt;
-                            const optLabel = typeof opt === 'object' ? opt.label : opt;
+                            const optLabel = typeof opt === 'object'
+                                ? opt.label
+                                : (MODEL_LABELS[opt] || opt);
                             return <option key={optValue} value={optValue}>{optLabel}</option>;
                         })}
+                        {/* Show stored value even if it's no longer in the active model list (e.g. deprecated preview ID). */}
+                        {value && !options.some(o => (typeof o === 'object' ? o.value : o) === value) && (
+                            <option value={value}>{value} (legacy)</option>
+                        )}
                     </select>
                 );
             }
