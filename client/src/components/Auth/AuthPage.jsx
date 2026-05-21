@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api, SERVER } from '../../services/api.js';
 import Icon from '../../services/icons.jsx';
+import Logo, { Wordmark } from '../../services/Logo.jsx';
 import toast from 'react-hot-toast';
 
 export default function AuthPage({ onLogin }) {
@@ -209,8 +210,8 @@ export default function AuthPage({ onLogin }) {
             </button>
             <div className="auth-card">
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <img src="/icon.png" alt="THHFlow" style={{ width: 56, height: 56 }} />
-                    <h1 style={{ margin: 0, fontSize: 24, background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>THHFlow</h1>
+                    <Logo chip size={56} />
+                    <Wordmark size={28} />
                 </div>
                 <p className="subtitle">AI Workflow Automation</p>
 

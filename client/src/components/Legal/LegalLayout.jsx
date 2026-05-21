@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../../services/icons.jsx';
+import Logo, { Wordmark } from '../../services/Logo.jsx';
 
 export default function LegalLayout({ title, lastUpdated, children }) {
     const [theme, setTheme] = useState(
@@ -26,8 +27,8 @@ export default function LegalLayout({ title, lastUpdated, children }) {
         <div className="legal-page">
             <header className="legal-header">
                 <Link to="/" className="legal-brand">
-                    <img src="/icon.png" alt="THHFlow" />
-                    <span>THHFlow</span>
+                    <Logo chip size={28} />
+                    <Wordmark size={20} />
                 </Link>
                 <div className="legal-header-actions">
                     <Link to="/" className="legal-back-link">

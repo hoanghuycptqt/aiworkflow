@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import Icon from '../../services/icons.jsx';
+import Logo, { Wordmark } from '../../services/Logo.jsx';
 
 export default function AppLayout({ user, onLogout }) {
     const location = useLocation();
@@ -41,15 +42,10 @@ export default function AppLayout({ user, onLogout }) {
 
             <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''}`}>
                 <div className="app-sidebar-header">
-                    <img
-                        src="/icon.png"
-                        alt="THHFlow"
-                        style={{ width: 36, height: 36 }}
-                        onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.insertAdjacentHTML('afterbegin', '<span style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--accent-primary);border-radius:8px;color:#fff;font-weight:700;font-size:16px">T</span>'); }}
-                    />
+                    <Logo chip size={36} />
                     <div>
-                        <h1 style={{ fontSize: 18, margin: 0 }}>THHFlow</h1>
-                        <p style={{ margin: 0, fontSize: 11 }}>AI Workflow Automation</p>
+                        <Wordmark size={22} />
+                        <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--ink-muted)' }}>AI Workflow Automation</p>
                     </div>
                 </div>
 

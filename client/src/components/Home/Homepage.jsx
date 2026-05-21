@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../../services/icons.jsx';
+import Logo, { Wordmark } from '../../services/Logo.jsx';
 
 const FEATURES = [
     {
@@ -107,8 +108,8 @@ export default function Homepage() {
             {/* Navbar */}
             <header className="home-nav">
                 <Link to="/" className="home-brand">
-                    <img src="/icon.png" alt="THHFlow logo" />
-                    <span>THHFlow</span>
+                    <Logo chip size={30} />
+                    <Wordmark size={22} />
                 </Link>
                 <nav className="home-nav-links">
                     <a href="#features">Features</a>
@@ -330,8 +331,8 @@ export default function Homepage() {
                 <div className="home-footer-cols">
                     <div className="home-footer-brand">
                         <Link to="/" className="home-brand">
-                            <img src="/icon.png" alt="THHFlow logo" />
-                            <span>THHFlow</span>
+                            <Logo chip size={30} />
+                            <Wordmark size={22} />
                         </Link>
                         <p>
                             AI workflow automation for bulk video production. Operated at thhflow.com
