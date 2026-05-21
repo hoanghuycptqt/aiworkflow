@@ -197,7 +197,7 @@ def run(args) -> int:
 
         page = context.new_page()
         print(f"[smoke] navigating to {FLOW_URL}...", file=sys.stderr)
-        page.goto(FLOW_URL, wait_until="networkidle", timeout=30000)
+        page.goto(FLOW_URL, wait_until="load", timeout=30000)
 
         # Check redirect to signin
         cur = page.url

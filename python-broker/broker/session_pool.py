@@ -181,7 +181,12 @@ class Session:
 
         self.page = await self.context.new_page()
         logger.info(f"[{self.account_id}] goto {FLOW_URL}")
-        await self.page.goto(FLOW_URL, wait_until="networkidle", timeout=PAGE_NAV_TIMEOUT_MS)
+        # wait_until="load" — `networkidle` never fires on Google domains because
+        # analytics/telemetry keeps chatting, so it always hits the 60s timeout
+        # (observed 2026-05-21 17:46+17:49 production: Page.reload networkidle
+        # 60s timeouts). `load` waits for subresources but not background XHRs;
+        # wait_for_grecaptcha below polls for the SDK we actually need.
+        await self.page.goto(FLOW_URL, wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
 
         if await is_signin_redirect(self.page):
             url = self.page.url
@@ -237,7 +242,8 @@ class Session:
         """
         async with self.lock:
             await self.ensure_ready()
-            await self.page.reload(wait_until="networkidle", timeout=PAGE_NAV_TIMEOUT_MS)
+            # See _open_context comment: networkidle hangs on Google domains.
+            await self.page.reload(wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
             await wait_for_grecaptcha(self.page)
             self.last_used = time.monotonic()
             self._restart_idle_timer()
