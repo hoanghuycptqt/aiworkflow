@@ -19,9 +19,11 @@
  */
 
 import { prisma } from '../index.js';
-import { refreshCookies, loginGoogleFlow } from './google-login-agent.js';
+import { loginGoogleFlow, getAccessToken, saveCredentialsToDB } from './google-login-agent.js';
 import { notifyTelegramUser } from './telegram-bot.js';
 import { syncSiblingCredentials } from './credential-sync.js';
+import { flowBroker, BrokerError } from '../connectors/google-flow/broker-client.js';
+import { getAccountInstanceId } from '../connectors/google-flow/connector.js';
 
 const REFRESH_DELAY_MS = 60 * 1000; // 1 min after expiry
 const USER_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max per user
@@ -86,6 +88,70 @@ async function isCookieExpired(userId) {
 }
 
 /**
+ * Refresh cookies for a user via the Python broker (invisible_playwright Firefox).
+ * Replaces the legacy Chrome-based refreshCookies() in google-login-agent.js.
+ *
+ * Returns { success: bool, needsRelogin: bool, message: string }.
+ */
+async function refreshCookiesViaBroker(userId, sendTelegram = null) {
+    const cred = await prisma.credential.findFirst({
+        where: { userId, provider: 'google-flow' },
+    });
+    if (!cred) {
+        return { success: false, needsRelogin: false, message: 'No google-flow credential' };
+    }
+
+    let meta = {};
+    try { meta = JSON.parse(cred.metadata || '{}'); } catch { /* ok */ }
+
+    const accountId = getAccountInstanceId({ metadata: meta });
+    const oldCookies = meta.sessionCookies || '';
+
+    let res;
+    try {
+        res = await flowBroker.refreshCookies(accountId, oldCookies);
+    } catch (e) {
+        const msg = e instanceof BrokerError ? `broker ${e.status || ''}: ${e.message}` : e.message;
+        console.error(`[CookieRefresh:broker] ${msg}`);
+        return { success: false, needsRelogin: false, message: msg };
+    }
+
+    if (res.status === 'needs_relogin') {
+        console.log(`[CookieRefresh:broker] User ${userId.substring(0, 8)}: signin redirect — needs re-login`);
+        return { success: false, needsRelogin: true, message: res.message || 'Session expired' };
+    }
+
+    if (res.status !== 'ok' || !res.cookies) {
+        return { success: false, needsRelogin: false, message: `Unexpected broker response: ${JSON.stringify(res).substring(0, 200)}` };
+    }
+
+    // Got fresh cookies — pull the new bearer token from the session API and save to DB.
+    let tokenData;
+    try {
+        tokenData = await getAccessToken(res.cookies);
+    } catch (e) {
+        return { success: false, needsRelogin: true, message: `Session API failed: ${e.message}` };
+    }
+
+    // Verify correct account (defensive — broker session should already be the right user).
+    const expectedEmail = (meta.userEmail || '').toLowerCase();
+    if (expectedEmail && tokenData.userEmail && tokenData.userEmail.toLowerCase() !== expectedEmail) {
+        const msg = `Wrong account: got ${tokenData.userEmail}, expected ${expectedEmail}`;
+        console.warn(`[CookieRefresh:broker] ${msg}`);
+        if (sendTelegram) await sendTelegram(`⚠️ ${msg}. Cần re-login.`);
+        return { success: false, needsRelogin: true, message: msg };
+    }
+
+    await saveCredentialsToDB(userId, res.cookies, tokenData);
+
+    const successMsg = `✅ Cookie refreshed via broker (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt || 'N/A'}`;
+    console.log(`[CookieRefresh:broker] ${successMsg}`);
+    if (sendTelegram) await sendTelegram(successMsg);
+
+    return { success: true, needsRelogin: false, message: successMsg };
+}
+
+/**
  * Process a single user's cookie refresh.
  * After success, sync to all sibling credentials sharing the same Google account.
  */
@@ -94,9 +160,10 @@ async function harvestForUser(userId, googleAccountCredentialId) {
 
     console.log(`[CookieHarvester] Processing user: ${userId.substring(0, 8)}`);
 
-    // Step 1: Try simple refresh (just open Chrome with saved profile)
+    // Step 1: Try simple refresh via broker (Firefox). Legacy Chrome refreshCookies
+    // is kept in google-login-agent.js as a fallback until Phase 3 is fully verified.
     const refreshResult = await Promise.race([
-        refreshCookies(userId, sendTelegram),
+        refreshCookiesViaBroker(userId, sendTelegram),
         new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Timeout')), USER_TIMEOUT_MS)
         ),

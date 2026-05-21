@@ -110,6 +110,32 @@ export class FlowBroker {
         return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/harvest-cookies`, undefined);
     }
 
+    /**
+     * Refresh cookies on an account by re-navigating the Flow page.
+     * Returns { status: "ok", cookies } or { status: "needs_relogin", message }.
+     * Replaces the Chrome refreshCookies() in google-login-agent.js.
+     */
+    async refreshCookies(accountId, cookies = '') {
+        return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/refresh-cookies`,
+            { cookies });
+    }
+
+    /**
+     * Start a background login flow on the broker. Returns immediately.
+     * Poll loginStatus(accountId) to track progress (state, screenshot_path, cookies).
+     * Replaces the Chrome google-login-worker.mjs spawn in google-login-agent.js.
+     */
+    async startLogin(accountId, email, password) {
+        return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/login`,
+            { email, password });
+    }
+
+    /** Get current login state. Returns { state, screenshot_path?, error?, cookies? }. */
+    async loginStatus(accountId) {
+        return this._call('GET', `/sessions/${encodeURIComponent(accountId)}/login-status`,
+            undefined, { timeoutMs: 5000 });
+    }
+
     async close(accountId) {
         return this._call('DELETE', `/sessions/${encodeURIComponent(accountId)}`, undefined);
     }

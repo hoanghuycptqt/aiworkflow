@@ -11,6 +11,7 @@ Architectural invariants (from Phase 0 + memory recaptcha-incident-history):
 import asyncio
 import logging
 import time
+from enum import Enum
 from typing import Any, Optional
 
 from broker.config import IDLE_TIMEOUT_S, PAGE_NAV_TIMEOUT_MS, ROTATION_THRESHOLD
@@ -30,6 +31,14 @@ class SigninRedirectError(RuntimeError):
     """Raised when the Flow page redirects to Google signin — DB cookies are stale."""
 
 
+class LoginState(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    AWAITING_2FA = "awaiting_2fa"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class Session:
     def __init__(self, account_id: str, cookies: list[dict]):
         self.account_id = account_id
@@ -44,22 +53,63 @@ class Session:
         self._invisible_cm: Optional[Any] = None  # InvisiblePlaywright context manager
         self._idle_task: Optional[asyncio.Task] = None
         self._closed = False
+        # Login state machine (Phase 3b)
+        self.login_state: LoginState = LoginState.IDLE
+        self.login_screenshot_path: Optional[str] = None
+        self.login_error: Optional[str] = None
+        self.login_cookies: Optional[str] = None
+        self._login_task: Optional[asyncio.Task] = None
 
     async def ensure_ready(self) -> None:
-        """Lazy launch browser + initial context. Caller MUST hold self.lock."""
+        """Lazy launch browser + initial context. Caller MUST hold self.lock.
+
+        On any failure (e.g. _open_context goto timeout), clean up the partially
+        launched InvisiblePlaywright + browser before bubbling the exception so
+        subsequent retries don't leak driver/Firefox processes. Production
+        observed 4 orphan playwright/driver/node processes + Firefox stuck in
+        D-state pinning the broker at the systemd 1.5G memory ceiling.
+        """
         if self._closed:
             raise RuntimeError(f"session {self.account_id} is closed")
         if self.ready and self.browser and self.context and self.page:
             return
 
+        # Drop any orphan from a previous failed attempt before starting fresh.
+        await self._teardown_invisible(reason="pre-launch cleanup")
+
         logger.info(f"[{self.account_id}] launching invisible_playwright Firefox")
         # Import inside method so module loads even before invisible_playwright is installed.
         from invisible_playwright.async_api import InvisiblePlaywright
 
-        self._invisible_cm = InvisiblePlaywright()
-        self.browser = await self._invisible_cm.__aenter__()
-        await self._open_context()
-        self.ready = True
+        cm = InvisiblePlaywright()
+        self._invisible_cm = cm
+        try:
+            self.browser = await cm.__aenter__()
+            await self._open_context()
+            self.ready = True
+        except Exception:
+            # _open_context (or __aenter__) raised. Tear down before bubbling
+            # so the next retry starts from a clean slate.
+            await self._teardown_invisible(reason="ensure_ready failure")
+            raise
+
+    async def _teardown_invisible(self, reason: str = "") -> None:
+        """Best-effort cleanup of browser + InvisiblePlaywright wrapper. Idempotent."""
+        cm = self._invisible_cm
+        if cm is None and self.browser is None:
+            return
+        if reason:
+            logger.info(f"[{self.account_id}] tearing down invisible_playwright ({reason})")
+        if cm is not None:
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"[{self.account_id}] teardown error: {e}")
+        self._invisible_cm = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.ready = False
 
     async def _open_context(self) -> None:
         """(Re)open BrowserContext, inject cookies, navigate, wait for grecaptcha SDK."""
@@ -136,12 +186,108 @@ class Session:
             self.last_used = time.monotonic()
             self._restart_idle_timer()
 
+    async def refresh_cookies(self) -> str:
+        """Re-navigate the Flow page and return current context cookies.
+
+        Replaces the Chrome refreshCookies() in google-login-agent.js. Used by
+        the cron harvester to detect cookie expiry and refresh the Set-Cookie
+        rotations Google sends on a Flow page load.
+
+        Raises SigninRedirectError if the navigation lands on accounts.google.com
+        (DB cookies stale → caller should trigger full re-login).
+        """
+        async with self.lock:
+            await self.ensure_ready()
+            # Re-navigate (don't trust the warm-page cookies — they could be from
+            # a previous session even if page is still alive). On signin redirect
+            # is_signin_redirect inside _open_context will raise. We open a fresh
+            # context to force a clean Set-Cookie cycle.
+            await self._open_context()
+            cookies = await self._harvest_cookies_locked()
+            self.last_used = time.monotonic()
+            self._restart_idle_timer()
+            return cookies
+
+    async def _harvest_cookies_locked(self) -> str:
+        """Read current cookies — caller must hold self.lock."""
+        from broker.cookies import stringify_cookies
+        raw = await self.context.cookies()
+        return stringify_cookies(raw)
+
     async def harvest_cookies(self) -> str:
         """Read current cookies from the browser context and return DB-format string."""
         async with self.lock:
             await self.ensure_ready()
             raw = await self.context.cookies()
             return stringify_cookies(raw)
+
+    # ─── Phase 3b: full login + 2FA state machine ──────────────────────
+
+    async def start_login(self, email: str, password: str) -> None:
+        """Kick off a background login task. Returns immediately.
+
+        Caller polls `login_state` (via the broker /login-status endpoint) to
+        know when 2FA is required or login is finished.
+        """
+        if self.login_state in (LoginState.RUNNING, LoginState.AWAITING_2FA):
+            raise RuntimeError(f"login already in progress (state={self.login_state})")
+        self.login_state = LoginState.RUNNING
+        self.login_screenshot_path = None
+        self.login_error = None
+        self.login_cookies = None
+        self._login_task = asyncio.create_task(self._run_login(email, password))
+
+    async def _run_login(self, email: str, password: str) -> None:
+        from broker.login import perform_login
+        try:
+            # Need a browser, but NOT pre-injected cookies (we want a signed-out start).
+            async with self.lock:
+                # Tear down any existing context/cookies — login starts clean.
+                # But keep browser/_invisible_cm alive if already launched.
+                if self.browser is None or self._invisible_cm is None:
+                    from invisible_playwright.async_api import InvisiblePlaywright
+                    self._invisible_cm = InvisiblePlaywright()
+                    self.browser = await self._invisible_cm.__aenter__()
+                if self.context is not None:
+                    try:
+                        await self.context.close()
+                    except Exception:
+                        pass
+                self.context = await self.browser.new_context()
+                page = await self.context.new_page()
+
+            async def on_2fa(path: str) -> None:
+                self.login_screenshot_path = path
+                self.login_state = LoginState.AWAITING_2FA
+
+            cookies_str = await perform_login(page, email, password, on_2fa)
+
+            async with self.lock:
+                # Promote login session as the working context for runtime ops.
+                self.page = page
+                self.request_count = 0
+                self.ready = True
+                # Update cached cookies for future runtime auto-init.
+                self.cookies = parse_cookie_string(cookies_str)
+
+            self.login_cookies = cookies_str
+            self.login_state = LoginState.COMPLETED
+            self._restart_idle_timer()
+            logger.info(f"[{self.account_id}] login flow COMPLETED ({len(cookies_str)} cookie chars)")
+        except Exception as e:
+            self.login_error = str(e)
+            self.login_state = LoginState.FAILED
+            logger.warning(f"[{self.account_id}] login flow FAILED: {e}")
+
+    def login_status_snapshot(self) -> dict:
+        return {
+            "state": self.login_state.value,
+            "screenshot_path": self.login_screenshot_path,
+            "error": self.login_error,
+            "cookies": self.login_cookies if self.login_state == LoginState.COMPLETED else None,
+        }
+
+    # ─── Idle timer ─────────────────────────────────────────────────────
 
     def _restart_idle_timer(self) -> None:
         if self._idle_task and not self._idle_task.done():
@@ -162,16 +308,7 @@ class Session:
         self._closed = True
         if self._idle_task and not self._idle_task.done():
             self._idle_task.cancel()
-        try:
-            if self._invisible_cm is not None:
-                await self._invisible_cm.__aexit__(None, None, None)
-        except Exception as e:
-            logger.warning(f"[{self.account_id}] error closing browser: {e}")
-        self.browser = None
-        self.context = None
-        self.page = None
-        self.ready = False
-        self._invisible_cm = None
+        await self._teardown_invisible(reason="session close")
         logger.info(f"[{self.account_id}] closed")
 
 

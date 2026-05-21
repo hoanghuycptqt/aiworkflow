@@ -154,7 +154,7 @@ function withFlowLock(instanceId, fn) {
  * This prevents creating new Chrome profiles per job (which caused disk bloat
  * and low reCAPTCHA trust scores from fresh profiles).
  */
-function getAccountInstanceId(credentials) {
+export function getAccountInstanceId(credentials) {
     // Handle both parsed and stringified metadata
     let meta = credentials?.metadata;
     if (typeof meta === 'string') {

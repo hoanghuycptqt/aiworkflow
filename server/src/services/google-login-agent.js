@@ -21,6 +21,8 @@ import { mkdir } from 'fs/promises';
 import { spawn, execFile } from 'child_process';
 import { CHROME_PATH } from './browser-manager.js';
 import { syncSiblingCredentials } from './credential-sync.js';
+import { flowBroker, BrokerError } from '../connectors/google-flow/broker-client.js';
+import { getAccountInstanceId } from '../connectors/google-flow/connector.js';
 
 puppeteer.use(StealthPlugin());
 
@@ -687,7 +689,7 @@ async function extractAllCookies(page) {
 /**
  * Call the session API to get a fresh access token using cookies.
  */
-async function getAccessToken(cookieString) {
+export async function getAccessToken(cookieString) {
     const res = await fetch('https://labs.google/fx/api/auth/session', {
         method: 'GET',
         headers: {
@@ -720,7 +722,7 @@ async function getAccessToken(cookieString) {
  * Save extracted cookies and access token to the google-flow credential.
  * Creates or updates the google-flow credential for this user.
  */
-async function saveCredentialsToDB(userId, cookieString, tokenData) {
+export async function saveCredentialsToDB(userId, cookieString, tokenData) {
     // Find or create google-flow credential for this user
     let credential = await prisma.credential.findFirst({
         where: { userId, provider: 'google-flow' },
@@ -778,6 +780,36 @@ async function saveCredentialsToDB(userId, cookieString, tokenData) {
  * @param {Function} sendTelegram - Function to send text to Telegram: (message) => Promise
  * @returns {object} { success, message, credentialId }
  */
+/**
+ * Read a 2FA screenshot from /tmp and ask Gemini Vision what number to tap on phone.
+ * Returns a short Vietnamese description for Telegram.
+ */
+async function analyze2FAScreenshot(screenshotPath) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return 'Vui lòng xác minh trên điện thoại trong 2 phút.';
+    try {
+        const fs = await import('fs');
+        const imgBuffer = fs.readFileSync(screenshotPath);
+        const base64 = imgBuffer.toString('base64');
+        const model = await getGeminiModel();
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+            model: model || 'gemini-2.5-flash',
+            contents: [{
+                role: 'user',
+                parts: [
+                    { inlineData: { mimeType: 'image/png', data: base64 } },
+                    { text: 'Đây là trang xác minh 2 bước của Google. Hãy cho tôi biết:\n1. Số cần nhấn trên điện thoại (số lớn hiển thị trên màn hình)\n2. Hướng dẫn ngắn gọn bằng tiếng Việt\nTrả lời ngắn gọn, rõ ràng.' }
+                ]
+            }]
+        });
+        return response?.candidates?.[0]?.content?.parts?.[0]?.text || 'Vui lòng xác minh trên điện thoại trong 2 phút.';
+    } catch (e) {
+        console.warn(`[GoogleLogin] Gemini 2FA analysis failed: ${e.message}`);
+        return `Không đọc được số. Screenshot tại ${screenshotPath}. Vui lòng xác minh trên điện thoại trong 2 phút.`;
+    }
+}
+
 export async function loginGoogleFlow(userId, googleAccountCredentialId, telegramChatId, sendTelegram) {
     // Check if another operation is already running for this user
     if (activeOperations.get(userId)) {
@@ -797,7 +829,6 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
                 await sendTelegram('⏳ Đang có một phiên đăng nhập khác đang chạy. Vui lòng đợi.');
                 return { success: false, message: 'Another login in progress' };
             }
-            // Stale lock, remove it
             fs.unlinkSync(lockFile);
         }
         fs.writeFileSync(lockFile, `${Date.now()}\n${process.pid}`);
@@ -805,6 +836,88 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         console.log(`[GoogleLogin] Lock error (non-critical): ${lockErr.message}`);
     }
 
+    try {
+        // 1. Get Google account credentials
+        const googleAccount = await prisma.credential.findFirst({
+            where: { id: googleAccountCredentialId, userId, provider: 'google-account' },
+        });
+        if (!googleAccount) throw new Error('Google Account credential not found.');
+        const accountMeta = googleAccount.metadata ? JSON.parse(googleAccount.metadata) : {};
+        const { email, password } = accountMeta;
+        if (!email || !password) throw new Error('Google Account is missing email or password.');
+
+        // 2. Derive broker accountId from existing google-flow credential (or fallback to email)
+        const flowCred = await prisma.credential.findFirst({
+            where: { userId, provider: 'google-flow' },
+        });
+        const flowMeta = flowCred?.metadata ? JSON.parse(flowCred.metadata) : { userEmail: email };
+        const accountId = getAccountInstanceId({ metadata: { userEmail: flowMeta.userEmail || email } });
+
+        // 3. Kick off broker login in background
+        await sendTelegram('🚀 Đang khởi động Firefox để đăng nhập...');
+        await flowBroker.startLogin(accountId, email, password);
+
+        // 4. Poll status every 2s for max 180s
+        const startedAt = Date.now();
+        const MAX_MS = 180000;
+        const POLL_MS = 2000;
+        let twoFAReported = false;
+
+        while (Date.now() - startedAt < MAX_MS) {
+            await new Promise(r => setTimeout(r, POLL_MS));
+            let status;
+            try {
+                status = await flowBroker.loginStatus(accountId);
+            } catch (e) {
+                console.warn(`[GoogleLogin] poll error: ${e.message}`);
+                continue;
+            }
+
+            if (status.state === 'awaiting_2fa' && !twoFAReported) {
+                twoFAReported = true;
+                const geminiText = status.screenshot_path
+                    ? await analyze2FAScreenshot(status.screenshot_path)
+                    : 'Vui lòng xác minh trên điện thoại trong 2 phút.';
+                await sendTelegram(`🔐 Google yêu cầu xác minh 2 bước:\n\n${geminiText}\n\n⏰ Bạn có 2 phút để xác nhận.`);
+            }
+
+            if (status.state === 'completed') {
+                if (!status.cookies || status.cookies.length < 50) {
+                    throw new Error('Broker returned empty cookies');
+                }
+                const tokenData = await getAccessToken(status.cookies);
+                // Verify correct account
+                if (tokenData.userEmail && tokenData.userEmail.toLowerCase() !== email.toLowerCase()) {
+                    throw new Error(`Wrong account: ${tokenData.userEmail} (expected ${email})`);
+                }
+                await saveCredentialsToDB(userId, status.cookies, tokenData);
+                const msg = `✅ Login Google Flow thành công (${tokenData.userEmail})! Token expires: ${tokenData.expiresAt || 'N/A'}`;
+                await sendTelegram(msg);
+                return { success: true, message: msg };
+            }
+
+            if (status.state === 'failed') {
+                throw new Error(status.error || 'Broker login failed');
+            }
+        }
+
+        throw new Error('Login timeout 180s — Firefox/Telegram chưa hoàn thành 2FA');
+
+    } catch (error) {
+        console.error('[GoogleLogin] Error:', error.message);
+        const result = { success: false, message: `❌ Login thất bại: ${error.message}` };
+        try { await sendTelegram(result.message); } catch { /* ok */ }
+        return result;
+    } finally {
+        activeOperations.delete(userId);
+        try { const fs = await import('fs'); fs.unlinkSync('/tmp/google-login.lock'); } catch { /* ok */ }
+    }
+}
+
+// ─── Legacy Chrome login implementation (kept as DEAD CODE for Phase 3c removal) ───
+// The function below was the original puppeteer-based login. It is no longer called
+// from anywhere — preserved temporarily for reference and quick rollback.
+async function _legacyChromeLoginGoogleFlow(userId, googleAccountCredentialId, telegramChatId, sendTelegram) {
     let browser = null;
     let chromeProcess = null;
 

@@ -56,6 +56,11 @@ class FlowFetchRequest(BaseModel):
     body: dict
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 @app.get("/healthz")
@@ -128,6 +133,52 @@ async def harvest_cookies(account_id: str):
     except Exception as e:
         logger.exception(f"harvest_cookies failed for {account_id}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sessions/{account_id}/refresh-cookies", dependencies=[Depends(require_auth)])
+async def refresh_cookies(account_id: str, req: InitRequest):
+    """Refresh cookies for an account: re-navigate Flow page and return fresh cookies.
+
+    Replaces the Chrome refreshCookies() in google-login-agent.js. Caller passes
+    the current DB cookies (so a brand-new session can be seeded if the broker
+    has cold-started since the last refresh).
+
+    Returns {status: "ok", cookies}, OR {status: "needs_relogin"} on signin redirect.
+    """
+    sess = await pool.get_or_create(account_id, req.cookies)
+    try:
+        cookies = await sess.refresh_cookies()
+        return {"status": "ok", "cookies": cookies}
+    except SigninRedirectError as e:
+        return {"status": "needs_relogin", "message": str(e)}
+    except Exception as e:
+        logger.exception(f"refresh_cookies failed for {account_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sessions/{account_id}/login", dependencies=[Depends(require_auth)])
+async def start_login(account_id: str, req: LoginRequest):
+    """Begin a background login flow. Returns immediately with {started: true}.
+
+    Caller should poll GET /sessions/{id}/login-status for progress. When the
+    state becomes "awaiting_2fa", screenshot_path is set and caller is expected
+    to relay the screenshot via Telegram/Gemini and wait for user approval on
+    their phone. When the state becomes "completed" or "failed", the flow is
+    done.
+    """
+    sess = await pool.get_or_create(account_id)
+    try:
+        await sess.start_login(req.email, req.password)
+        return {"started": True, "state": sess.login_state.value}
+    except Exception as e:
+        logger.exception(f"start_login failed for {account_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sessions/{account_id}/login-status", dependencies=[Depends(require_auth)])
+async def login_status(account_id: str):
+    sess = await pool.get_or_create(account_id)
+    return sess.login_status_snapshot()
 
 
 @app.delete("/sessions/{account_id}", dependencies=[Depends(require_auth)])
