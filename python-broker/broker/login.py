@@ -201,37 +201,51 @@ async def perform_login(
         await page.goto(LABS_FLOW, wait_until=LOGIN_WAIT_UNTIL, timeout=LOGIN_NAV_TIMEOUT_MS)
         return await _serialize_cookies(page.context)
 
-    # 2. Click Sign in with Google
-    clicked = await _click_sign_in_with_google(page)
-    if clicked:
+    # 2. Click Sign in with Google — possibly multiple times.
+    # labs.google/fx has a 2-step sign-in: a small top-right "Sign in" trigger
+    # that opens a centered modal containing the actual "Sign in with Google"
+    # OAuth button. We loop the click up to 3 times, waiting for the URL to
+    # leave labs.google between attempts. (Screenshot debug 2026-05-21 13:16
+    # showed the modal with the OAuth button after the first click.)
+    nav_done = False
+    for attempt in range(3):
         try:
-            # 20s for the nav to settle — Google's accounts page can be slow.
-            await page.wait_for_load_state(LOGIN_WAIT_UNTIL, timeout=20000)
+            async with page.expect_event(
+                "framenavigated",
+                predicate=lambda fr: "accounts.google.com" in fr.url or "google.com/o/oauth" in fr.url,
+                timeout=20000,
+            ):
+                clicked = await _click_sign_in_with_google(page)
+                if not clicked:
+                    raise RuntimeError("no sign-in button found")
+            nav_done = True
+            logger.info(f"OAuth nav triggered after click attempt {attempt + 1} → {page.url[:120]}")
+            break
         except Exception as e:
-            logger.info(f"post-click wait_for_load_state didn't settle: {e}")
-        await _delay(2.0, 3.0)
-        logger.info(f"after click URL: {page.url[:120]}")
+            logger.info(f"click attempt {attempt + 1} didn't trigger OAuth nav: {e}; url={page.url[:120]}")
+            await _delay(1.5, 2.5)
 
-    # If still on labs.google after click, post NextAuth signin form.
-    if "labs.google" in page.url:
-        logger.info("still on labs.google — using NextAuth signin form fallback")
-        await page.goto(LABS_SIGNIN, wait_until=LOGIN_WAIT_UNTIL, timeout=LOGIN_NAV_TIMEOUT_MS)
-        await _delay(1.0, 2.0)
-        # Try clicking a Google provider button on signin page
-        await page.evaluate(
-            """() => {
-                const forms = [...document.querySelectorAll('form')];
-                for (const f of forms) {
-                    const action = (f.action || '').toLowerCase();
-                    if (action.includes('google') || action.includes('signin')) {
-                        const btn = f.querySelector('button') || f.querySelector('input[type=submit]');
-                        if (btn) { btn.click(); return; }
-                        f.submit(); return;
+    if not nav_done and "labs.google" in page.url:
+        # Last-resort fallback: form-POST the NextAuth Google provider directly.
+        # Use wait_until="commit" so we don't block on slow DOMContentLoaded.
+        logger.info("falling back to direct NextAuth signin POST")
+        try:
+            await page.goto(LABS_SIGNIN, wait_until="commit", timeout=LOGIN_NAV_TIMEOUT_MS)
+            await _delay(2.0, 3.0)
+            await page.evaluate(
+                """() => {
+                    const forms = [...document.querySelectorAll('form')];
+                    for (const f of forms) {
+                        const action = (f.action || '').toLowerCase();
+                        if (action.includes('google') || action.includes('signin')) {
+                            f.submit(); return;
+                        }
                     }
-                }
-            }"""
-        )
-        await _delay(3.0, 5.0)
+                }"""
+            )
+            await _delay(3.0, 5.0)
+        except Exception as e:
+            logger.warning(f"NextAuth fallback failed: {e}")
 
     # 3. Main loop: fill email / password / detect 2FA
     two_fa_sent = False
