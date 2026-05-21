@@ -1,62 +1,120 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
 
+/* ============================================================
+   thhflow — warm pastel / editorial token system
+   Default theme is light (cream). Dark mode is opt-in via
+   <html data-theme="dark"> — see App.jsx.
+   ============================================================ */
 :root {
-  /* Color palette — dark mode first */
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #12121a;
-  --bg-tertiary: #1a1a2e;
-  --bg-card: #16162a;
-  --bg-card-hover: #1e1e3a;
-  --bg-input: #1a1a2e;
-  --bg-overlay: rgba(0, 0, 0, 0.6);
+  /* — Warm cream surfaces — */
+  --cream-50:  #FDF9F1;
+  --cream-100: #FBF5EB;
+  --cream-200: #F4ECDC;
+  --cream-300: #E8DCC6;
+  --paper:     #FFFCF6;
 
-  --surface-glass: rgba(255, 255, 255, 0.03);
-  --surface-glass-hover: rgba(255, 255, 255, 0.06);
+  /* — Ink — */
+  --ink:        #2A2520;
+  --ink-soft:   #4A4339;
+  --ink-muted:  #8A8175;
+  --ink-faint:  #B8AFA1;
 
-  --text-primary: #f0f0f5;
-  --text-secondary: #a0a0b8;
-  --text-muted: #6b6b80;
-  --text-placeholder: #8888a0;
-  --text-accent: #818cf8;
+  /* — Lines — */
+  --line:       #E8DDC8;
+  --line-soft:  #F0E7D5;
 
-  --border-primary: rgba(255, 255, 255, 0.06);
-  --border-secondary: rgba(255, 255, 255, 0.1);
-  --border-active: rgba(129, 140, 248, 0.4);
+  /* — Accents (pastel, warm) — */
+  --peach:      #F4A381;
+  --peach-soft: #FBD9C7;
+  --tomato:     #E8806E;
+  --butter:     #F5D58B;
+  --butter-soft:#FCEDC1;
+  --sage:       #A8C5A0;
+  --sage-soft:  #D8E6D3;
+  --lavender:   #C4B5DC;
+  --lav-soft:   #E5DEEF;
+  --sky:        #A8C8DC;
+  --sky-soft:   #D6E5EE;
 
-  --accent-primary: #818cf8;
-  --accent-secondary: #6366f1;
-  --accent-gradient: linear-gradient(135deg, #818cf8 0%, #6366f1 50%, #4f46e5 100%);
-  --accent-glow: 0 0 20px rgba(129, 140, 248, 0.15);
+  /* — Semantic — */
+  --success: #6FA968;
+  --warning: #D4A24A;
+  --error:   #C66C5A;
 
-  --success: #34d399;
-  --success-bg: rgba(52, 211, 153, 0.1);
-  --warning: #fbbf24;
-  --warning-bg: rgba(251, 191, 36, 0.1);
-  --error: #f87171;
-  --error-bg: rgba(248, 113, 113, 0.1);
-  --info: #60a5fa;
+  /* — Node colors (Workflow Builder palette + canvas accent strips) — */
+  --node-ai-text:       #C4B5DC;
+  --node-flow-image:    #F4A381;
+  --node-flow-video:    #F5D58B;
+  --node-chatgpt-note:  #A8C8DC;
+  --node-file:          #FBD9C7;
+  --node-utility:       #D8E6D3;
+  /* Compat alias — legacy class names still resolve */
+  --node-chatgpt:       var(--node-ai-text);
 
-  --node-chatgpt: #10b981;
-  --node-flow-image: #f59e0b;
-  --node-flow-video: #ef4444;
-  --node-file: #6366f1;
-  --node-utility: #64748b;
+  /* — Type — */
+  --font-serif: 'Instrument Serif', 'Cormorant Garamond', Georgia, serif;
+  --font-sans:  'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono:  'Geist Mono', ui-monospace, Menlo, monospace;
+  --font-family: var(--font-sans);
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 24px;
+  /* — Radii — */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 40px rgba(129, 140, 248, 0.08);
+  /* — Shadows (warm, soft) — */
+  --sh-sm: 0 1px 2px rgba(74, 67, 57, 0.06);
+  --sh-md: 0 4px 14px rgba(74, 67, 57, 0.08);
+  --sh-lg: 0 14px 40px rgba(74, 67, 57, 0.10);
+  --sh-card: 0 1px 0 rgba(255,255,255,0.6) inset, 0 6px 18px rgba(74,67,57,0.06);
+  --shadow-sm: var(--sh-sm);
+  --shadow-md: var(--sh-md);
+  --shadow-lg: var(--sh-lg);
+  --shadow-glow: 0 0 40px rgba(244, 163, 129, 0.10);
 
-  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* — Motion — */
+  --transition-fast:   150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow:   300ms cubic-bezier(0.4, 0, 0.2, 1);
 
-  --font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  /* — Compat aliases so existing component classes keep resolving — */
+  --bg-primary:        var(--cream-100);
+  --bg-secondary:      var(--cream-50);
+  --bg-tertiary:       var(--cream-200);
+  --bg-card:           var(--paper);
+  --bg-card-hover:     var(--cream-50);
+  --bg-input:          var(--paper);
+  --bg-overlay:        rgba(42, 37, 32, 0.45);
+
+  --surface-glass:       rgba(42, 37, 32, 0.03);
+  --surface-glass-hover: rgba(42, 37, 32, 0.06);
+
+  --text-primary:      var(--ink);
+  --text-secondary:    var(--ink-soft);
+  --text-muted:        var(--ink-muted);
+  --text-placeholder:  var(--ink-faint);
+  --text-accent:       var(--tomato);
+
+  --border-primary:    var(--line);
+  --border-secondary:  var(--line);
+  --border-active:     var(--ink);
+
+  --accent-primary:    var(--peach);
+  --accent-secondary:  var(--tomato);
+  --accent-gradient:   var(--peach);
+  --accent-glow:       0 0 20px rgba(244, 163, 129, 0.18);
+
+  --success-bg: rgba(111, 169, 104, 0.10);
+  --warning-bg: rgba(212, 162, 74, 0.10);
+  --error-bg:   rgba(198, 108, 90, 0.10);
+  --info:       var(--sky);
 
   /* Z-index scale */
   --z-base: 0;
@@ -68,98 +126,138 @@
   --z-toast: 800;
 }
 
-/* ─── Light Mode Override ──────────────────────────── */
+/* Light mode is :root — keep the selector available so JS that sets
+   data-theme="light" still matches (it's a no-op against the defaults). */
 [data-theme="light"] {
-  --bg-primary: #f8fafc;
-  --bg-secondary: #f1f5f9;
-  --bg-tertiary: #e2e8f0;
-  --bg-card: #ffffff;
-  --bg-card-hover: #f8fafc;
-  --bg-input: #ffffff;
-  --bg-overlay: rgba(0, 0, 0, 0.25);
-
-  --surface-glass: rgba(0, 0, 0, 0.02);
-  --surface-glass-hover: rgba(0, 0, 0, 0.04);
-
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  --text-placeholder: #94a3b8;
-  --text-accent: #6366f1;
-
-  --border-primary: rgba(0, 0, 0, 0.08);
-  --border-secondary: rgba(0, 0, 0, 0.12);
-  --border-active: rgba(99, 102, 241, 0.4);
-
-  --accent-primary: #6366f1;
-  --accent-secondary: #4f46e5;
-  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 50%, #4338ca 100%);
-  --accent-glow: 0 0 20px rgba(99, 102, 241, 0.1);
-
-  --success: #059669;
-  --success-bg: rgba(5, 150, 105, 0.08);
-  --warning: #d97706;
-  --warning-bg: rgba(217, 119, 6, 0.08);
-  --error: #dc2626;
-  --error-bg: rgba(220, 38, 38, 0.08);
-  --info: #2563eb;
-
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.1);
-  --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.06);
+  color-scheme: light;
 }
 
-/* React Flow light overrides */
-[data-theme="light"] .react-flow__background {
-  background: var(--bg-primary) !important;
+/* ─── Dark mode override ───────────────────────────────────────
+   Keeps the warm palette but flips surface luminance. */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --cream-50:  #1B1814;
+  --cream-100: #14110E;
+  --cream-200: #221E18;
+  --cream-300: #322C24;
+  --paper:     #1F1B16;
+
+  --ink:        #F4ECDC;
+  --ink-soft:   #D8CDB8;
+  --ink-muted:  #8A8175;
+  --ink-faint:  #5E574C;
+
+  --line:       #2E2922;
+  --line-soft:  #251F1A;
+
+  /* Accent tints darker so cards don't vibrate */
+  --peach-soft: #3A2620;
+  --butter-soft:#332C18;
+  --sage-soft:  #1E2D1F;
+  --lav-soft:   #2A2538;
+  --sky-soft:   #1F2A33;
+
+  /* Re-map compat aliases for the new ink/cream values */
+  --bg-primary:        var(--cream-100);
+  --bg-secondary:      var(--cream-50);
+  --bg-tertiary:       var(--cream-200);
+  --bg-card:           var(--paper);
+  --bg-card-hover:     var(--cream-50);
+  --bg-input:          var(--paper);
+  --bg-overlay:        rgba(0, 0, 0, 0.6);
+
+  --surface-glass:       rgba(244, 236, 220, 0.04);
+  --surface-glass-hover: rgba(244, 236, 220, 0.08);
+
+  --text-primary:      var(--ink);
+  --text-secondary:    var(--ink-soft);
+  --text-muted:        var(--ink-muted);
+  --text-placeholder:  var(--ink-faint);
+  --text-accent:       var(--peach);
+
+  --border-primary:    var(--line);
+  --border-secondary:  var(--line);
+  --border-active:     var(--ink);
+
+  --accent-primary:    var(--peach);
+  --accent-secondary:  var(--tomato);
+  --accent-gradient:   var(--peach);
+  --accent-glow:       0 0 20px rgba(244, 163, 129, 0.18);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.40);
+  --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.50);
+  --shadow-glow: 0 0 40px rgba(244, 163, 129, 0.18);
 }
 
-[data-theme="light"] .react-flow__handle {
-  background: #e2e8f0 !important;
-  border-color: #94a3b8 !important;
+/* Editorial type baseline — Geist body, Instrument Serif for display */
+h1, h2, h3, h4 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+.italic, em.serif-em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+}
+.mono, code, kbd {
+  font-family: var(--font-mono);
 }
 
-[data-theme="light"] .react-flow__handle:hover {
-  border-color: var(--accent-primary) !important;
-  background: var(--accent-primary) !important;
+/* React Flow surface — uses tokens so both themes work without
+   a theme-prefixed override. Retuned in detail during Step 4d. */
+.react-flow__background {
+  background: var(--cream-100) !important;
 }
 
-[data-theme="light"] .react-flow__edge-path {
-  stroke: #94a3b8 !important;
+.react-flow__handle {
+  background: var(--cream-200) !important;
+  border-color: var(--ink-faint) !important;
 }
 
-[data-theme="light"] .react-flow__minimap {
-  background: #f1f5f9 !important;
-  border: 1.5px solid rgba(0, 0, 0, 0.15) !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+.react-flow__handle:hover {
+  border-color: var(--peach) !important;
+  background: var(--peach) !important;
+}
+
+.react-flow__edge-path {
+  stroke: var(--ink-faint) !important;
+}
+
+.react-flow__minimap {
+  background: var(--cream-50) !important;
+  border: 1.5px solid var(--line) !important;
+  box-shadow: var(--sh-sm) !important;
   border-radius: 6px !important;
 }
 
-[data-theme="light"] .react-flow__minimap-mask {
-  fill: rgba(99, 102, 241, 0.06) !important;
-  stroke: var(--accent-primary) !important;
+.react-flow__minimap-mask {
+  fill: rgba(244, 163, 129, 0.06) !important;
+  stroke: var(--peach) !important;
 }
 
-[data-theme="light"] .react-flow__minimap-node {
-  fill: #e2e8f0 !important;
-  stroke: rgba(0, 0, 0, 0.1) !important;
+.react-flow__minimap-node {
+  fill: var(--cream-200) !important;
+  stroke: var(--line) !important;
 }
 
-[data-theme="light"] .react-flow__controls {
-  background: #ffffff !important;
-  border: 1px solid rgba(0, 0, 0, 0.1) !important;
-  box-shadow: var(--shadow-md) !important;
+.react-flow__controls {
+  background: var(--paper) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--sh-md) !important;
 }
 
-[data-theme="light"] .react-flow__controls-button {
-  background: #ffffff !important;
-  border-color: rgba(0, 0, 0, 0.08) !important;
-  fill: #475569 !important;
+.react-flow__controls-button {
+  background: var(--paper) !important;
+  border-color: var(--line-soft) !important;
+  fill: var(--ink-soft) !important;
 }
 
-[data-theme="light"] .react-flow__controls-button:hover {
-  background: #f1f5f9 !important;
+.react-flow__controls-button:hover {
+  background: var(--cream-100) !important;
 }
 
 *,

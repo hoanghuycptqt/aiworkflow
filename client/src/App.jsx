@@ -20,12 +20,12 @@ function App() {
 
   useEffect(() => {
     checkAuth();
-    // Theme init: localStorage > prefers-color-scheme > default dark
+    // Theme init: localStorage > prefers-color-scheme > default light (cream)
     const saved = localStorage.getItem('theme');
     if (saved) {
       document.documentElement.setAttribute('data-theme', saved);
-    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
-      document.documentElement.setAttribute('data-theme', 'light');
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.documentElement.setAttribute('data-theme', 'dark');
     }
 
     // E2: Real-time system theme sync — listen for OS theme changes
