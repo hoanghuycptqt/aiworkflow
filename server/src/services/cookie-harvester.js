@@ -113,7 +113,11 @@ async function refreshCookiesViaBroker(userId, sendTelegram = null) {
     } catch (e) {
         const msg = e instanceof BrokerError ? `broker ${e.status || ''}: ${e.message}` : e.message;
         console.error(`[CookieRefresh:broker] ${msg}`);
-        return { success: false, needsRelogin: false, message: msg };
+        // Treat broker errors (timeout, crash, etc.) as needsRelogin so the harvester
+        // falls through to loginGoogleFlow rather than just giving up. A real outage
+        // will still surface as 'Login failed' on the next step; in the common case
+        // the broker was stuck mid-cold-start and login will spin up a fresh page.
+        return { success: false, needsRelogin: true, message: `Broker refresh failed: ${msg}` };
     }
 
     if (res.status === 'needs_relogin') {

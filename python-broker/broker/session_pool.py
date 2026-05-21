@@ -187,23 +187,40 @@ class Session:
             self._restart_idle_timer()
 
     async def refresh_cookies(self) -> str:
-        """Re-navigate the Flow page and return current context cookies.
+        """Navigate the Flow page (via ensure_ready) and return current context cookies.
 
         Replaces the Chrome refreshCookies() in google-login-agent.js. Used by
-        the cron harvester to detect cookie expiry and refresh the Set-Cookie
+        the cron harvester to detect cookie expiry and harvest the Set-Cookie
         rotations Google sends on a Flow page load.
 
-        Raises SigninRedirectError if the navigation lands on accounts.google.com
-        (DB cookies stale → caller should trigger full re-login).
+        Raises SigninRedirectError if:
+        - the navigation lands on accounts.google.com / signin (DB cookies stale),
+        - OR the harvested cookies have no NextAuth session-token (unauthenticated
+          landing page that doesn't redirect — observed when DB cookies cleared).
+
+        Caller should trigger full re-login on SigninRedirectError.
         """
         async with self.lock:
             await self.ensure_ready()
-            # Re-navigate (don't trust the warm-page cookies — they could be from
-            # a previous session even if page is still alive). On signin redirect
-            # is_signin_redirect inside _open_context will raise. We open a fresh
-            # context to force a clean Set-Cookie cycle.
-            await self._open_context()
+            # ensure_ready navigates exactly once. A second navigate on empty
+            # cookies stalls networkidle and times out (observed 2026-05-21).
+            # If the session is warm and we want a forced Set-Cookie rotation,
+            # use a page.reload() which is cheaper than new_context + goto.
+            try:
+                await self.page.reload(wait_until="networkidle", timeout=PAGE_NAV_TIMEOUT_MS)
+            except Exception as e:
+                # Reload timeout: continue with whatever cookies the page already has.
+                logger.warning(f"[{self.account_id}] reload during refresh failed: {e}; using existing context cookies")
+
             cookies = await self._harvest_cookies_locked()
+            # Detect "unauthenticated but URL didn't redirect" — Google sometimes
+            # renders a landing page on labs.google/fx without redirecting to
+            # accounts.google.com when there are no auth cookies.
+            if "__Secure-next-auth.session-token=" not in cookies:
+                raise SigninRedirectError(
+                    f"[{self.account_id}] no NextAuth session-token in cookies — auth required"
+                )
+
             self.last_used = time.monotonic()
             self._restart_idle_timer()
             return cookies
@@ -242,17 +259,13 @@ class Session:
         try:
             # Need a browser, but NOT pre-injected cookies (we want a signed-out start).
             async with self.lock:
-                # Tear down any existing context/cookies — login starts clean.
-                # But keep browser/_invisible_cm alive if already launched.
-                if self.browser is None or self._invisible_cm is None:
-                    from invisible_playwright.async_api import InvisiblePlaywright
-                    self._invisible_cm = InvisiblePlaywright()
-                    self.browser = await self._invisible_cm.__aenter__()
-                if self.context is not None:
-                    try:
-                        await self.context.close()
-                    except Exception:
-                        pass
+                # Tear down any existing browser fully — login needs a fresh
+                # invisible_playwright launch so we don't carry stale fingerprint
+                # context or stuck pages from previous failed refresh attempts.
+                await self._teardown_invisible(reason="login starts fresh")
+                from invisible_playwright.async_api import InvisiblePlaywright
+                self._invisible_cm = InvisiblePlaywright()
+                self.browser = await self._invisible_cm.__aenter__()
                 self.context = await self.browser.new_context()
                 page = await self.context.new_page()
 
