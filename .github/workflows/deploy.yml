@@ -25,8 +25,10 @@ jobs:
           script: |
             cd /opt/vcw/app
 
-            # Pull latest code
+            # Pull latest code (track pre-pull HEAD to detect python-broker changes)
+            OLD_HEAD=$(git rev-parse HEAD)
             git pull origin main
+            NEW_HEAD=$(git rev-parse HEAD)
 
             # Install dependencies
             npm run install:all
@@ -36,6 +38,18 @@ jobs:
 
             # Build client
             cd client && npm run build && cd ..
+
+            # Restart broker (systemd) only if python-broker/ changed.
+            # Broker holds in-memory state (sessions, cookies); skip restart when
+            # the diff is unrelated to keep warm sessions alive.
+            if git diff "$OLD_HEAD..$NEW_HEAD" --name-only | grep -q '^python-broker/'; then
+              echo "🔄 python-broker changed — restarting vcw-flow-broker"
+              sudo systemctl restart vcw-flow-broker
+              sleep 5
+              curl -sf http://127.0.0.1:8002/healthz > /dev/null && echo "✅ Broker is healthy" || echo "⚠️ Broker may not be responding"
+            else
+              echo "ℹ️ python-broker unchanged — keeping broker running"
+            fi
 
             # Restart server
             pm2 restart ecosystem.config.cjs --update-env
