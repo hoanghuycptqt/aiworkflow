@@ -187,38 +187,43 @@ class Session:
             self._restart_idle_timer()
 
     async def refresh_cookies(self) -> str:
-        """Navigate the Flow page (via ensure_ready) and return current context cookies.
+        """Navigate the Flow page and return current context cookies.
 
-        Replaces the Chrome refreshCookies() in google-login-agent.js. Used by
-        the cron harvester to detect cookie expiry and harvest the Set-Cookie
-        rotations Google sends on a Flow page load.
+        Fast-path: if there's no NextAuth session-token in the seeded cookies
+        OR in the cookies after the initial navigate, return SigninRedirectError
+        immediately without doing an expensive reload. Observed 2026-05-21 12:55
+        production cascade: refresh stuck waiting 60s on reload before realising
+        the page was unauthenticated, then triggering retries that piled up.
 
-        Raises SigninRedirectError if:
-        - the navigation lands on accounts.google.com / signin (DB cookies stale),
-        - OR the harvested cookies have no NextAuth session-token (unauthenticated
-          landing page that doesn't redirect — observed when DB cookies cleared).
-
-        Caller should trigger full re-login on SigninRedirectError.
+        Returns cookie-string on success. Raises SigninRedirectError when the
+        caller should escalate to full re-login.
         """
         async with self.lock:
-            await self.ensure_ready()
-            # ensure_ready navigates exactly once. A second navigate on empty
-            # cookies stalls networkidle and times out (observed 2026-05-21).
-            # If the session is warm and we want a forced Set-Cookie rotation,
-            # use a page.reload() which is cheaper than new_context + goto.
-            try:
-                await self.page.reload(wait_until="networkidle", timeout=PAGE_NAV_TIMEOUT_MS)
-            except Exception as e:
-                # Reload timeout: continue with whatever cookies the page already has.
-                logger.warning(f"[{self.account_id}] reload during refresh failed: {e}; using existing context cookies")
+            # Quick check before touching the browser: if the seeded cookies
+            # have no session-token, we already know we'll need to re-login.
+            seeded_has_session = any(
+                c.get("name") == "__Secure-next-auth.session-token" for c in self.cookies
+            )
+            if not seeded_has_session:
+                raise SigninRedirectError(
+                    f"[{self.account_id}] DB cookies have no NextAuth session-token — auth required"
+                )
 
+            await self.ensure_ready()
             cookies = await self._harvest_cookies_locked()
-            # Detect "unauthenticated but URL didn't redirect" — Google sometimes
-            # renders a landing page on labs.google/fx without redirecting to
-            # accounts.google.com when there are no auth cookies.
             if "__Secure-next-auth.session-token=" not in cookies:
                 raise SigninRedirectError(
-                    f"[{self.account_id}] no NextAuth session-token in cookies — auth required"
+                    f"[{self.account_id}] no NextAuth session-token in context — auth required"
+                )
+
+            # We're authenticated. Force a fresh Set-Cookie cycle via reload.
+            try:
+                await self.page.reload(wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
+                cookies = await self._harvest_cookies_locked()
+            except Exception as e:
+                logger.warning(
+                    f"[{self.account_id}] reload during refresh failed: {e}; "
+                    "using cookies from the initial navigate"
                 )
 
             self.last_used = time.monotonic()
