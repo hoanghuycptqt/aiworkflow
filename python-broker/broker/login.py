@@ -90,69 +90,74 @@ async def _click_sign_in_with_google(page) -> bool:
         return False
 
 
+async def _click_next_button(page) -> bool:
+    """Click a 'Next' / 'Tiếp theo' button using locators (no evaluate, CSP-safe)."""
+    for selector in (
+        'button:has-text("Next")',
+        'button:has-text("Tiếp theo")',
+        'role=button[name="Next"]',
+        'role=button[name="Tiếp theo"]',
+    ):
+        try:
+            await page.locator(selector).first.click(timeout=2000)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 async def _fill_email_if_present(page, email: str) -> bool:
-    has_email = await page.evaluate(
-        """() => {
-            const el = document.querySelector('input[type="email"]');
-            return !!(el && el.offsetParent !== null);
-        }"""
-    )
-    if not has_email:
+    """No evaluate — CSP-safe. labs.google bans unsafe-eval."""
+    loc = page.locator('input[type="email"]:visible')
+    try:
+        if await loc.count() == 0:
+            return False
+    except Exception:
         return False
     logger.info("typing email")
-    await page.fill('input[type="email"]', email)
+    await loc.first.fill(email)
     await _delay(0.5, 1.0)
-    await page.evaluate(
-        """() => {
-            const btn = [...document.querySelectorAll('button')]
-                .find(b => /Next|Tiếp theo/.test(b.textContent || ''));
-            if (btn) btn.click();
-        }"""
-    )
+    await _click_next_button(page)
     await _delay(3.0, 5.0)
     return True
 
 
 async def _fill_password_if_present(page, password: str) -> bool:
-    has_pwd = await page.evaluate(
-        """() => {
-            const el = document.querySelector('input[type="password"]');
-            return !!(el && el.offsetParent !== null);
-        }"""
-    )
-    if not has_pwd:
+    loc = page.locator('input[type="password"]:visible')
+    try:
+        if await loc.count() == 0:
+            return False
+    except Exception:
         return False
     logger.info("typing password")
-    await page.fill('input[type="password"]', password)
+    await loc.first.fill(password)
     await _delay(0.5, 1.0)
-    await page.evaluate(
-        """() => {
-            const btn = [...document.querySelectorAll('button')]
-                .find(b => /Next|Tiếp theo/.test(b.textContent || ''));
-            if (btn) btn.click();
-        }"""
-    )
+    await _click_next_button(page)
     await _delay(4.0, 6.0)
     return True
 
 
 async def _detect_2fa(page) -> bool:
-    """Detect Google's 2-step verification challenge page."""
+    """Detect Google's 2-step verification challenge page.
+
+    No evaluate — uses URL + Playwright text locators (CSP-safe).
+    """
     url = page.url
     if any(s in url for s in ("/challenge/dp", "/challenge/ipp", "/challenge/ootp")):
         return True
-    return await page.evaluate(
-        """() => {
-            const t = document.body?.innerText || '';
-            return [
-                'Check your phone', 'Kiểm tra điện thoại',
-                '2-Step Verification', 'Xác minh 2 bước',
-                'Confirm it', 'Verify it', 'confirm that it', 'xác nhận',
-                'trying to sign in', 'đang cố đăng nhập',
-                "Verify it's you", 'Xác minh danh tính',
-            ].some(s => t.includes(s));
-        }"""
-    )
+    for needle in (
+        "Check your phone", "Kiểm tra điện thoại",
+        "2-Step Verification", "Xác minh 2 bước",
+        "Confirm it", "Verify it", "confirm that it", "xác nhận",
+        "trying to sign in", "đang cố đăng nhập",
+        "Verify it's you", "Xác minh danh tính",
+    ):
+        try:
+            if await page.get_by_text(needle, exact=False).first.count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _poll_2fa_approval(page) -> bool:
@@ -226,23 +231,23 @@ async def perform_login(
             await _delay(1.5, 2.5)
 
     if not nav_done and "labs.google" in page.url:
-        # Last-resort fallback: form-POST the NextAuth Google provider directly.
-        # Use wait_until="commit" so we don't block on slow DOMContentLoaded.
-        logger.info("falling back to direct NextAuth signin POST")
+        # Last-resort fallback: navigate to NextAuth signin and click the Google
+        # provider button via locator. No evaluate — CSP would block it.
+        logger.info("falling back to NextAuth /api/auth/signin page")
         try:
             await page.goto(LABS_SIGNIN, wait_until="commit", timeout=LOGIN_NAV_TIMEOUT_MS)
             await _delay(2.0, 3.0)
-            await page.evaluate(
-                """() => {
-                    const forms = [...document.querySelectorAll('form')];
-                    for (const f of forms) {
-                        const action = (f.action || '').toLowerCase();
-                        if (action.includes('google') || action.includes('signin')) {
-                            f.submit(); return;
-                        }
-                    }
-                }"""
-            )
+            for selector in (
+                'button:has-text("Google")',
+                'button:has-text("Sign in with Google")',
+                'role=button[name="Google"]',
+            ):
+                try:
+                    await page.locator(selector).first.click(timeout=3000)
+                    logger.info(f"clicked NextAuth Google button ({selector})")
+                    break
+                except Exception:
+                    continue
             await _delay(3.0, 5.0)
         except Exception as e:
             logger.warning(f"NextAuth fallback failed: {e}")
