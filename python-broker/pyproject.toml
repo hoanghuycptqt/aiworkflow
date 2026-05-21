@@ -1,0 +1,20 @@
+[project]
+name = "vcw-flow-broker"
+version = "0.1.0"
+description = "Python side-car broker for Google Flow reCAPTCHA Enterprise via invisible_playwright Firefox"
+requires-python = ">=3.11"
+dependencies = [
+    "invisible_playwright @ git+https://github.com/feder-cr/invisible_playwright.git",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["broker*"]
+exclude = ["scripts*", "profile-smoke*"]

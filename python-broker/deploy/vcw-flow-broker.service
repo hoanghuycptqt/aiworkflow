@@ -1,0 +1,25 @@
+[Unit]
+Description=VCW Google Flow Python Broker (invisible_playwright)
+After=network.target
+
+[Service]
+Type=simple
+User=truonghoanghuy
+Group=truonghoanghuy
+WorkingDirectory=/opt/vcw/app/python-broker
+# Pull BROKER_AUTH_TOKEN (optional) + DISPLAY from this file.
+# Server's existing .env stays untouched.
+EnvironmentFile=-/opt/vcw/app/python-broker/broker.env
+Environment=DISPLAY=:99
+ExecStart=/opt/vcw/app/python-broker/venv/bin/python -m broker
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/opt/vcw/logs/broker.log
+StandardError=append:/opt/vcw/logs/broker-error.log
+
+# Resource guard — Firefox can balloon; restart if it exceeds 2 GB.
+MemoryHigh=1.5G
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
