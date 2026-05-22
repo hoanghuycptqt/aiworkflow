@@ -8,6 +8,124 @@ const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001
 // Only these node types produce output media for display
 const OUTPUT_NODE_TYPES = ['google-flow-image', 'google-flow-video'];
 
+// Pastel waterfall + thumb tint per node type (matches the design tokens)
+const NODE_TYPE_COLOR = {
+    'file-upload': 'var(--node-file)',
+    'file-download': 'var(--sage)',
+    'ai-text': 'var(--node-ai-text)',
+    'google-flow-image': 'var(--node-flow-image)',
+    'google-flow-video': 'var(--node-flow-video)',
+    'chatgpt-note': 'var(--node-chatgpt-note)',
+    'text-template': 'var(--node-utility)',
+    'text-extractor': 'var(--node-utility)',
+    'delay': 'var(--node-utility)',
+};
+
+const NODE_TYPE_ICON = {
+    'file-upload': 'upload',
+    'file-download': 'download',
+    'ai-text': 'shuffle',
+    'google-flow-image': 'palette',
+    'google-flow-video': 'clapperboard',
+    'chatgpt-note': 'message-square',
+    'text-template': 'file-edit',
+    'text-extractor': 'scissors',
+    'delay': 'timer',
+};
+
+function nodeColor(type) {
+    return NODE_TYPE_COLOR[type] || 'var(--node-utility)';
+}
+
+function nodeIconName(type) {
+    return NODE_TYPE_ICON[type] || 'circle';
+}
+
+function kindFromStatus(status) {
+    if (status === 'running') return 'running';
+    if (status === 'failed' || status === 'cancelled') return 'failed';
+    return 'done';
+}
+
+function statusLabel(status) {
+    if (status === 'completed') return 'Done';
+    if (status === 'running') return 'Running';
+    if (status === 'failed') return 'Failed';
+    if (status === 'cancelled') return 'Cancelled';
+    if (status === 'partial') return 'Partial';
+    if (status === 'pending') return 'Pending';
+    return status;
+}
+
+function statusToken(status) {
+    if (status === 'completed' || status === 'partial') return 'success';
+    if (status === 'running' || status === 'pending') return 'warning';
+    return 'error';
+}
+
+function formatSeconds(s) {
+    if (s == null || isNaN(s)) return '—';
+    if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
+    const m = Math.floor(s / 60);
+    const r = Math.round(s - m * 60);
+    return `${m}m ${r}s`;
+}
+
+function execTotalDuration(exec) {
+    if (!exec.startedAt) return null;
+    const end = exec.completedAt ? new Date(exec.completedAt) : new Date();
+    return (end - new Date(exec.startedAt)) / 1000;
+}
+
+function shortExecId(id) {
+    if (!id) return 'job-—';
+    const tail = String(id).slice(-4);
+    return `exec-${tail}`;
+}
+
+function timeLabel(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function dayLabel(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return 'today';
+    if (d.toDateString() === yesterday.toDateString()) return 'yesterday';
+    return d.toLocaleDateString([], { day: '2-digit', month: 'short' }).toLowerCase();
+}
+
+function computeWaterfallBars(exec) {
+    const nodes = (exec.nodeExecutions || [])
+        .slice()
+        .sort((a, b) => {
+            if (!a.startedAt) return 1;
+            if (!b.startedAt) return -1;
+            return new Date(a.startedAt) - new Date(b.startedAt);
+        });
+    if (nodes.length === 0) return [];
+    const bars = [];
+    for (const n of nodes) {
+        const start = n.startedAt ? new Date(n.startedAt) : null;
+        const end = n.completedAt ? new Date(n.completedAt) : (start ? new Date() : null);
+        const dur = start && end ? (end - start) / 1000 : 0;
+        const isFailed = n.status === 'failed';
+        bars.push({
+            label: (n.nodeType || '').replace('google-flow-', '').replace('-', ' '),
+            seconds: dur,
+            color: isFailed ? 'var(--error)' : nodeColor(n.nodeType),
+            status: n.status,
+            node: n,
+        });
+    }
+    return bars;
+}
+
 /**
  * Merged History + Monitor component.
  * Shows a flat list of all job executions for a workflow.
@@ -204,300 +322,46 @@ export default function JobMonitor({ workflowId }) {
             display: 'flex',
             flexDirection: 'column',
             height: '100%',
-            background: 'var(--bg-primary)',
+            background: 'var(--cream-100)',
         }}>
-            {/* Header */}
-            <div className="history-header">
-                <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
-                    <Icon name="clock" size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Job History
-                </span>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    {executions.length} execution{executions.length !== 1 ? 's' : ''}
-                </span>
-                {runningCount > 0 && (
-                    <span style={{
-                        fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                        background: 'rgba(99,102,241,0.15)', color: '#818cf8', fontWeight: 500,
-                    }}><Icon name="zap" size={11} style={{ marginRight: 2 }} /> {runningCount} running</span>
-                )}
-                <div style={{ flex: 1 }} />
-                <button className="btn btn-sm" onClick={loadHistory}
-                    style={{ fontSize: 11, padding: '4px 10px' }}><Icon name="refresh" size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Refresh</button>
+            {/* Hero band */}
+            <div className="wb-hero-band">
+                <span className="eyebrow">JOB HISTORY · {executions.length} EXECUTIONS{runningCount ? ` · ${runningCount} RUNNING` : ''}</span>
+                <h2>The <em>diary</em> of every run.</h2>
+                <p>One row per execution. Click a completed row to inspect outputs and node timings.</p>
             </div>
 
-            {/* Job Cards */}
-            <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {executions.map((exec) => {
-                        const isExpanded = expandedJob === exec.id;
-                        // Use server-provided media items (lightweight, no outputData parsing)
-                        const outputMedia = (exec.mediaItems || []).map(m => ({
-                            ...m,
-                            url: m.url.startsWith('http') ? m.url : `${SERVER}${m.url}`,
-                        }));
-                        const totalMedia = outputMedia.length;
-
-                        const sortedNodes = [...(exec.nodeExecutions || [])].sort((a, b) => {
-                            if (!a.startedAt) return 1;
-                            if (!b.startedAt) return -1;
-                            return new Date(a.startedAt) - new Date(b.startedAt);
-                        });
-
-                        return (
-                            <div key={exec.id} style={{
-                                border: '1px solid var(--border-primary)',
-                                borderRadius: 'var(--radius-md)',
-                                background: 'var(--bg-secondary)',
-                                overflow: 'hidden',
-                            }}>
-                                {/* Job Card Header */}
-                                <div
-                                    onClick={() => toggleExpand(exec.id)}
-                                    style={{
-                                        padding: '12px 16px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 10,
-                                        cursor: 'pointer',
-                                    }}
-                                >
-                                    {/* Thumbnail */}
-                                    {outputMedia.length > 0 ? (
-                                        outputMedia[0].type === 'video' ? (
-                                            <div style={{
-                                                width: 56, height: 56, borderRadius: 6,
-                                                background: '#111', flexShrink: 0,
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                fontSize: 22, border: '1px solid var(--border-primary)',
-                                            }}><Icon name="clapperboard" size={22} /></div>
-                                        ) : (
-                                            <img src={outputMedia[0].url} alt="" loading="lazy" style={{
-                                                width: 56, height: 56, borderRadius: 6,
-                                                objectFit: 'cover', flexShrink: 0,
-                                                border: '1px solid var(--border-primary)',
-                                            }} />
-                                        )
-                                    ) : (
-                                        <div style={{
-                                            width: 56, height: 56, borderRadius: 6,
-                                            background: 'var(--bg-tertiary)', flexShrink: 0,
-                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            fontSize: 20, border: '1px solid var(--border-primary)',
-                                            color: 'var(--text-muted)',
-                                        }}><Icon name={exec.status === 'running' ? 'zap' : 'file-text'} size={20} color="var(--text-muted)" /></div>
-                                    )}
-
-                                    <StatusBadge status={exec.status} />
-
-                                    <span style={{
-                                        fontSize: 13, fontWeight: 500,
-                                        color: 'var(--text-primary)',
-                                    }}>{exec.jobName}</span>
-
-                                    {exec.status === 'running' && exec.currentNode && (
-                                        <span style={{
-                                            fontSize: 11, color: 'var(--accent)',
-                                            background: 'rgba(99,102,241,0.1)',
-                                            padding: '2px 8px', borderRadius: 4,
-                                        }}><Icon name="refresh" size={11} style={{ marginRight: 2 }} /> {exec.currentNode}</span>
-                                    )}
-
-                                    <div style={{ flex: 1 }} />
-
-                                    {exec.startedAt && (
-                                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                            {new Date(exec.startedAt).toLocaleString()}
-                                        </span>
-                                    )}
-
-                                    {exec.startedAt && (
-                                        <DurationTimer startedAt={exec.startedAt} completedAt={exec.completedAt} />
-                                    )}
-
-                                    {totalMedia > 0 && (
-                                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                            <Icon name="paperclip" size={11} style={{ marginRight: 2 }} /> {totalMedia}
-                                        </span>
-                                    )}
-
-                                    {exec.error && (
-                                        <span style={{
-                                            fontSize: 11, color: '#ef4444',
-                                            maxWidth: 200, overflow: 'hidden',
-                                            textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                        }} title={exec.error}>{exec.error}</span>
-                                    )}
-
-                                    {exec.status === 'running' && exec.batchId && (
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); stopBatch(exec.batchId); }}
-                                            title="Stop"
-                                            className="btn btn-sm"
-                                            style={{
-                                                fontSize: 11, padding: '2px 8px',
-                                                background: 'rgba(239,68,68,0.15)', color: '#ef4444',
-                                                border: '1px solid rgba(239,68,68,0.3)',
-                                            }}
-                                        >⏹ Stop</button>
-                                    )}
-
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(exec.id); }}
-                                        title="Delete"
-                                        style={{
-                                            background: 'none', border: 'none',
-                                            color: 'var(--text-muted)', cursor: 'pointer',
-                                            fontSize: 13, padding: '2px 4px',
-                                            opacity: 0.5, transition: 'opacity 0.15s',
-                                        }}
-                                        onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
-                                        onMouseLeave={(e) => e.currentTarget.style.opacity = '0.5'}
-                                    ><Icon name="trash" size={13} /></button>
-
-                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                        {isExpanded ? '▼' : '▶'}
-                                    </span>
-                                </div>
-
-                                {/* Expanded detail */}
-                                {isExpanded && (
-                                    <div style={{ borderTop: '1px solid var(--border-primary)' }}>
-
-                                        {/* Output Media */}
-                                        {outputMedia.length > 0 && (
-                                            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-primary)' }}>
-                                                <div style={{
-                                                    display: 'flex', alignItems: 'center',
-                                                    justifyContent: 'space-between', marginBottom: 10,
-                                                }}>
-                                                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                                                        <Icon name="file-up" size={13} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Output Media ({outputMedia.length})
-                                                    </span>
-                                                    {exec.batchId && (
-                                                        <button
-                                                            className="btn btn-sm"
-                                                            onClick={(e) => { e.stopPropagation(); downloadJob(exec.batchId, exec.id); }}
-                                                            style={{ fontSize: 11, padding: '2px 8px' }}
-                                                        ><Icon name="download" size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Download</button>
-                                                    )}
-                                                </div>
-                                                <div style={{
-                                                    display: 'grid',
-                                                    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-                                                    gap: 10,
-                                                }}>
-                                                    {outputMedia.map((media, mi) => (
-                                                        <MediaPreview
-                                                            key={mi}
-                                                            media={media}
-                                                            onClick={() => openGallery(outputMedia, mi)}
-                                                        />
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {/* Node Pipeline */}
-                                        <div style={{ padding: '0 16px 12px' }}>
-                                            <div style={{
-                                                fontSize: 12, fontWeight: 600,
-                                                color: 'var(--text-muted)',
-                                                padding: '10px 0 6px',
-                                                textTransform: 'uppercase',
-                                                letterSpacing: '0.05em',
-                                            }}>Node Pipeline</div>
-
-                                            {loadingDetail === exec.id ? (
-                                                <div style={{ padding: '12px 0', fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                    <div className="loading-spinner" style={{ width: 16, height: 16 }} />
-                                                    Loading node details...
-                                                </div>
-                                            ) : sortedNodes.length === 0 ? (
-                                                <div style={{ padding: '12px 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                                                    No node data yet...
-                                                </div>
-                                            ) : (
-                                                <div>
-                                                    {sortedNodes.map((ne, i) => {
-                                                        const nodeKey = `${exec.id}:${ne.nodeId}`;
-                                                        const isNodeExpanded = expandedNode === nodeKey;
-                                                        const hasOutput = ne.outputData && Object.keys(ne.outputData).length > 0;
-
-                                                        return (
-                                                            <div key={ne.id || i} style={{
-                                                                borderBottom: i < sortedNodes.length - 1
-                                                                    ? '1px solid rgba(255,255,255,0.05)' : 'none',
-                                                            }}>
-                                                                <div
-                                                                    onClick={() => setExpandedNode(isNodeExpanded ? null : nodeKey)}
-                                                                    style={{
-                                                                        display: 'flex', alignItems: 'center',
-                                                                        gap: 8, padding: '8px 0', fontSize: 12,
-                                                                        cursor: hasOutput ? 'pointer' : 'default',
-                                                                    }}
-                                                                >
-                                                                    <span style={{
-                                                                        fontSize: 10, fontWeight: 600,
-                                                                        color: 'var(--text-muted)',
-                                                                        minWidth: 20, textAlign: 'center',
-                                                                    }}>{i + 1}</span>
-
-                                                                    <StatusIcon status={ne.status} />
-
-                                                                    <span style={{
-                                                                        color: 'var(--text-secondary)',
-                                                                        fontWeight: 500, minWidth: 100,
-                                                                    }}>{ne.nodeType}</span>
-
-                                                                    <span style={{
-                                                                        color: 'var(--text-muted)', flex: 1,
-                                                                        fontSize: 11,
-                                                                    }}>{ne.nodeId}</span>
-
-                                                                    {ne.error && (
-                                                                        <span style={{ color: '#ef4444', fontSize: 11 }}>
-                                                                            {ne.error}
-                                                                        </span>
-                                                                    )}
-
-                                                                    {hasOutput && (
-                                                                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                                                                            {isNodeExpanded ? '▼' : '▶'}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-
-                                                                {isNodeExpanded && hasOutput && (
-                                                                    <NodeOutputViewer output={ne.outputData} />
-                                                                )}
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
+            {/* Job rows */}
+            <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px 28px' }}>
+                <div className="wbh-list">
+                    {executions.map((exec) => (
+                        <ExecRow
+                            key={exec.id}
+                            exec={exec}
+                            expanded={expandedJob === exec.id}
+                            loadingDetail={loadingDetail === exec.id}
+                            expandedNode={expandedNode}
+                            onToggleExpand={() => toggleExpand(exec.id)}
+                            onToggleNode={(nodeKey) => setExpandedNode(expandedNode === nodeKey ? null : nodeKey)}
+                            onStop={() => stopBatch(exec.batchId)}
+                            onDownload={() => downloadJob(exec.batchId, exec.id)}
+                            onRetry={() => toast('Retry not yet implemented — re-run the batch from Jobs tab')}
+                            onDelete={() => setConfirmDelete(exec.id)}
+                            onOpenGallery={(items, idx) => openGallery(items, idx)}
+                        />
+                    ))}
                 </div>
 
-                {/* Load More Button */}
+                {/* Load More */}
                 {hasMore && (
-                    <div style={{ textAlign: 'center', padding: '12px 0' }}>
+                    <div style={{ textAlign: 'center', padding: '16px 0 0' }}>
                         <button
-                            className="btn btn-sm"
+                            className="btn btn-ghost btn-sm"
                             onClick={() => loadHistory(true)}
                             disabled={loadingMore}
-                            style={{
-                                padding: '8px 24px', fontSize: 13,
-                                background: 'var(--bg-tertiary)',
-                                border: '1px solid var(--border-primary)',
-                                opacity: loadingMore ? 0.6 : 1,
-                            }}
                         >
-                            {loadingMore ? 'Loading...' : `Load More (${executions.length}/${totalCount})`}
+                            {loadingMore ? <span className="loading-spinner" /> : <Icon name="chevron-down" size={12} />}
+                            {loadingMore ? ' Loading…' : ` Load more (${executions.length} / ${totalCount})`}
                         </button>
                     </div>
                 )}
@@ -556,6 +420,288 @@ export default function JobMonitor({ workflowId }) {
                 </div>
             )}
         </div>
+    );
+}
+
+// ─── History row ──────────────────────────────────────────────
+function ExecRow({
+    exec,
+    expanded,
+    loadingDetail,
+    expandedNode,
+    onToggleExpand,
+    onToggleNode,
+    onStop,
+    onDownload,
+    onRetry,
+    onDelete,
+    onOpenGallery,
+}) {
+    const kind = kindFromStatus(exec.status);
+    const isRunning = kind === 'running';
+    const isDone = kind === 'done';
+    const isFailed = kind === 'failed';
+
+    const mediaItems = (exec.mediaItems || []).map(m => ({
+        ...m,
+        url: m.url?.startsWith('http') ? m.url : `${SERVER}${m.url || ''}`,
+    }));
+    const totalMedia = mediaItems.length;
+    const firstMedia = mediaItems[0];
+
+    const totalDuration = execTotalDuration(exec);
+    const bars = computeWaterfallBars(exec);
+    const elapsedSec = totalDuration ? Math.round(totalDuration) : 0;
+
+    return (
+        <>
+            <div className={`wbh-row${expanded ? ' expanded' : ''} ${kind}`} onClick={onToggleExpand}>
+                {/* Col 1 — hero thumb */}
+                <div className="wbh-hero">
+                    {isRunning && (
+                        <>
+                            <div className="live-pulse" />
+                            <span className="duration-badge">live · {elapsedSec}s</span>
+                        </>
+                    )}
+                    {isDone && firstMedia && firstMedia.type === 'video' && (
+                        <>
+                            {firstMedia.url
+                                ? <img src={firstMedia.url} alt="" loading="lazy" />
+                                : <div style={{ width: '100%', height: '100%', background: 'var(--node-flow-video)' }} />
+                            }
+                            <span className="play"><span className="play-circle"><Icon name="play" size={10} /></span></span>
+                            {totalMedia > 1 && <span className="count-badge">+{totalMedia - 1}</span>}
+                        </>
+                    )}
+                    {isDone && firstMedia && firstMedia.type === 'image' && (
+                        <>
+                            <img src={firstMedia.url} alt="" loading="lazy" />
+                            {totalMedia > 1 && <span className="count-badge">+{totalMedia - 1}</span>}
+                        </>
+                    )}
+                    {isDone && !firstMedia && (
+                        <Icon name="check-circle" size={20} color="var(--ink-faint)" />
+                    )}
+                    {isFailed && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--peach-soft)', color: 'var(--error)' }}>
+                            <Icon name="alert-triangle" size={18} color="currentColor" />
+                        </div>
+                    )}
+                </div>
+
+                {/* Col 2 — title + id */}
+                <div>
+                    <div className="wbh-row-title" title={exec.jobName}>{exec.jobName || 'Untitled execution'}</div>
+                    <div className="wbh-row-id">{shortExecId(exec.id)}</div>
+                </div>
+
+                {/* Col 3 — time */}
+                <div className="wbh-time">
+                    {isRunning ? (
+                        <span style={{ color: 'var(--warning)' }}>started {timeLabel(exec.startedAt)}</span>
+                    ) : (
+                        <>
+                            {timeLabel(exec.startedAt)}
+                            <div className="wbh-time-sub">{dayLabel(exec.startedAt)}</div>
+                        </>
+                    )}
+                </div>
+
+                {/* Col 4 — middle (running pill + bar, OR waterfall) */}
+                <div>
+                    {isRunning ? (
+                        <>
+                            <div className="wbh-current-node">
+                                <span className="status-dot status-dot--running" />
+                                {exec.currentNode ? exec.currentNode : 'starting…'}
+                            </div>
+                            <div className="wbh-running-bar"><span /></div>
+                            <div className="wbh-time-sub" style={{ marginTop: 6, fontFamily: 'var(--font-mono)' }}>
+                                running for {formatSeconds(elapsedSec)}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="wbh-waterfall">
+                                {bars.length === 0 && (
+                                    <span className="wbh-time-sub" style={{ marginTop: 0 }}>
+                                        No node timing
+                                    </span>
+                                )}
+                                {bars.map((b, j) => (
+                                    <div
+                                        key={j}
+                                        className="wbh-waterfall-bar"
+                                        style={{
+                                            width: `${Math.max(b.seconds * 4, 24)}px`,
+                                            background: b.color,
+                                        }}
+                                        title={`${b.label} · ${formatSeconds(b.seconds)}`}
+                                    >
+                                        {b.seconds >= 6 ? b.label : ''}
+                                    </div>
+                                ))}
+                            </div>
+                            {isFailed ? (
+                                <div className="wbh-error-line" title={exec.error || ''}>
+                                    <Icon name="alert-triangle" size={11} color="currentColor" /> {exec.error || 'Execution failed'}
+                                </div>
+                            ) : (
+                                <div className="wbh-time-sub" style={{ marginTop: 4, fontFamily: 'var(--font-mono)' }}>
+                                    total {formatSeconds(totalDuration)}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+
+                {/* Col 5 — status */}
+                <div className="wbh-status-block">
+                    <span className={`status-dot status-dot--${statusToken(exec.status)}`} />
+                    <div>
+                        <div className="wbh-status-label" style={{
+                            color: isRunning ? 'var(--warning)' : isFailed ? 'var(--error)' : 'var(--success)',
+                        }}>{statusLabel(exec.status)}</div>
+                        {isDone && totalMedia > 0 && (
+                            <div className="wbh-status-sub">{totalMedia} {totalMedia === 1 ? 'asset' : 'assets'}</div>
+                        )}
+                        {isRunning && (
+                            <div className="wbh-status-sub">
+                                step {(exec.nodeExecutions || []).filter(n => n.status === 'completed').length + 1} of {(exec.nodeExecutions || []).length || '?'}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Col 6 — actions */}
+                <div className="wbh-row-actions" onClick={(e) => e.stopPropagation()}>
+                    {isRunning && exec.batchId && (
+                        <button className="btn btn-ghost btn-sm btn-icon" title="Stop" onClick={onStop}>
+                            <Icon name="x" size={12} />
+                        </button>
+                    )}
+                    {isDone && exec.batchId && (
+                        <button className="btn btn-ghost btn-sm btn-icon" title="Download" onClick={onDownload}>
+                            <Icon name="download" size={12} />
+                        </button>
+                    )}
+                    {isFailed && (
+                        <button className="btn btn-ghost btn-sm btn-icon" title="Retry" onClick={onRetry}>
+                            <Icon name="play" size={12} />
+                        </button>
+                    )}
+                    <button className="btn btn-ghost btn-sm btn-icon" title="Delete" onClick={onDelete}>
+                        <Icon name="trash" size={12} />
+                    </button>
+                    <button className="btn btn-ghost btn-sm btn-icon" title={expanded ? 'Collapse' : 'Expand'}>
+                        <Icon name="chevron-down" size={12} style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Expanded section */}
+            {expanded && (
+                <div className="wbh-expanded">
+                    {loadingDetail && (
+                        <div style={{ padding: '8px 0', fontSize: 12, color: 'var(--ink-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div className="loading-spinner" style={{ width: 14, height: 14 }} />
+                            Loading node details…
+                        </div>
+                    )}
+
+                    {/* Media gallery */}
+                    {isDone && totalMedia > 0 && (
+                        <>
+                            <div className="wbh-exp-head">
+                                <h4>Output media · {totalMedia} {totalMedia === 1 ? 'item' : 'items'}</h4>
+                                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ink-muted)' }}>
+                                    {formatSeconds(totalDuration)} total · {(exec.nodeExecutions || []).length} nodes
+                                </div>
+                            </div>
+                            <div className="wbh-thumbs">
+                                {mediaItems.map((m, i) => (
+                                    <div
+                                        key={i}
+                                        className="wbh-thumb"
+                                        onClick={() => onOpenGallery(mediaItems, i)}
+                                    >
+                                        {m.url && m.type === 'image' && <img src={m.url} alt="" loading="lazy" />}
+                                        {m.url && m.type === 'video' && (
+                                            <>
+                                                <img src={m.url} alt="" loading="lazy"
+                                                    onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                                                <div style={{ position: 'absolute', inset: 0, background: 'rgba(42,37,32,0.2)' }} />
+                                                <span className="play"><span className="play-circle"><Icon name="play" size={12} /></span></span>
+                                            </>
+                                        )}
+                                        <span className="thumb-caption">
+                                            {m.type === 'video' ? 'video' : 'frame'} · {String(i + 1).padStart(2, '0')}
+                                        </span>
+                                    </div>
+                                ))}
+                                {exec.batchId && (
+                                    <button
+                                        className="btn btn-ghost btn-sm"
+                                        style={{ marginLeft: 'auto', alignSelf: 'flex-start' }}
+                                        onClick={onDownload}
+                                    >
+                                        <Icon name="download" size={12} /> Download all
+                                    </button>
+                                )}
+                            </div>
+                        </>
+                    )}
+
+                    {/* Node waterfall list */}
+                    {(exec.nodeExecutions || []).length > 0 && (
+                        <>
+                            <div className="wbh-exp-head">
+                                <h4>Node waterfall</h4>
+                            </div>
+                            <div className="wbh-node-list">
+                                {bars.map((b, i) => {
+                                    const n = b.node;
+                                    const nodeKey = `${exec.id}:${n.nodeId}`;
+                                    const hasOutput = n.outputData && Object.keys(n.outputData).length > 0;
+                                    const isNodeExp = expandedNode === nodeKey;
+                                    return (
+                                        <div key={n.id || i} style={{ display: 'flex', flexDirection: 'column' }}>
+                                            <div className="wbh-node">
+                                                <span className="wbh-node-icon" style={{ background: nodeColor(n.nodeType) }}>
+                                                    <Icon name={nodeIconName(n.nodeType)} size={13} />
+                                                </span>
+                                                <div>
+                                                    <div className="wbh-node-title">{(n.nodeType || '').replace(/-/g, ' ')}</div>
+                                                    <div className="wbh-node-sub">{n.nodeId}{n.error ? ` · ${n.error}` : ''}</div>
+                                                </div>
+                                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                                                    <span className={`status-dot status-dot--${statusToken(n.status)}`} />
+                                                    {statusLabel(n.status).toLowerCase()}
+                                                </div>
+                                                <div className="wbh-node-duration">{formatSeconds(b.seconds)}</div>
+                                                {hasOutput ? (
+                                                    <button
+                                                        className="btn btn-ghost btn-sm"
+                                                        style={{ fontSize: 11, padding: '0 10px', height: 28 }}
+                                                        onClick={() => onToggleNode(nodeKey)}
+                                                    >
+                                                        {isNodeExp ? 'Hide' : 'Inspect'}
+                                                    </button>
+                                                ) : <span />}
+                                            </div>
+                                            {isNodeExp && hasOutput && (
+                                                <NodeOutputViewer output={n.outputData} />
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+                </div>
+            )}
+        </>
     );
 }
 
