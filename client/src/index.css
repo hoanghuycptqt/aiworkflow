@@ -3639,6 +3639,42 @@ body {
 .status-pill--failed { background: var(--peach-soft); color: var(--error); }
 
 /* ================================ */
+/* Dark-mode SVG attribute selectors (Phase 2 Task 6)
+   Per illustration baked-in light colors — swap to dark equivalents
+   automatically so we don't have to touch every inline SVG.       */
+/* ================================ */
+[data-theme="dark"] svg [fill="#2A2520"] { fill: var(--ink); }
+[data-theme="dark"] svg [stroke="#2A2520"] { stroke: var(--ink); }
+
+[data-theme="dark"] svg [fill="#E8DDC8"] { fill: var(--line); }
+[data-theme="dark"] svg [stroke="#E8DDC8"] { stroke: var(--line); }
+
+[data-theme="dark"] svg [fill="#F0E7D5"] { fill: var(--line-soft); }
+[data-theme="dark"] svg [stroke="#F0E7D5"] { stroke: var(--line-soft); }
+
+[data-theme="dark"] svg [fill="#FBF5EB"] { fill: var(--cream-100); }
+[data-theme="dark"] svg [fill="#FDF9F1"] { fill: var(--cream-50); }
+[data-theme="dark"] svg [fill="#FFFCF6"] { fill: var(--paper); }
+
+[data-theme="dark"] svg [fill="#8A8175"] { fill: var(--ink-muted); }
+[data-theme="dark"] svg [fill="#B8AFA1"] { fill: var(--ink-faint); }
+
+[data-theme="dark"] svg [fill="#6FA968"] { fill: var(--sage); }
+
+/* Pastel tints — keep the hue but dim opacity so dark surfaces don't shout */
+[data-theme="dark"] svg [fill="#FBD9C7"] { fill-opacity: 0.75; }
+[data-theme="dark"] svg [fill="#FCEDC1"] { fill-opacity: 0.75; }
+[data-theme="dark"] svg [fill="#D8E6D3"] { fill-opacity: 0.75; }
+[data-theme="dark"] svg [fill="#E5DEEF"] { fill-opacity: 0.75; }
+[data-theme="dark"] svg [fill="#D6E5EE"] { fill-opacity: 0.75; }
+
+/* Also flip dot-grid SVG patterns that bake in the light-mode ink alpha. */
+[data-theme="dark"] svg circle[fill="rgba(42,37,32,0.08)"],
+[data-theme="dark"] svg [fill="rgba(42,37,32,0.08)"] {
+  fill: rgba(244, 236, 220, 0.10);
+}
+
+/* ================================ */
 /* Shortcuts overlay (Phase 2)      */
 /* ================================ */
 .ks-overlay {
