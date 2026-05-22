@@ -41,6 +41,13 @@ export default function Dashboard() {
         api.getMe().then((data) => setMe(data.user)).catch(() => { });
     }, []);
 
+    // CommandPalette can fire this event to open the create-workflow modal
+    useEffect(() => {
+        function onCreate() { setShowCreateModal(true); }
+        window.addEventListener('vcw:create-workflow', onCreate);
+        return () => window.removeEventListener('vcw:create-workflow', onCreate);
+    }, []);
+
     async function loadWorkflows() {
         try {
             const data = await api.getWorkflows();

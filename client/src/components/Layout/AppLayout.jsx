@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import Icon from '../../services/icons.jsx';
 import Logo, { Wordmark } from '../../services/Logo.jsx';
+import CommandPalette from '../Shared/CommandPalette.jsx';
 
 export default function AppLayout({ user, onLogout }) {
     const location = useLocation();
@@ -99,6 +100,8 @@ export default function AppLayout({ user, onLogout }) {
             <main className="app-main">
                 <Outlet />
             </main>
+
+            <CommandPalette />
         </div>
     );
 }
