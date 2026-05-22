@@ -5,6 +5,48 @@ import toast from 'react-hot-toast';
 
 const SERVER = window.location.hostname === 'localhost' ? 'http://localhost:3001' : '';
 
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i;
+const VIDEO_EXT = /\.(mp4|webm|mov|avi|mkv)(\?|$)/i;
+const CSV_EXT = /\.(csv|tsv|txt|json|md|yaml|yml)(\?|$)/i;
+
+function classifyPath(p) {
+    if (!p) return 'empty';
+    if (IMAGE_EXT.test(p)) return 'image';
+    if (VIDEO_EXT.test(p)) return 'video';
+    if (CSV_EXT.test(p)) return 'csv';
+    return 'image'; // sensible default for unknown extensions
+}
+
+function shortJobId(idx) {
+    return `job-${String(1000 + idx).padStart(4, '0')}`;
+}
+
+function JobThumb({ paths }) {
+    const count = (paths || []).length;
+    if (count === 0) {
+        return (
+            <div className="job-thumb kind-empty" title="No inputs">
+                empty
+            </div>
+        );
+    }
+    const first = paths[0];
+    const url = first.startsWith('http') ? first : `${SERVER}${first}`;
+    const kind = classifyPath(first);
+    return (
+        <div className={`job-thumb kind-${kind}`} title={first.split('/').pop()}>
+            {kind === 'image' && <img src={url} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
+            {kind === 'video' && (
+                <span className="play-circle"><Icon name="play" size={10} /></span>
+            )}
+            {kind === 'csv' && (
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 15, color: 'var(--ink)' }}>{'{ }'}</span>
+            )}
+            {count > 1 && <span className="count-badge">+{count - 1}</span>}
+        </div>
+    );
+}
+
 export default function JobManager({ workflowId, onRunBatch }) {
     const [jobs, setJobs] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -255,7 +297,7 @@ export default function JobManager({ workflowId, onRunBatch }) {
                             </div>
                         ) : (
                             jobs.map((job, idx) => {
-                                const thumbs = job.inputData?.filePaths || [];
+                                const paths = job.inputData?.filePaths || [];
                                 const isSelected = selectedJob?.id === job.id;
                                 const isChecked = selectedJobIds.has(job.id);
 
@@ -266,14 +308,15 @@ export default function JobManager({ workflowId, onRunBatch }) {
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
-                                            gap: 10,
+                                            gap: 12,
                                             padding: '10px 12px',
-                                            borderRadius: 'var(--radius-md)',
+                                            borderRadius: 'var(--r-md)',
                                             cursor: 'pointer',
                                             marginBottom: 4,
-                                            background: isSelected ? 'rgba(99,102,241,0.15)' : 'transparent',
-                                            border: isSelected ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
-                                            transition: 'all 0.15s',
+                                            background: isSelected ? 'var(--paper)' : 'transparent',
+                                            border: isSelected ? '1px solid var(--ink-faint)' : '1px solid transparent',
+                                            boxShadow: isSelected ? 'var(--sh-sm)' : 'none',
+                                            transition: 'background-color 150ms, border-color 150ms, box-shadow 150ms',
                                         }}
                                     >
                                         {/* Checkbox */}
@@ -284,61 +327,54 @@ export default function JobManager({ workflowId, onRunBatch }) {
                                                 e.stopPropagation();
                                                 toggleJobSelection(job.id);
                                             }}
-                                            style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
+                                            style={{ cursor: 'pointer', accentColor: 'var(--peach)', flexShrink: 0 }}
                                         />
 
-                                        {/* Thumbnail */}
-                                        {thumbs.length > 0 ? (
-                                            <img
-                                                src={`${SERVER}${thumbs[0]}`}
-                                                alt=""
-                                                style={{
-                                                    width: 40, height: 40,
-                                                    objectFit: 'cover',
-                                                    borderRadius: 6,
-                                                    border: '1px solid var(--border-primary)',
-                                                    flexShrink: 0,
-                                                }}
-                                            />
-                                        ) : (
-                                            <div style={{
-                                                width: 40, height: 40,
-                                                borderRadius: 6,
-                                                background: 'var(--bg-tertiary)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                fontSize: 16,
-                                                flexShrink: 0,
-                                            }}><Icon name="camera" size={16} color="var(--text-muted)" /></div>
-                                        )}
+                                        {/* Thumb cell */}
+                                        <div className="job-thumb-cell">
+                                            <JobThumb paths={paths} />
+                                        </div>
 
                                         {/* Info */}
                                         <div style={{ flex: 1, minWidth: 0 }}>
                                             <div style={{
-                                                fontSize: 13,
-                                                fontWeight: 500,
-                                                color: 'var(--text-primary)',
+                                                fontFamily: 'var(--font-serif)',
+                                                fontStyle: 'italic',
+                                                fontSize: 17,
+                                                fontWeight: 400,
+                                                letterSpacing: '-0.005em',
+                                                color: 'var(--ink)',
                                                 overflow: 'hidden',
                                                 textOverflow: 'ellipsis',
                                                 whiteSpace: 'nowrap',
                                             }}>{job.name}</div>
                                             <div style={{
-                                                fontSize: 11,
-                                                color: 'var(--text-muted)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: 8,
+                                                marginTop: 4,
                                             }}>
-                                                {thumbs.length} image{thumbs.length !== 1 ? 's' : ''}
+                                                <span className="job-id-chip">{shortJobId(idx)}</span>
+                                                <span style={{
+                                                    fontFamily: 'var(--font-mono)',
+                                                    fontSize: 10.5,
+                                                    color: 'var(--ink-muted)',
+                                                    letterSpacing: '0.04em',
+                                                    textTransform: 'uppercase',
+                                                }}>
+                                                    {paths.length} {paths.length === 1 ? 'INPUT' : 'INPUTS'}
+                                                </span>
                                             </div>
                                         </div>
 
                                         {/* Actions */}
-                                        <div style={{ display: 'flex', gap: 2 }}>
-                                            <button className="btn btn-sm btn-icon"
-                                                onClick={(e) => { e.stopPropagation(); duplicateJob(job.id); }}
-                                                title="Duplicate" style={{ fontSize: 11, padding: '2px 4px' }}><Icon name="copy" size={12} /></button>
-                                            <button className="btn btn-sm btn-icon btn-danger"
-                                                onClick={(e) => { e.stopPropagation(); deleteJob(job.id); }}
-                                                title="Delete" style={{ fontSize: 11, padding: '2px 4px' }}><Icon name="trash" size={12} /></button>
+                                        <div style={{ display: 'flex', gap: 2 }} onClick={(e) => e.stopPropagation()}>
+                                            <button className="btn btn-ghost btn-sm btn-icon"
+                                                onClick={() => duplicateJob(job.id)}
+                                                title="Duplicate"><Icon name="copy" size={12} /></button>
+                                            <button className="btn btn-ghost btn-sm btn-icon"
+                                                onClick={() => deleteJob(job.id)}
+                                                title="Delete"><Icon name="trash" size={12} /></button>
                                         </div>
                                     </div>
                                 );
