@@ -4252,13 +4252,17 @@ body {
 
 .wbh-row {
   display: grid;
+  /* Time, status, and actions are bounded-content columns → fixed
+     widths. Title+id is moderate. The middle (waterfall) column
+     soaks up the remaining space so per-node timing is the largest
+     visual element on the row. */
   grid-template-columns:
-    76px
-    minmax(0, 1.3fr)
-    minmax(0, 1fr)
-    minmax(0, 1.4fr)
-    minmax(0, 0.9fr)
-    60px;
+    76px                /* hero thumb */
+    minmax(0, 0.9fr)    /* title + id */
+    110px               /* started time + day */
+    minmax(0, 2.8fr)    /* middle (waterfall / running pill) */
+    130px               /* status */
+    104px;              /* row actions (3 icon buttons + gaps) */
   gap: 16px;
   padding: 14px 24px;
   border-bottom: 1px solid var(--line-soft);
