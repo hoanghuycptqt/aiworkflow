@@ -27,6 +27,11 @@
   --peach:      #F4A381;
   --peach-soft: #FBD9C7;
   --tomato:     #E8806E;
+  /* Text/icon color for elements sitting on a saturated pastel
+     (--peach, --butter, --lavender, --sky, --node-*). These tokens
+     stay bright in both themes, so this value must NOT flip in dark
+     mode — overrides below intentionally leave it alone. */
+  --ink-on-pastel: #2A2520;
   --butter:     #F5D58B;
   --butter-soft:#FCEDC1;
   --sage:       #A8C5A0;
@@ -368,7 +373,7 @@ body {
 .btn-primary {
   background: var(--peach);
   border-color: var(--peach);
-  color: var(--ink);
+  color: var(--ink-on-pastel);
   box-shadow: var(--sh-sm);
 }
 
@@ -706,7 +711,7 @@ body {
   font-style: italic;
   font-size: 18px;
   font-weight: 400;
-  color: var(--ink);
+  color: var(--ink-on-pastel);
   flex-shrink: 0;
 }
 
@@ -4477,7 +4482,9 @@ body {
   justify-content: center;
   font-family: var(--font-mono);
   font-size: 9px;
-  color: var(--ink);
+  /* Always dark — bar bg uses --node-* tokens which stay bright
+     across themes, so the label needs to stay dark in dark mode too. */
+  color: var(--ink-on-pastel);
   overflow: hidden;
   white-space: nowrap;
   padding: 0 4px;
@@ -4610,7 +4617,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--ink);
+  /* Icon chip bg is the node-type color (bright in both themes) */
+  color: var(--ink-on-pastel);
 }
 
 .wbh-node-title {

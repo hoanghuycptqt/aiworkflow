@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import Icon from '../../services/icons.jsx';
 
+// All cp-icon backgrounds use *-soft tints so they flip dark in dark
+// mode and the `var(--ink)` foreground stays readable in both themes.
 const ITEM_TINTS = {
-    workflow1: 'var(--butter)',
-    workflow2: 'var(--lavender)',
-    workflow3: 'var(--sage)',
-    workflow4: 'var(--sky)',
+    workflow1: 'var(--butter-soft)',
+    workflow2: 'var(--lav-soft)',
+    workflow3: 'var(--sage-soft)',
+    workflow4: 'var(--sky-soft)',
     workflow5: 'var(--peach-soft)',
     actionNew: 'var(--peach-soft)',
     actionRun: 'var(--butter-soft)',
