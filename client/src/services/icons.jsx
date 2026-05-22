@@ -15,7 +15,8 @@ import {
     Loader2, ChevronRight, CircleX, CircleAlert, CirclePause,
     SkipForward, Monitor, ListOrdered, Sparkles, KeyRound,
     Sun, Moon,
-    Flame, GanttChart, Waves, Activity, Cpu, Calendar
+    Flame, GanttChart, Waves, Activity, Cpu, Calendar,
+    Filter, ChevronLeft, SlidersHorizontal
 } from 'lucide-react';
 
 // Map string names to Lucide components
@@ -37,6 +38,9 @@ const ICON_MAP = {
     'chevron-right': ChevronRight,
     'x': X,
     'search': Search,
+    'filter': Filter,
+    'sliders': SlidersHorizontal,
+    'chevron-left': ChevronLeft,
     'pencil': Pencil,
     'refresh': RefreshCw,
     'link': Link,

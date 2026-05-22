@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { api } from '../../services/api.js';
 import { onJobUpdate, onExecutionUpdate } from '../../services/socket.js';
 import Icon from '../../services/icons.jsx';
@@ -131,7 +131,29 @@ function computeWaterfallBars(exec) {
  * Shows a flat list of all job executions for a workflow.
  * Receives `workflowId` instead of `batchId`.
  */
-export default function JobMonitor({ workflowId }) {
+const DATE_RANGES = [
+    { id: '24h', label: 'Last 24 hours', ms: 24 * 60 * 60 * 1000 },
+    { id: '7d', label: 'Last 7 days', ms: 7 * 24 * 60 * 60 * 1000 },
+    { id: '30d', label: 'Last 30 days', ms: 30 * 24 * 60 * 60 * 1000 },
+    { id: 'all', label: 'All time', ms: null },
+];
+
+const STATUS_FILTERS = [
+    { id: 'completed', label: 'Completed', token: 'success' },
+    { id: 'failed', label: 'Failed', token: 'error' },
+    { id: 'cancelled', label: 'Cancelled', token: 'warning' },
+    { id: 'running', label: 'Running', token: 'warning' },
+];
+
+function statusBucketOf(status) {
+    if (status === 'completed' || status === 'partial') return 'completed';
+    if (status === 'failed') return 'failed';
+    if (status === 'cancelled') return 'cancelled';
+    if (status === 'running' || status === 'pending') return 'running';
+    return 'completed';
+}
+
+export default function JobMonitor({ workflowId, onStatsChange, exportTrigger }) {
     const [executions, setExecutions] = useState([]);
     const [expandedJob, setExpandedJob] = useState(null);
     const [expandedNode, setExpandedNode] = useState(null);
@@ -142,6 +164,10 @@ export default function JobMonitor({ workflowId }) {
     const [loadingDetail, setLoadingDetail] = useState(null); // executionId currently loading
     const [gallery, setGallery] = useState(null);
     const [confirmDelete, setConfirmDelete] = useState(null);
+    const [dateRange, setDateRange] = useState('7d');
+    const [statusFilter, setStatusFilter] = useState(() => new Set(['completed', 'failed', 'cancelled', 'running']));
+    const [searchQuery, setSearchQuery] = useState('');
+    const [showSearch, setShowSearch] = useState(false);
     const notifiedRef = useRef(new Set());
 
     // Load all job executions
@@ -207,6 +233,102 @@ export default function JobMonitor({ workflowId }) {
 
         return () => { unsubJob(); unsubExec(); };
     }, [workflowId]);
+
+    // Status bucket counts (across the full loaded list)
+    const stats = useMemo(() => {
+        const buckets = { completed: 0, failed: 0, cancelled: 0, running: 0 };
+        for (const e of executions) {
+            const b = statusBucketOf(e.status);
+            buckets[b] = (buckets[b] || 0) + 1;
+        }
+        return {
+            total: totalCount || executions.length,
+            ...buckets,
+        };
+    }, [executions, totalCount]);
+
+    // Report stats up to the WorkflowBuilder top bar
+    useEffect(() => {
+        if (typeof onStatsChange === 'function') onStatsChange(stats);
+    }, [stats, onStatsChange]);
+
+    // Apply date-range + status + search filters client-side
+    const filteredExecutions = useMemo(() => {
+        const range = DATE_RANGES.find((r) => r.id === dateRange);
+        const cutoff = range && range.ms != null ? Date.now() - range.ms : null;
+        const q = searchQuery.trim().toLowerCase();
+        return executions.filter((e) => {
+            if (cutoff && e.startedAt) {
+                if (new Date(e.startedAt).getTime() < cutoff) return false;
+            }
+            const bucket = statusBucketOf(e.status);
+            if (!statusFilter.has(bucket)) return false;
+            if (q) {
+                const haystack = `${e.jobName || ''} ${e.id || ''} ${e.error || ''}`.toLowerCase();
+                if (!haystack.includes(q)) return false;
+            }
+            return true;
+        });
+    }, [executions, dateRange, statusFilter, searchQuery]);
+
+    const successRate = useMemo(() => {
+        const done = stats.completed;
+        const finished = stats.completed + stats.failed + stats.cancelled;
+        if (finished === 0) return null;
+        return Math.round((done / finished) * 100);
+    }, [stats]);
+
+    // CSV export — driven by exportTrigger incrementing
+    useEffect(() => {
+        if (!exportTrigger) return;
+        if (filteredExecutions.length === 0) {
+            toast('Nothing to export — empty filtered list.');
+            return;
+        }
+        const rows = [
+            ['id', 'jobName', 'status', 'startedAt', 'completedAt', 'durationSec', 'mediaCount', 'error'],
+        ];
+        for (const e of filteredExecutions) {
+            const dur = execTotalDuration(e);
+            rows.push([
+                e.id,
+                e.jobName || '',
+                e.status || '',
+                e.startedAt || '',
+                e.completedAt || '',
+                dur != null ? Math.round(dur) : '',
+                (e.mediaItems || []).length,
+                (e.error || '').replace(/[\r\n]+/g, ' '),
+            ]);
+        }
+        const csv = rows
+            .map((r) => r.map((c) => {
+                const s = String(c ?? '');
+                if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+                return s;
+            }).join(','))
+            .join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `history-${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success(`Exported ${filteredExecutions.length} executions`);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [exportTrigger]);
+
+    function toggleStatus(id) {
+        setStatusFilter((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }
 
     async function loadHistory(append = false) {
         try {
@@ -305,66 +427,146 @@ export default function JobMonitor({ workflowId }) {
         );
     }
 
-    if (executions.length === 0) {
-        return (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
-                <div style={{ fontSize: 48, marginBottom: 12 }}><Icon name="folder-open" size={48} color="var(--text-muted)" /></div>
-                <div style={{ fontSize: 14 }}>No execution history yet. Run some jobs first!</div>
-            </div>
-        );
-    }
-
-    // Count running jobs
-    const runningCount = executions.filter(e => e.status === 'running').length;
-
     return (
-        <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            height: '100%',
-            background: 'var(--cream-100)',
-        }}>
-            {/* Hero band */}
-            <div className="wb-hero-band">
-                <span className="eyebrow">JOB HISTORY · {executions.length} EXECUTIONS{runningCount ? ` · ${runningCount} RUNNING` : ''}</span>
-                <h2>The <em>diary</em> of every run.</h2>
-                <p>One row per execution. Click a completed row to inspect outputs and node timings.</p>
-            </div>
-
-            {/* Job rows */}
-            <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px 28px' }}>
-                <div className="wbh-list">
-                    {executions.map((exec) => (
-                        <ExecRow
-                            key={exec.id}
-                            exec={exec}
-                            expanded={expandedJob === exec.id}
-                            loadingDetail={loadingDetail === exec.id}
-                            expandedNode={expandedNode}
-                            onToggleExpand={() => toggleExpand(exec.id)}
-                            onToggleNode={(nodeKey) => setExpandedNode(expandedNode === nodeKey ? null : nodeKey)}
-                            onStop={() => stopBatch(exec.batchId)}
-                            onDownload={() => downloadJob(exec.batchId, exec.id)}
-                            onRetry={() => toast('Retry not yet implemented — re-run the batch from Jobs tab')}
-                            onDelete={() => setConfirmDelete(exec.id)}
-                            onOpenGallery={(items, idx) => openGallery(items, idx)}
-                        />
+        <div className="history-shell">
+            {/* Left sidebar — date range + status filters */}
+            <aside className="history-sidebar">
+                <div className="history-sidebar-section">
+                    <h4>Date range</h4>
+                    {DATE_RANGES.map((r) => (
+                        <button
+                            key={r.id}
+                            type="button"
+                            className={`history-radio${dateRange === r.id ? ' active' : ''}`}
+                            onClick={() => setDateRange(r.id)}
+                        >
+                            <span className="history-radio-dot" />
+                            {r.label}
+                        </button>
                     ))}
+                    <button
+                        type="button"
+                        className="history-radio"
+                        onClick={() => toast('Custom range picker not yet wired')}
+                    >
+                        <span className="history-radio-dot" />
+                        Custom…
+                    </button>
                 </div>
 
-                {/* Load More */}
-                {hasMore && (
-                    <div style={{ textAlign: 'center', padding: '16px 0 0' }}>
+                <div className="history-sidebar-section">
+                    <h4>Filter by status</h4>
+                    {STATUS_FILTERS.map((s) => (
                         <button
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => loadHistory(true)}
-                            disabled={loadingMore}
+                            key={s.id}
+                            type="button"
+                            className={`history-filter${statusFilter.has(s.id) ? ' active' : ''}`}
+                            onClick={() => toggleStatus(s.id)}
                         >
-                            {loadingMore ? <span className="loading-spinner" /> : <Icon name="chevron-down" size={12} />}
-                            {loadingMore ? ' Loading…' : ` Load more (${executions.length} / ${totalCount})`}
+                            <span className={`status-dot status-dot--${s.token}`} />
+                            <span className="history-filter-label">{s.label}</span>
+                            <span className="history-filter-count">{stats[s.id] || 0}</span>
                         </button>
+                    ))}
+                </div>
+            </aside>
+
+            {/* Main panel */}
+            <div className="history-main">
+                {/* Hero band */}
+                <div className="wb-hero-band history-hero">
+                    <div className="history-hero-row">
+                        <div>
+                            <span className="eyebrow">
+                                {stats.total} EXECUTION{stats.total === 1 ? '' : 'S'}
+                                {successRate != null && <> · SUCCESS RATE {successRate}%</>}
+                            </span>
+                            <h2>The <em>diary</em> of every run.</h2>
+                        </div>
+                        <div className="history-hero-actions">
+                            <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => toast('Inline filters are in the left sidebar')}
+                                title="Filters live in the left sidebar"
+                            >
+                                <Icon name="filter" size={14} /> Filter
+                            </button>
+                            <button
+                                type="button"
+                                className={`btn btn-ghost btn-sm${showSearch ? ' active' : ''}`}
+                                onClick={() => setShowSearch((v) => !v)}
+                            >
+                                <Icon name="search" size={14} /> Search
+                            </button>
+                        </div>
                     </div>
-                )}
+                    {showSearch && (
+                        <div style={{ marginTop: 14 }}>
+                            <input
+                                className="input"
+                                placeholder="Search by job name, id, or error…"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                autoFocus
+                            />
+                        </div>
+                    )}
+                </div>
+
+                {/* Job rows */}
+                <div className="history-body">
+                    {executions.length === 0 ? (
+                        <div className="empty-state">
+                            <div className="empty-state-icon">
+                                <Icon name="folder-open" size={36} color="var(--ink)" />
+                            </div>
+                            <h3>No history yet.</h3>
+                            <p>Run a flow and the diary picks up automatically.</p>
+                        </div>
+                    ) : filteredExecutions.length === 0 ? (
+                        <div className="empty-state">
+                            <div className="empty-state-icon">
+                                <Icon name="search" size={32} color="var(--ink)" />
+                            </div>
+                            <h3>Nothing matches those filters.</h3>
+                            <p>Loosen the date range or status filters, or clear the search.</p>
+                        </div>
+                    ) : (
+                        <div className="wbh-list">
+                            {filteredExecutions.map((exec) => (
+                                <ExecRow
+                                    key={exec.id}
+                                    exec={exec}
+                                    expanded={expandedJob === exec.id}
+                                    loadingDetail={loadingDetail === exec.id}
+                                    expandedNode={expandedNode}
+                                    onToggleExpand={() => toggleExpand(exec.id)}
+                                    onToggleNode={(nodeKey) => setExpandedNode(expandedNode === nodeKey ? null : nodeKey)}
+                                    onStop={() => stopBatch(exec.batchId)}
+                                    onDownload={() => downloadJob(exec.batchId, exec.id)}
+                                    onRetry={() => toast('Retry not yet implemented — re-run the batch from Jobs tab')}
+                                    onDelete={() => setConfirmDelete(exec.id)}
+                                    onOpenGallery={(items, idx) => openGallery(items, idx)}
+                                />
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Load More */}
+                    {hasMore && (
+                        <div style={{ textAlign: 'center', padding: '16px 0 0' }}>
+                            <button
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => loadHistory(true)}
+                                disabled={loadingMore}
+                            >
+                                {loadingMore ? <span className="loading-spinner" /> : <Icon name="chevron-down" size={12} />}
+                                {loadingMore ? ' Loading…' : ` Load more (${executions.length} / ${totalCount})`}
+                            </button>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Gallery Lightbox */}

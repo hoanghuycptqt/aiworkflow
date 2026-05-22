@@ -58,6 +58,8 @@ function WorkflowBuilderInner() {
     const [activeTab, setActiveTab] = useState('canvas');
     const [jobCount, setJobCount] = useState(0);
     const [paletteSearch, setPaletteSearch] = useState('');
+    const [historyStats, setHistoryStats] = useState({ total: 0, running: 0, completed: 0, failed: 0, cancelled: 0 });
+    const [historyExportRequest, setHistoryExportRequest] = useState(0);
     const [historyKey, setHistoryKey] = useState(0); // bump to force refresh
     const [showMobilePalette, setShowMobilePalette] = useState(false);
 
@@ -322,7 +324,7 @@ function WorkflowBuilderInner() {
             <div className="builder-header">
                 <div className="builder-header-left">
                     <button className="builder-back-btn" onClick={() => navigate('/')} title="Back to workflows">
-                        <Icon name="chevron-left" size={16} />
+                        <Icon name="arrow-left" size={16} />
                     </button>
                     <div className="builder-title-block">
                         <input
@@ -332,13 +334,29 @@ function WorkflowBuilderInner() {
                             placeholder="Untitled flow"
                         />
                         <span className="builder-title-meta">
-                            {saving ? 'SAVING…' : <><span className="saved-dot" /> SAVED · v1</>}
-                            {executionStatus && (
+                            {activeTab === 'history' ? (
                                 <>
-                                    <span style={{ color: 'var(--ink-faint)' }}>·</span>
-                                    <span style={{ color: executionStatus === 'failed' ? 'var(--error)' : executionStatus === 'completed' ? 'var(--success)' : 'var(--warning)' }}>
-                                        {executionStatus.toUpperCase()}
-                                    </span>
+                                    {historyStats.total} EXECUTION{historyStats.total === 1 ? '' : 'S'}
+                                    {historyStats.running > 0 && (
+                                        <>
+                                            <span style={{ color: 'var(--ink-faint)' }}>·</span>
+                                            <span style={{ color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                                <span className="saved-dot" /> LIVE
+                                            </span>
+                                        </>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    {saving ? 'SAVING…' : <><span className="saved-dot" /> SAVED · v1</>}
+                                    {executionStatus && (
+                                        <>
+                                            <span style={{ color: 'var(--ink-faint)' }}>·</span>
+                                            <span style={{ color: executionStatus === 'failed' ? 'var(--error)' : executionStatus === 'completed' ? 'var(--success)' : 'var(--warning)' }}>
+                                                {executionStatus.toUpperCase()}
+                                            </span>
+                                        </>
+                                    )}
                                 </>
                             )}
                         </span>
@@ -371,12 +389,24 @@ function WorkflowBuilderInner() {
                             <Icon name={showResults ? 'chevron-down' : 'chevron-up'} size={14} /> Results
                         </button>
                     )}
-                    <button className="btn btn-ghost btn-sm" onClick={saveWorkflow} disabled={saving} title="Save">
-                        <Icon name="save" size={14} /> Save
-                    </button>
-                    <button className="btn btn-primary btn-sm" onClick={() => setShowRunModal(true)}>
-                        <Icon name="play" size={14} /> Run flow
-                    </button>
+                    {activeTab === 'history' ? (
+                        <button
+                            className="btn btn-sm"
+                            onClick={() => setHistoryExportRequest((n) => n + 1)}
+                            title="Export history as CSV"
+                        >
+                            <Icon name="download" size={14} /> Export
+                        </button>
+                    ) : (
+                        <>
+                            <button className="btn btn-ghost btn-sm" onClick={saveWorkflow} disabled={saving} title="Save">
+                                <Icon name="save" size={14} /> Save
+                            </button>
+                            <button className="btn btn-primary btn-sm" onClick={() => setShowRunModal(true)}>
+                                <Icon name="play" size={14} /> Run flow
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
 
@@ -544,6 +574,8 @@ function WorkflowBuilderInner() {
                     <JobMonitor
                         key={historyKey}
                         workflowId={id}
+                        onStatsChange={setHistoryStats}
+                        exportTrigger={historyExportRequest}
                     />
                 </div>
             )}
