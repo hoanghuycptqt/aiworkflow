@@ -4252,7 +4252,13 @@ body {
 
 .wbh-row {
   display: grid;
-  grid-template-columns: 76px 1.3fr 1fr 1.4fr 0.9fr 60px;
+  grid-template-columns:
+    76px
+    minmax(0, 1.3fr)
+    minmax(0, 1fr)
+    minmax(0, 1.4fr)
+    minmax(0, 0.9fr)
+    60px;
   gap: 16px;
   padding: 14px 24px;
   border-bottom: 1px solid var(--line-soft);
@@ -4260,6 +4266,10 @@ body {
   cursor: pointer;
   transition: background-color 150ms;
 }
+
+/* All grid cells must allow shrinking so the waterfall flex below
+   reflows to fit rather than blowing past the column. */
+.wbh-row > * { min-width: 0; }
 
 .wbh-row:last-child { border-bottom: none; }
 .wbh-row:hover { background: var(--cream-50); }
@@ -4446,11 +4456,17 @@ body {
   gap: 2px;
   align-items: center;
   flex-wrap: nowrap;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
 }
 
+/* Bars use `flex: <seconds> 1 28px` set inline — they grow proportionally
+   to per-node duration, can shrink, and never overflow the column.
+   Labels clip when there isn't room. */
 .wbh-waterfall-bar {
   height: 22px;
+  min-width: 0;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -4459,9 +4475,14 @@ body {
   font-size: 9px;
   color: var(--ink);
   overflow: hidden;
-  flex-shrink: 0;
   white-space: nowrap;
   padding: 0 4px;
+}
+
+.wbh-waterfall-bar-label {
+  overflow: hidden;
+  text-overflow: clip;
+  min-width: 0;
 }
 
 .wbh-status-block {

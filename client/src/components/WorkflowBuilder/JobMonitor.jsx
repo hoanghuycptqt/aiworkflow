@@ -736,12 +736,12 @@ function ExecRow({
                                         key={j}
                                         className="wbh-waterfall-bar"
                                         style={{
-                                            width: `${Math.max(b.seconds * 4, 24)}px`,
+                                            flex: `${Math.max(b.seconds, 0.1)} 1 28px`,
                                             background: b.color,
                                         }}
                                         title={`${b.label} · ${formatSeconds(b.seconds)}`}
                                     >
-                                        {b.seconds >= 6 ? b.label : ''}
+                                        <span className="wbh-waterfall-bar-label">{b.label}</span>
                                     </div>
                                 ))}
                             </div>
