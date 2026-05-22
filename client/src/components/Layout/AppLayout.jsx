@@ -3,6 +3,8 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import Icon from '../../services/icons.jsx';
 import Logo, { Wordmark } from '../../services/Logo.jsx';
 import CommandPalette from '../Shared/CommandPalette.jsx';
+import ShortcutsOverlay from '../Shared/ShortcutsOverlay.jsx';
+import { useKeyboardShortcut } from '../../hooks/useKeyboardShortcut.js';
 
 export default function AppLayout({ user, onLogout }) {
     const location = useLocation();
@@ -24,6 +26,9 @@ export default function AppLayout({ user, onLogout }) {
     useEffect(() => {
         setSidebarOpen(false);
     }, [location.pathname]);
+
+    // Global shortcuts that work on every authenticated page
+    useKeyboardShortcut('mod+\\', toggleTheme);
 
     return (
         <div className="app-layout">
@@ -102,6 +107,7 @@ export default function AppLayout({ user, onLogout }) {
             </main>
 
             <CommandPalette />
+            <ShortcutsOverlay />
         </div>
     );
 }

@@ -4,6 +4,7 @@ import { api } from '../../services/api.js';
 import Icon from '../../services/icons.jsx';
 import ConfirmModal from '../Shared/ConfirmModal.jsx';
 import { SkeletonCard } from '../Shared/SkeletonLoader.jsx';
+import { useKeyboardShortcut } from '../../hooks/useKeyboardShortcut.js';
 import toast from 'react-hot-toast';
 
 const FILTERS = ['All', 'Recent', 'Starred', 'Archived'];
@@ -47,6 +48,9 @@ export default function Dashboard() {
         window.addEventListener('vcw:create-workflow', onCreate);
         return () => window.removeEventListener('vcw:create-workflow', onCreate);
     }, []);
+
+    // Press N anywhere on the Dashboard to start a new flow
+    useKeyboardShortcut('n', () => setShowCreateModal(true));
 
     async function loadWorkflows() {
         try {

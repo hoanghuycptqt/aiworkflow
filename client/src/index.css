@@ -3639,6 +3639,130 @@ body {
 .status-pill--failed { background: var(--peach-soft); color: var(--error); }
 
 /* ================================ */
+/* Shortcuts overlay (Phase 2)      */
+/* ================================ */
+.ks-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 850;
+  background: rgba(42, 37, 32, 0.60);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: fadeIn 160ms ease;
+}
+
+.ks-wrap {
+  width: 100%;
+  max-width: 1000px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-lg);
+  padding: 36px 44px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  animation: slideUp 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ks-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 16px;
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ks-head h2 {
+  font-family: var(--font-serif);
+  font-size: 40px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0;
+}
+
+.ks-head h2 em,
+.ks-head h2 .serif-em {
+  font-style: italic;
+  color: var(--tomato);
+}
+
+.ks-head .sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  margin-top: 8px;
+  text-transform: uppercase;
+}
+
+.ks-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px 48px;
+}
+
+.ks-section h4 {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--line);
+  font-weight: 500;
+}
+
+.ks-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  font-size: 13.5px;
+  gap: 16px;
+}
+
+.ks-row .desc { color: var(--ink); }
+
+.ks-keys {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.ks-keys kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  background: var(--cream-50);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  min-width: 22px;
+  text-align: center;
+}
+
+.ks-keys .plus {
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .ks-grid { grid-template-columns: 1fr; }
+  .ks-wrap { padding: 28px 24px; }
+  .ks-head h2 { font-size: 32px; }
+}
+
+/* ================================ */
 /* Command palette (Phase 2)        */
 /* ================================ */
 .cp-overlay {

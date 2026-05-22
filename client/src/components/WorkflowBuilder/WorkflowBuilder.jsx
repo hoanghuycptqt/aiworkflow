@@ -14,6 +14,7 @@ import '@xyflow/react/dist/style.css';
 import { api } from '../../services/api.js';
 import { onExecutionUpdate } from '../../services/socket.js';
 import { NODE_TYPES, NODE_CATEGORIES, getNodeType } from '../../services/nodeTypes.js';
+import { useKeyboardShortcut } from '../../hooks/useKeyboardShortcut.js';
 import CustomNode from './CustomNode.jsx';
 import NodeConfigPanel from './NodeConfigPanel.jsx';
 import JobManager from './JobManager.jsx';
@@ -124,6 +125,11 @@ function WorkflowBuilderInner() {
         }
         setLoading(false);
     }
+
+    // Keyboard shortcuts — Cmd+S save · Cmd+Enter run · Cmd+J toggle results
+    useKeyboardShortcut('mod+s', () => { saveWorkflow(); });
+    useKeyboardShortcut('mod+enter', () => { setShowRunModal(true); });
+    useKeyboardShortcut('mod+j', () => { setShowResults((v) => !v); });
 
     async function saveWorkflow() {
         setSaving(true);
