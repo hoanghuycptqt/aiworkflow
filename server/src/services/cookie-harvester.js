@@ -28,12 +28,6 @@ import { getAccountInstanceId } from '../connectors/google-flow/connector.js';
 const REFRESH_DELAY_MS = 60 * 1000; // 1 min after expiry
 const USER_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max per user
 const FALLBACK_INTERVAL_MS = 18 * 60 * 60 * 1000; // 18h fallback if no expiry info
-// Minimum gap between consecutive refreshes for the same user. Defends against
-// the runaway loop seen 2026-05-22 03:41Z: NextAuth's `session.expires` field
-// is fixed at original-signin + maxAge (~30d), so refresh keeps writing the
-// SAME expired timestamp back. scheduleForUser then sees "expired" and reruns
-// every 10s. With this floor, the worst case is one wasted refresh per gap.
-const MIN_REFRESH_GAP_MS = 5 * 60 * 1000; // 5 min
 
 // Per-user timers: Map<userId, timerId>
 const userTimers = new Map();
@@ -152,29 +146,21 @@ async function refreshCookiesViaBroker(userId, sendTelegram = null) {
         return { success: false, needsRelogin: true, message: msg };
     }
 
-    // Detect "no-progress refresh": NextAuth's session.expires is a fixed
-    // signin-time + maxAge timestamp and does NOT roll forward on session
-    // endpoint calls for labs.google. If the API gives back the SAME expiry
-    // we already had AND that expiry is already past, the underlying session
-    // is genuinely dead — keep refreshing and we'd just spin. Escalate to
-    // re-login instead. (Root cause of the 2026-05-22 03:41Z runaway loop.)
-    const prevExpiresAt = meta.tokenExpiresAt;
-    const newExpiresAt = tokenData.expiresAt;
-    const expiryUnchanged = prevExpiresAt && newExpiresAt && prevExpiresAt === newExpiresAt;
-    const expiryInPast = newExpiresAt && new Date(newExpiresAt).getTime() <= Date.now();
-    if (expiryUnchanged && expiryInPast) {
-        const msg = `Session expired (NextAuth did not extend expiry beyond ${newExpiresAt}) — needs re-login`;
+    // Ground-truth liveness signal: if the session API does not return an
+    // `expires` field, the upstream NextAuth session is gone — refreshing
+    // cookies further can't recover it, escalate to full re-login. A healthy
+    // refresh typically returns expires ~20h in the future.
+    if (!tokenData.expiresAt) {
+        const msg = 'Session API returned no expires field — needs re-login';
         console.warn(`[CookieRefresh:broker] ${msg}`);
         return { success: false, needsRelogin: true, message: msg };
     }
 
     await saveCredentialsToDB(userId, res.cookies, tokenData);
 
-    const successMsg = `✅ Cookie refreshed via broker (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt || 'N/A'}`;
+    const successMsg = `✅ Cookie refreshed via broker (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
     console.log(`[CookieRefresh:broker] ${successMsg}`);
-    // Suppress Telegram message when expiry didn't actually move (would be spam
-    // even though we wrote new cookies — the user doesn't need a ping per attempt).
-    if (sendTelegram && !expiryUnchanged) await sendTelegram(successMsg);
+    if (sendTelegram) await sendTelegram(successMsg);
 
     return { success: true, needsRelogin: false, message: successMsg };
 }
@@ -311,21 +297,18 @@ export async function harvestForSpecificUser(userId) {
 }
 
 /**
- * Get tokenExpiresAt + lastRefreshed for a specific user in one read.
+ * Get tokenExpiresAt for a specific user.
  */
-async function getUserExpiryAndLastRefreshed(userId) {
+async function getUserExpiry(userId) {
     const cred = await prisma.credential.findFirst({
         where: { userId, provider: 'google-flow' },
         select: { metadata: true },
     });
-    if (!cred) return { expiry: null, lastRefreshed: null };
+    if (!cred) return null;
     try {
         const meta = JSON.parse(cred.metadata || '{}');
-        return {
-            expiry: meta.tokenExpiresAt ? new Date(meta.tokenExpiresAt) : null,
-            lastRefreshed: meta.lastRefreshed ? new Date(meta.lastRefreshed) : null,
-        };
-    } catch { return { expiry: null, lastRefreshed: null }; }
+        return meta.tokenExpiresAt ? new Date(meta.tokenExpiresAt) : null;
+    } catch { return null; }
 }
 
 /**
@@ -340,7 +323,7 @@ async function scheduleForUser(userId, googleAccountCredentialId) {
         userTimers.delete(userId);
     }
 
-    const { expiry, lastRefreshed } = await getUserExpiryAndLastRefreshed(userId);
+    const expiry = await getUserExpiry(userId);
     const now = Date.now();
 
     let delayMs;
@@ -350,20 +333,9 @@ async function scheduleForUser(userId, googleAccountCredentialId) {
         delayMs = FALLBACK_INTERVAL_MS;
         reason = `no expiry info → fallback ${FALLBACK_INTERVAL_MS / 3600000}h`;
     } else if (expiry.getTime() <= now) {
-        // Defense against the runaway loop: if we already refreshed within the
-        // last MIN_REFRESH_GAP_MS but expiry is still in the past, the session
-        // is genuinely dead (NextAuth keeps returning the same fixed expires).
-        // Back off to fallback interval — refreshCookiesViaBroker will surface
-        // a needsRelogin on its next run.
-        const sinceLast = lastRefreshed ? now - lastRefreshed.getTime() : Infinity;
-        if (sinceLast < MIN_REFRESH_GAP_MS) {
-            delayMs = FALLBACK_INTERVAL_MS;
-            reason = `expired but just refreshed ${Math.round(sinceLast / 1000)}s ago — likely dead session, retry in ${FALLBACK_INTERVAL_MS / 3600000}h`;
-        } else {
-            delayMs = 10 * 1000; // 10s for startup stabilization
-            const agoMin = Math.round((now - expiry.getTime()) / 60000);
-            reason = `expired ${agoMin}m ago → refreshing soon`;
-        }
+        delayMs = 10 * 1000; // 10s for startup stabilization
+        const agoMin = Math.round((now - expiry.getTime()) / 60000);
+        reason = `expired ${agoMin}m ago → refreshing soon`;
     } else {
         delayMs = expiry.getTime() - now + REFRESH_DELAY_MS;
         const inMin = Math.round(delayMs / 60000);
