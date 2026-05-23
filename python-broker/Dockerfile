@@ -29,10 +29,24 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir fastapi 'uvicorn[standard]' pydantic
 
-# Fetch invisible_playwright Firefox binary at build time (~100MB).
-# Cached at /root/.cache/invisible-playwright/firefox-4/ in the image layer.
-# Layer rebuilt only when requirements.txt or pyproject.toml changes.
-RUN python -m invisible_playwright fetch
+# invisible_playwright Firefox patched binary (~113MB) — pre-downloaded on host
+# to bypass slow `invisible_playwright fetch` CLI under Rosetta 2 emulation
+# (observed 16+ min hang during initial container build 2026-05-23).
+#
+# Tarball contents extract to /root/.cache/invisible-playwright/firefox-7/ which
+# matches what `invisible_playwright.download.cache_dir_for_version("firefox-7")`
+# expects — `ensure_binary()` finds the binary, skips re-download.
+#
+# Acquired from upstream:
+#   curl -L -o firefox-stealth-linux-x86_64.tar.gz \
+#     https://github.com/feder-cr/invisible_playwright/releases/download/firefox-7/firefox-150.0.1-stealth-linux-x86_64.tar.gz
+# Place in build context (this dir). Excluded from git (.gitignore).
+COPY firefox-stealth-linux-x86_64.tar.gz /tmp/firefox.tar.gz
+RUN mkdir -p /root/.cache/invisible-playwright/firefox-7 && \
+    tar -xzf /tmp/firefox.tar.gz -C /root/.cache/invisible-playwright/firefox-7 && \
+    rm /tmp/firefox.tar.gz && \
+    test -x /root/.cache/invisible-playwright/firefox-7/firefox || \
+        (echo "ERROR: firefox binary not found after extraction" && ls -la /root/.cache/invisible-playwright/firefox-7/ && exit 1)
 
 # Copy broker code last (changes most frequently → small invalidation surface).
 COPY broker ./broker

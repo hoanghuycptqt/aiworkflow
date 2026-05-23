@@ -50,3 +50,4 @@ cert/
 # Diagnostic scripts (one-off investigation, not part of build)
 mcp-server/diagnose-*.mjs
 mcp-server/diagnose-screenshots/
+python-broker/firefox-stealth-*.tar.gz
