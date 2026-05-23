@@ -4,6 +4,9 @@ FROM --platform=linux/amd64 python:3.11-slim-bookworm
 
 # Firefox runtime deps + Xvfb (headful display) + git (invisible_playwright via git+...)
 # + curl (for healthcheck) + ca-certificates (TLS).
+# Plan v5.0 additions: fluxbox (lightweight WM), x11vnc + novnc + websockify
+# (web-based VNC access to Firefox UI for manual login flow), procps + psmisc
+# (process management used by entrypoint script).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         xvfb \
         git \
@@ -16,6 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpci3 \
         ca-certificates \
         curl \
+        fluxbox \
+        x11vnc \
+        novnc \
+        websockify \
+        procps \
+        psmisc \
+        dbus-x11 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -61,7 +71,7 @@ ENV BROKER_HOST=0.0.0.0 \
     BROKER_PORT=8002 \
     DISPLAY=:99
 
-EXPOSE 8002
+EXPOSE 8002 6080
 
 # /healthz is NOT auth-protected (broker/app.py:66-68) → no token needed in curl.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

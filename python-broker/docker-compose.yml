@@ -19,7 +19,7 @@ services:
       dockerfile: Dockerfile
       platforms:
         - linux/amd64
-    image: vcw-broker-mac:latest
+    image: vcw-broker-mac:patched
     container_name: vcw-broker-mac
     # Explicit platform tag — Docker Desktop's Rosetta 2 emulates this on Apple Silicon.
     platform: linux/amd64
@@ -27,7 +27,8 @@ services:
     # Bind to host loopback only — broker is on the same Mac as the MCP server.
     # Never expose 0.0.0.0 on a Mac without auth tightening + firewall rules.
     ports:
-      - "127.0.0.1:8002:8002"
+      - "127.0.0.1:8002:8002"   # broker FastAPI
+      - "127.0.0.1:6080:6080"   # noVNC web UI (Plan v5.0 — open http://localhost:6080/vnc.html to see Firefox)
 
     environment:
       # Shared secret between MCP server (Node) and broker (Python).
@@ -56,7 +57,33 @@ services:
       # Set to 0 to disable (counter-based @ 15 only). VPS systemd doesn't set this.
       BROKER_SMART_ROTATION_LATENCY_S: "5"
 
+      # Plan v5.0: persistent Firefox profile (user logs in manually first time
+      # via noVNC, profile persists in volume across container restarts). When
+      # this env is set, broker uses `launch_persistent_context(user_data_dir)`
+      # instead of ephemeral `new_context()` + cookie injection. VPS systemd
+      # doesn't set this → preserves existing cookie-inject behavior on VPS.
+      # Persistent mode disabled — launch_persistent_context fails in Docker (181s timeout
+       # before Firefox handshakes back). Pivot to ephemeral + .env cookie inject. Explicitly
+       # empty string overrides image-baked ENV from docker-commit of earlier container.
+      BROKER_PROFILE_DIR: ""
+
     restart: unless-stopped
+
+    # Firefox content-process sandbox requires CLONE_NEWUSER syscall, which
+    # Docker's default seccomp profile blocks → "CanCreateUserNamespace clone()
+    # failure: EPERM" → launch_persistent_context times out at 180s.
+    # Disable seccomp to let Firefox run its full sandbox stack inside container.
+    # Trade-off: container can use more syscalls (still capped by user/capabilities).
+    # Acceptable for single-user Mac dev tool; tighten via custom seccomp profile
+    # later if needed. VPS systemd doesn't have this issue (runs as non-root user
+    # with native user-namespace support).
+    security_opt:
+      - seccomp:unconfined
+
+    # Firefox uses /dev/shm extensively for shared-memory IPC between content
+    # processes. Docker's default 64MB is too small → Firefox hangs/crashes
+    # during init. 2GB matches typical Firefox desktop install footprint.
+    shm_size: 2gb
 
     # Hard memory limits (mirror VPS systemd MemoryHigh=1.5G, MemoryMax=2G).
     # Mac has 32GB RAM, dư sức cho ceiling này.
@@ -71,11 +98,23 @@ services:
     # for each ephemeral BrowserContext. tmpfs is RAM-backed: auto-clears on container
     # restart, preventing the dir accumulation observed on VPS Phase 0. 1GB enough for
     # ~20 concurrent profile dirs (each ~50MB).
+    # Note (v5.0): when using persistent BROKER_PROFILE_DIR, the firefox-profile/
+    # volume is the primary state; /tmp may still see playwright temp dirs.
     tmpfs:
       - /tmp:size=1G,mode=1777
 
-    # Persist broker logs across restarts (uvicorn stdout/stderr captured here if
-    # `LOG_FILE` env points to /app/logs). Optional — `docker compose logs broker`
-    # also works without volume mount.
     volumes:
+      # Persist broker logs across restarts (uvicorn stdout/stderr).
       - ./logs:/app/logs
+
+      # Plan v5.0: persistent Firefox profile. User logs in once via noVNC,
+      # cookies/extensions/cache persist here across container restarts. Profile
+      # dir created on host if absent. Backup-friendly (rsync this dir to a safe
+      # place to preserve login state).
+      - ./firefox-profile:/app/firefox-profile
+
+      # Plan v5.0: writable mount of mcp-server/.env so broker can update
+      # GOOGLE_FLOW_SESSION_COOKIES after auto-refresh on 401. MCP server reads
+      # this same file at startup. Note: relative path resolved from compose file
+      # location (python-broker/) → ../mcp-server/.env on host.
+      - ../mcp-server/.env:/app/mcp-env:rw

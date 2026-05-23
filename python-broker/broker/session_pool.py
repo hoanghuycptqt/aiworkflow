@@ -10,6 +10,7 @@ Architectural invariants (from Phase 0 + memory recaptcha-incident-history):
 
 import asyncio
 import logging
+import os
 import time
 from enum import Enum
 from typing import Any, Optional
@@ -25,6 +26,12 @@ from broker.flow import (
 )
 
 logger = logging.getLogger("broker.session")
+
+# Plan v5.0: when BROKER_PROFILE_DIR is set, broker uses persistent Firefox
+# profile (cookies/extensions/cache persist across restarts in a Docker volume).
+# Default empty → existing ephemeral context + cookie injection (VPS preserves).
+PROFILE_DIR = os.environ.get("BROKER_PROFILE_DIR", "")
+USE_PERSISTENT_PROFILE = bool(PROFILE_DIR)
 
 
 class SigninRedirectError(RuntimeError):
@@ -79,21 +86,63 @@ class Session:
         # Drop any orphan from a previous failed attempt before starting fresh.
         await self._teardown_invisible(reason="pre-launch cleanup")
 
-        logger.info(f"[{self.account_id}] launching invisible_playwright Firefox")
+        mode = "persistent" if USE_PERSISTENT_PROFILE else "ephemeral"
+        logger.info(f"[{self.account_id}] launching invisible_playwright Firefox ({mode} mode)")
         # Import inside method so module loads even before invisible_playwright is installed.
         from invisible_playwright.async_api import InvisiblePlaywright
 
-        cm = InvisiblePlaywright()
+        # Plan v5.0: persistent mode passes profile_dir → wrapper returns BrowserContext
+        # directly (no separate Browser handle). Ephemeral mode (no kwarg) returns
+        # Browser; we create ephemeral context manually in _open_context.
+        cm = InvisiblePlaywright(profile_dir=PROFILE_DIR) if USE_PERSISTENT_PROFILE else InvisiblePlaywright()
         self._invisible_cm = cm
         try:
-            self.browser = await cm.__aenter__()
-            await self._open_context()
+            result = await cm.__aenter__()
+            if USE_PERSISTENT_PROFILE:
+                # result is BrowserContext (persistent — cookies in profile dir).
+                # No separate Browser handle in this mode.
+                self.context = result
+                self.browser = None
+                # Reuse existing page if wrapper opened one, else create new.
+                self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+                await self._navigate_and_check_signin()
+            else:
+                # Ephemeral mode (existing flow). result is Browser.
+                self.browser = result
+                await self._open_context()
             self.ready = True
         except Exception:
             # _open_context (or __aenter__) raised. Tear down before bubbling
             # so the next retry starts from a clean slate.
             await self._teardown_invisible(reason="ensure_ready failure")
             raise
+
+    async def _navigate_and_check_signin(self) -> None:
+        """Goto FLOW_URL, raise SigninRedirectError if signin needed, wait grecaptcha.
+
+        Shared between persistent + ephemeral _open_context. The signin redirect
+        message differs by mode: in persistent mode, instruct user to login via
+        noVNC; in ephemeral mode, refer to CookieHarvester (VPS workflow).
+        """
+        logger.info(f"[{self.account_id}] goto {FLOW_URL}")
+        await self.page.goto(FLOW_URL, wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
+        if await is_signin_redirect(self.page):
+            url = self.page.url
+            if USE_PERSISTENT_PROFILE:
+                raise SigninRedirectError(
+                    f"[{self.account_id}] signin redirect at {url} — open "
+                    "http://localhost:6080/vnc.html in browser and complete Google login "
+                    "manually via Firefox UI. Profile persists after login (1-time setup, "
+                    "~60 days until next manual login)."
+                )
+            raise SigninRedirectError(
+                f"[{self.account_id}] signin redirect at {url} — DB cookies stale, "
+                "refresh via CookieHarvester"
+            )
+        await wait_for_grecaptcha(self.page)
+        self.request_count = 0
+        self._context_opened_at = time.monotonic()
+        logger.info(f"[{self.account_id}] context ready, counter reset")
 
     async def _teardown_invisible(self, reason: str = "") -> None:
         """Best-effort cleanup of browser + InvisiblePlaywright wrapper. Idempotent.
@@ -164,7 +213,16 @@ class Session:
         logger.info(f"[{self.account_id}] force-killed orphan browser processes")
 
     async def _open_context(self) -> None:
-        """(Re)open BrowserContext, inject cookies, navigate, wait for grecaptcha SDK."""
+        """(Re)open BrowserContext, inject cookies, navigate, wait for grecaptcha SDK.
+
+        Ephemeral mode only. Persistent mode (BROKER_PROFILE_DIR set) uses
+        a different rotation strategy — see `_rotate_persistent`.
+        """
+        if USE_PERSISTENT_PROFILE:
+            raise RuntimeError(
+                "_open_context called in persistent mode — use _rotate_persistent instead. "
+                "This is a code path bug; please report."
+            )
         if self.context is not None:
             try:
                 await self.context.close()
@@ -180,25 +238,26 @@ class Session:
             logger.info(f"[{self.account_id}] injected {len(self.cookies)} cookies")
 
         self.page = await self.context.new_page()
-        logger.info(f"[{self.account_id}] goto {FLOW_URL}")
-        # wait_until="load" — `networkidle` never fires on Google domains because
-        # analytics/telemetry keeps chatting, so it always hits the 60s timeout
-        # (observed 2026-05-21 17:46+17:49 production: Page.reload networkidle
-        # 60s timeouts). `load` waits for subresources but not background XHRs;
-        # wait_for_grecaptcha below polls for the SDK we actually need.
-        await self.page.goto(FLOW_URL, wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS)
+        await self._navigate_and_check_signin()
 
-        if await is_signin_redirect(self.page):
-            url = self.page.url
-            raise SigninRedirectError(
-                f"[{self.account_id}] signin redirect at {url} — DB cookies stale, "
-                "refresh via CookieHarvester"
-            )
+    async def _rotate_persistent(self) -> None:
+        """Persistent-mode rotation: full re-launch of InvisiblePlaywright wrapper.
 
-        await wait_for_grecaptcha(self.page)
-        self.request_count = 0
-        self._context_opened_at = time.monotonic()
-        logger.info(f"[{self.account_id}] context ready, counter reset")
+        Cannot do `browser.new_context()` because persistent mode has no separate
+        Browser handle — the wrapper returns BrowserContext directly. To rotate,
+        we teardown + re-enter the wrapper, which reads the same profile dir from
+        disk. Cookies persist on disk (in user_data_dir), only in-memory context
+        state is fresh.
+
+        Cost: ~12-15s (vs ~2s ephemeral rotation) since Firefox process restarts.
+        Mitigated by user preference `BROKER_IDLE_TIMEOUT_S=86400` — rotation
+        only happens at quota cliff, not at idle.
+        """
+        logger.info(f"[{self.account_id}] persistent rotation: tearing down + relaunching")
+        await self._teardown_invisible(reason="persistent rotation")
+        # ready=False so ensure_ready re-enters the full launch sequence.
+        self.ready = False
+        await self.ensure_ready()
 
     async def _rotate_if_needed(self) -> None:
         """Pre-emptively rotate context to stay below the ~20-25 stochastic cliff."""
@@ -207,7 +266,10 @@ class Session:
                 f"[{self.account_id}] rotation threshold hit "
                 f"({self.request_count}/{ROTATION_THRESHOLD}); rotating context"
             )
-            await self._open_context()
+            if USE_PERSISTENT_PROFILE:
+                await self._rotate_persistent()
+            else:
+                await self._open_context()
 
     async def mint_token(self, action: str) -> tuple[str, int]:
         """Mint reCAPTCHA token. Returns (token, post_increment_request_count).
@@ -263,9 +325,15 @@ class Session:
         async with self.lock:
             # Quick check before touching the browser: if the seeded cookies
             # have no session-token, we already know we'll need to re-login.
-            seeded_has_session = any(
-                c.get("name") == "__Secure-next-auth.session-token" for c in self.cookies
-            )
+            # Persistent mode: `self.cookies` is always empty (cookies in profile),
+            # so skip this check — go straight to ensure_ready, profile state will
+            # surface signin redirect if cookies expired.
+            if USE_PERSISTENT_PROFILE:
+                seeded_has_session = True
+            else:
+                seeded_has_session = any(
+                    c.get("name") == "__Secure-next-auth.session-token" for c in self.cookies
+                )
             if not seeded_has_session:
                 raise SigninRedirectError(
                     f"[{self.account_id}] DB cookies have no NextAuth session-token — auth required"

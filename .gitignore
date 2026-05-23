@@ -51,3 +51,5 @@ cert/
 mcp-server/diagnose-*.mjs
 mcp-server/diagnose-screenshots/
 python-broker/firefox-stealth-*.tar.gz
+python-broker/firefox-profile/
+python-broker/logs/
