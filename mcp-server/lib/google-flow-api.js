@@ -45,42 +45,146 @@ export const ASPECT_RATIO_MAP = {
     '3:4': 'IMAGE_ASPECT_RATIO_PORTRAIT_3_4',
 };
 
-// Video model keys: depend on generation MODE and (for quality) aspect ratio.
-// For lite_low: same model key works for all aspect ratios.
-// For quality: image modes (i2v, i2v_se) need '_portrait' suffix for portrait output.
+// Video model keys: keyed by [model][mode][duration]. Default duration is 8s.
+// All entries below were verified by network capture from labs.google/fx/tools/flow
+// (Flow UI) on 2026-05-19.
+// Quality at 9:16 (portrait): 8s splits into landscape/portrait keys; 4s/6s share a unified key.
+// r2v silently downgrades for 4s/6s — only 8s supported.
 export const VIDEO_MODELS = {
     'veo3_lite_low': {
-        t2v: 'veo_3_1_t2v_lite_low_priority',                   // text-to-video
-        i2v: 'veo_3_1_i2v_lite_low_priority',                   // start frame
-        i2v_se: 'veo_3_1_interpolation_lite_low_priority',       // start+end frame
-        r2v: 'veo_3_1_r2v_lite_low_priority',                   // reference images
+        t2v: {
+            8: 'veo_3_1_t2v_lite_low_priority',
+            6: 'veo_3_1_t2v_lite_6s_low_priority',
+            4: 'veo_3_1_t2v_lite_4s_low_priority',
+        },
+        i2v: {
+            8: 'veo_3_1_i2v_lite_low_priority',
+            6: 'veo_3_1_i2v_s_lite_6s_low_priority',
+            4: 'veo_3_1_i2v_s_lite_4s_low_priority',
+        },
+        i2v_se: {
+            8: 'veo_3_1_interpolation_lite_low_priority',
+            6: 'veo_3_1_i2v_s_lite_6s_fl_low_priority',
+            4: 'veo_3_1_i2v_s_lite_4s_fl_low_priority',
+        },
+        r2v: { 8: 'veo_3_1_r2v_lite_low_priority' },
     },
     'veo3_quality': {
-        t2v: 'veo_3_1_t2v',                                      // text-to-video (works for all ratios)
-        i2v: 'veo_3_1_i2v_s',                                    // start frame (landscape)
-        i2v_portrait: 'veo_3_1_i2v_s_portrait',                  // start frame (portrait)
-        i2v_se: 'veo_3_1_i2v_s_fl',                              // start+end frame (landscape)
-        i2v_se_portrait: 'veo_3_1_i2v_s_portrait_fl',            // start+end frame (portrait)
+        t2v: {
+            8: 'veo_3_1_t2v',
+            6: 'veo_3_1_t2v_quality_6s',
+            4: 'veo_3_1_t2v_quality_4s',
+        },
+        i2v: {
+            8: 'veo_3_1_i2v_s',
+            6: 'veo_3_1_i2v_s_quality_6s',
+            4: 'veo_3_1_i2v_s_quality_4s',
+        },
+        i2v_portrait: { 8: 'veo_3_1_i2v_s_portrait' },
+        i2v_se: {
+            8: 'veo_3_1_i2v_s_fl',
+            6: 'veo_3_1_i2v_s_quality_6s_fl',
+            4: 'veo_3_1_i2v_s_quality_4s_fl',
+        },
+        i2v_se_portrait: { 8: 'veo_3_1_i2v_s_portrait_fl' },
         // r2v: NOT SUPPORTED for quality model
+    },
+    // Omni Flash: a separate model family using 'abra_' prefix. Supports t2v and r2v.
+    // i2v / i2v_se are silently downgraded to t2v by Veo even if start/end frame
+    // images are attached in the UI — so we refuse those combinations upfront.
+    'omni_flash': {
+        t2v: {
+            10: 'abra_t2v_10s',
+            8:  'abra_t2v_8s',
+            6:  'abra_t2v_6s',
+            4:  'abra_t2v_4s',
+        },
+        r2v: {
+            10: 'abra_r2v_10s',
+            8:  'abra_r2v_8s',
+            6:  'abra_r2v_6s',
+            4:  'abra_r2v_4s',
+        },
+        // i2v / i2v_se: NOT SUPPORTED
     },
 };
 
 /**
- * Get the correct video model key for a given model name, generation mode, and aspect ratio.
+ * Get the correct video model key for a given model name, generation mode, aspect ratio, and duration.
+ * Quality 4s/6s for image modes use unified keys (no portrait variant) — only 8s
+ * has portrait-specific keys.
  * @param {string} model - User-facing model name (e.g. 'veo3_lite_low', 'veo3_quality')
  * @param {'t2v'|'i2v'|'i2v_se'|'r2v'} mode - Generation mode
  * @param {string} [aspectRatio] - Target aspect ratio (e.g. '9:16', '16:9')
- * @returns {string|null} Model key, or null if mode not supported for this model
+ * @param {number} [duration=8] - Video length in seconds (4, 6, or 8)
+ * @returns {string|null} Model key, or null if mode not supported for this (model, duration)
  */
-export function getVideoModelKey(model, mode, aspectRatio) {
+export function getVideoModelKey(model, mode, aspectRatio, duration = 8) {
     const tier = VIDEO_MODELS[model] || VIDEO_MODELS['veo3_lite_low'];
+    const dur = Number(duration) || 8;
 
-    // For quality model image modes, use portrait-specific key when target is 9:16
-    if (model === 'veo3_quality' && aspectRatio === '9:16' && (mode === 'i2v' || mode === 'i2v_se')) {
-        return tier[`${mode}_portrait`] || null;
+    // Quality 8s portrait split: only at 8s does i2v / i2v_se have separate portrait keys.
+    // 4s/6s use the unified i2v / i2v_se key for both aspect ratios.
+    const isPortraitImageMode = model === 'veo3_quality' && aspectRatio === '9:16' && dur === 8 && (mode === 'i2v' || mode === 'i2v_se');
+    const modeKey = isPortraitImageMode ? `${mode}_portrait` : mode;
+    const modeMap = tier[modeKey];
+    if (!modeMap) return null;
+
+    return modeMap[dur] || null;
+}
+
+/**
+ * Build structuredPrompt parts for inline @-references. Mirrors what Google Flow's UI sends
+ * when the user types `@` and picks a media item. Each @LABEL in the prompt is replaced with
+ * a reference part `{ reference: { media: { handle, mediaId } } }`. The surrounding text
+ * becomes regular `{ text: '...' }` parts.
+ *
+ * Labels are matched literally with a leading `@`; matching is greedy on the label string,
+ * so longer labels take precedence over shorter prefixes.
+ *
+ * @param {string} prompt - User prompt that may contain `@LABEL` markers.
+ * @param {Array<{mediaId: string, label: string}>} inlineRefs - Resolved references.
+ * @returns {Array<object>} structuredPrompt.parts array.
+ */
+export function buildInlineReferenceParts(prompt, inlineRefs) {
+    if (!inlineRefs?.length) return [{ text: prompt }];
+
+    // Match longest labels first to avoid prefix collisions.
+    const sortedRefs = [...inlineRefs].sort((a, b) => b.label.length - a.label.length);
+    const parts = [];
+    let cursor = 0;
+
+    while (cursor < prompt.length) {
+        let matched = null;
+        if (prompt[cursor] === '@') {
+            for (const ref of sortedRefs) {
+                if (prompt.startsWith('@' + ref.label, cursor)) {
+                    matched = ref;
+                    break;
+                }
+            }
+        }
+        if (matched) {
+            parts.push({
+                reference: { media: { handle: matched.label, mediaId: matched.mediaId } },
+            });
+            cursor += 1 + matched.label.length;
+        } else {
+            // Accumulate text until the next @LABEL or end of string.
+            let nextAt = prompt.indexOf('@', cursor + 1);
+            if (nextAt < 0) nextAt = prompt.length;
+            const chunk = prompt.slice(cursor, nextAt);
+            const last = parts[parts.length - 1];
+            if (last && last.text !== undefined) {
+                last.text += chunk;
+            } else {
+                parts.push({ text: chunk });
+            }
+            cursor = nextAt;
+        }
     }
 
-    return tier[mode] || null;
+    return parts.length ? parts : [{ text: prompt }];
 }
 
 export const VIDEO_ASPECT_RATIO_MAP = {
@@ -508,7 +612,7 @@ export async function submitVideoGenerationStartEnd(token, projectId, opts) {
  * Submit video generation with reference images. The video is inspired by the reference images.
  */
 export async function submitVideoGenerationReference(token, projectId, opts) {
-    const { prompt, videoModelKey, aspectRatio, referenceMediaIds, recaptchaToken, instanceId, sessionCookies } = opts;
+    const { prompt, videoModelKey, aspectRatio, referenceMediaIds, inlineRefs, recaptchaToken, instanceId, sessionCookies } = opts;
     const batchId = uuidv4();
     const sessionId = `;${Date.now()}`;
 
@@ -517,10 +621,19 @@ export async function submitVideoGenerationReference(token, projectId, opts) {
         imageUsageType: 'IMAGE_USAGE_TYPE_ASSET',
     }));
 
+    // Build structuredPrompt parts. If inlineRefs provided (Flow's @-mention feature),
+    // split the prompt on @label markers and interleave reference parts with text parts.
+    let parts;
+    if (inlineRefs && inlineRefs.length > 0) {
+        parts = buildInlineReferenceParts(prompt, inlineRefs);
+    } else {
+        parts = [{ text: prompt }];
+    }
+
     const request = {
         aspectRatio,
         seed: Math.floor(Math.random() * 100000),
-        textInput: { structuredPrompt: { parts: [{ text: prompt }] } },
+        textInput: { structuredPrompt: { parts } },
         videoModelKey,
         metadata: {},
         referenceImages,
