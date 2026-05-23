@@ -1,37 +1,36 @@
 /**
- * reCAPTCHA Token Manager — Extracted from Google Flow connector
+ * reCAPTCHA Token Manager — Broker-backed (Plan v4.3 / v5.0).
  *
- * Manages persistent Chrome instances per Google account to fetch
- * fresh reCAPTCHA Enterprise tokens required by all Google Flow APIs.
+ * Public API preserved from the legacy Chrome-based implementation so callers
+ * in `tools/*.js` and `lib/google-flow-api.js` don't need to change. Internals
+ * now delegate to `lib/broker-client.js` which talks to the Python broker
+ * (Docker Desktop container running invisible_playwright Firefox patched).
  *
- * Key design:
- *  - 1 Chrome profile per Google account (keyed by email)
- *  - Profile directories persist on disk for trust score improvement
- *  - Idle timeout auto-closes Chrome after 10 minutes of inactivity
+ * Pure-Node helpers that don't need a browser are kept as-is here:
+ *   - getAccountInstanceId(credentials) — derive accountId from email
+ *   - buildHeaders(token) — standard auth headers
+ *   - clearRecaptchaToken(usedToken) — Node fetch to recaptcha CLR endpoint
+ *
+ * Chrome-dependent functions become broker shims:
+ *   - fetchRecaptchaToken → broker.ensureSession + recaptchaToken
+ *   - browserFetch → broker.flowFetch
+ *   - reloadRecaptchaPage → broker.reload
+ *   - closeRecaptchaBrowser → broker.close
+ *   - getChromePoolInstance / deleteChromePoolEntry → no-op stubs (return null)
+ *
+ * See MIGRATION-MAC-MCP.md for migration details. The old Chrome implementation
+ * has been removed; if you need to revert, `git restore lib/recaptcha.js` at
+ * commit before this change.
  */
 
-import puppeteer from 'puppeteer-core';
-import { mkdir } from 'fs/promises';
-import { join } from 'path';
 import fetch from 'node-fetch';
+import { broker, BrokerError } from './broker-client.js';
 
-const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
-// On macOS: no idle timeout (Chrome stays open for better reCAPTCHA trust + token refresh)
-// On Linux/server: 10 min idle → close browser to save RAM
-const RECAPTCHA_PAGE_IDLE_TIMEOUT = process.platform === 'darwin' ? 0 : 10 * 60 * 1000;
-const RECAPTCHA_BASE_PORT = 9439;  // Different base port from main server (9339)
-
-// Chrome instance pool — 1 persistent profile per Google account (keyed by email)
-const _chromePool = new Map();
-let _nextPortOffset = 0;
+// ─── Pure helpers (unchanged from legacy) ────────────────────────────────
 
 /**
- * Default Chrome path for macOS.
- */
-const DEFAULT_CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-
-/**
- * Derive a stable Chrome instance ID from Google account email.
+ * Derive a stable instance ID from Google account email. Used as the broker
+ * session key (the broker pools one Firefox session per accountId).
  */
 export function getAccountInstanceId(credentials) {
     let meta = credentials?.metadata;
@@ -47,390 +46,22 @@ export function getAccountInstanceId(credentials) {
 }
 
 /**
- * Get or create a Chrome instance entry in the pool.
+ * Standard auth headers for Google Flow API requests. Used both browser-side
+ * (via broker.flowFetch) and Node-side (e.g. for /api/auth/session in token-refresh).
  */
-function _getOrCreateInstance(instanceId = 'default') {
-    if (!_chromePool.has(instanceId)) {
-        const uploadDir = process.env.UPLOAD_DIR || './uploads';
-        const profileDir = join(uploadDir, `.recaptcha-profile-${instanceId}`);
-        console.error(`[reCAPTCHA] 📁 Creating pool entry: account=${instanceId}, profileDir=${profileDir}`);
-        _chromePool.set(instanceId, {
-            page: null,
-            browser: null,
-            chromeProcess: null,
-            ready: false,
-            idleTimer: null,
-            initPromise: null,
-            port: RECAPTCHA_BASE_PORT + (_nextPortOffset++),
-            profileDir,
-        });
-    } else {
-        console.error(`[reCAPTCHA] ♻️ Reusing existing pool entry: account=${instanceId}`);
-    }
-    return _chromePool.get(instanceId);
+export function buildHeaders(token) {
+    return {
+        'Content-Type': 'text/plain;charset=UTF-8',
+        'Authorization': `Bearer ${token}`,
+        'Origin': 'https://labs.google',
+        'Referer': 'https://labs.google/',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+    };
 }
 
 /**
- * Initialize (or reuse) the reCAPTCHA browser page for a specific instance.
- */
-async function _ensureRecaptchaPage(sessionCookies, instanceId = 'default') {
-    const inst = _getOrCreateInstance(instanceId);
-
-    // Already initialized and alive
-    if (inst.page && inst.browser?.isConnected() && inst.ready) {
-        return inst.page;
-    }
-
-    // Prevent concurrent initializations for the same instance
-    if (inst.initPromise) {
-        await inst.initPromise;
-        if (inst.page && inst.browser?.isConnected() && inst.ready) {
-            return inst.page;
-        }
-    }
-
-    inst.initPromise = (async () => {
-        // Clean up any stale browser connection (but Chrome process may stay alive)
-        await closeRecaptchaBrowser(instanceId);
-
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Launching Chrome (port: ${inst.port})...`);
-
-        const chromePath = process.env.CHROME_PATH || DEFAULT_CHROME_PATH;
-        await mkdir(inst.profileDir, { recursive: true });
-
-        // Launch Chrome natively — NO automation flags
-        const args = [
-            `--user-data-dir=${inst.profileDir}`,
-            `--remote-debugging-port=${inst.port}`,
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--window-size=1280,900',
-            '--disable-blink-features=AutomationControlled',
-        ];
-
-        if (process.platform === 'linux') {
-            args.push(
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-software-rasterizer',
-                '--lang=en-US,en',
-                '--start-maximized',
-            );
-            if (!process.env.DISPLAY) {
-                process.env.DISPLAY = ':99';
-            }
-        }
-
-        // Check if Chrome is already running on this port
-        let browser = null;
-        try {
-            const res = await fetch(`http://127.0.0.1:${inst.port}/json/version`);
-            if (res.ok) {
-                const data = await res.json();
-                browser = await puppeteer.connect({
-                    browserWSEndpoint: data.webSocketDebuggerUrl,
-                    defaultViewport: null,
-                });
-                console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Reusing existing Chrome`);
-
-                // Close all existing pages (stale tabs from previous session)
-                const existingPages = await browser.pages();
-                console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Closing ${existingPages.length} stale page(s)`);
-                for (const p of existingPages) {
-                    try { await p.close(); } catch { /* ok */ }
-                }
-            }
-        } catch { /* not running, will launch */ }
-
-        if (!browser) {
-            const { spawn } = await import('child_process');
-            inst.chromeProcess = spawn(chromePath, args, {
-                stdio: 'ignore',
-                detached: true,
-                env: { ...process.env },
-            });
-            inst.chromeProcess.unref();
-
-            // Wait for Chrome to be ready
-            for (let attempt = 0; attempt < 30; attempt++) {
-                await new Promise(r => setTimeout(r, 500));
-                try {
-                    const res = await fetch(`http://127.0.0.1:${inst.port}/json/version`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        browser = await puppeteer.connect({
-                            browserWSEndpoint: data.webSocketDebuggerUrl,
-                            defaultViewport: null,
-                        });
-                        break;
-                    }
-                } catch { /* not ready yet */ }
-            }
-
-            if (!browser) {
-                if (inst.chromeProcess) inst.chromeProcess.kill();
-                throw new Error('Chrome failed to start for reCAPTCHA');
-            }
-
-            console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Chrome launched (port: ${inst.port})`);
-        }
-
-        inst.browser = browser;
-
-        // Auto-cleanup on unexpected disconnect
-        inst.browser.on('disconnected', () => {
-            console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Browser disconnected`);
-            inst.page = null;
-            inst.browser = null;
-            inst.ready = false;
-        });
-
-        const page = await inst.browser.newPage();
-
-        // Parse and set session cookies (optional — profile may already be logged in)
-        const cookieParts = sessionCookies ? sessionCookies.split(';').map(c => c.trim()).filter(Boolean) : [];
-        const validCookies = [];
-        for (const part of cookieParts) {
-            const eqIdx = part.indexOf('=');
-            if (eqIdx <= 0) continue;
-            const name = part.substring(0, eqIdx).trim();
-            const value = part.substring(eqIdx + 1).trim();
-            if (!name) continue;
-            validCookies.push({ name, value });
-        }
-
-        if (validCookies.length > 0) {
-            const cookiesForPuppeteer = validCookies.flatMap(c => [
-                { name: c.name, value: c.value, url: 'https://labs.google' },
-                { name: c.name, value: c.value, url: 'https://www.google.com' },
-            ]);
-            await page.setCookie(...cookiesForPuppeteer);
-            console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Set ${validCookies.length} cookies`);
-        } else {
-            console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] No cookies provided — relying on Chrome profile`);
-        }
-
-        // Navigate to Flow page (loads reCAPTCHA Enterprise SDK)
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Navigating to Google Flow...`);
-        await page.goto('https://labs.google/fx/tools/flow/', {
-            waitUntil: 'networkidle2',
-            timeout: 30000,
-        });
-
-        // Check if redirected to login page (session expired)
-        const currentUrl = page.url();
-        if (currentUrl.includes('accounts.google.com') || currentUrl.includes('/signin')) {
-            inst.page = page;
-            inst.ready = false;
-            console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] ⚠️ Google login required — session expired`);
-            throw new Error(
-                '🔐 Google session expired — Chrome profile needs re-login.\n' +
-                'Run: node test-token-refresh.js\n' +
-                'Then login in the Chrome window that opens.'
-            );
-        }
-
-        // Wait for grecaptcha.enterprise to be available
-        await page.waitForFunction(
-            () => typeof grecaptcha !== 'undefined' && typeof grecaptcha.enterprise !== 'undefined' && typeof grecaptcha.enterprise.execute === 'function',
-            { timeout: 15000 }
-        );
-
-        inst.page = page;
-        inst.ready = true;
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Page ready (SDK loaded)`);
-    })();
-
-    try {
-        await inst.initPromise;
-    } finally {
-        inst.initPromise = null;
-    }
-
-    return inst.page;
-}
-
-/**
- * Reload the Flow page to reset reCAPTCHA Enterprise SDK state.
- *
- * Why: after a few failed upscale attempts, the SDK on a single page lifetime
- * gets stuck on a low trust score — even fresh `grecaptcha.enterprise.execute`
- * calls return tokens Google then rejects, and the official UI on the same
- * page also fails. A hard reload reinitializes the SDK and recovers the
- * session without losing cookies/login.
- */
-export async function reloadRecaptchaPage(instanceId = 'default') {
-    const inst = _chromePool.get(instanceId);
-    if (!inst?.page || !inst?.browser?.isConnected()) {
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] No active page to reload`);
-        return false;
-    }
-    try {
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] 🔄 Reloading page to reset reCAPTCHA SDK state...`);
-        inst.ready = false;
-        await inst.page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
-        await inst.page.waitForFunction(
-            () => typeof grecaptcha !== 'undefined' && typeof grecaptcha.enterprise !== 'undefined' && typeof grecaptcha.enterprise.execute === 'function',
-            { timeout: 15000 }
-        );
-        inst.ready = true;
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Page reloaded — SDK re-initialized`);
-        return true;
-    } catch (e) {
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Reload failed: ${e.message}`);
-        inst.ready = false;
-        return false;
-    }
-}
-
-/**
- * Close a specific reCAPTCHA browser instance.
- */
-export async function closeRecaptchaBrowser(instanceId = 'default') {
-    const inst = _chromePool.get(instanceId);
-    if (!inst) return;
-
-    if (inst.idleTimer) {
-        clearTimeout(inst.idleTimer);
-        inst.idleTimer = null;
-    }
-    if (inst.browser) {
-        try {
-            if (inst.chromeProcess) {
-                // We own this Chrome process — close everything
-                await inst.browser.close();
-            } else {
-                // We connected to existing Chrome — just disconnect, don't kill it
-                inst.browser.disconnect();
-            }
-        } catch { /* ok */ }
-    }
-    if (inst.chromeProcess) {
-        try { inst.chromeProcess.kill(); } catch { /* ok */ }
-        inst.chromeProcess = null;
-    }
-    inst.page = null;
-    inst.browser = null;
-    inst.ready = false;
-}
-
-/**
- * Reset the idle timer for a specific instance.
- */
-function _resetRecaptchaIdleTimer(instanceId = 'default') {
-    const inst = _chromePool.get(instanceId);
-    if (!inst) return;
-    if (inst.idleTimer) clearTimeout(inst.idleTimer);
-    if (!RECAPTCHA_PAGE_IDLE_TIMEOUT) return; // 0 = no idle timeout (macOS)
-    inst.idleTimer = setTimeout(async () => {
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Idle timeout — closing browser`);
-        await closeRecaptchaBrowser(instanceId);
-        _chromePool.delete(instanceId);
-    }, RECAPTCHA_PAGE_IDLE_TIMEOUT);
-}
-
-/**
- * Simulate brief user activity (mouse moves + scroll) on the reCAPTCHA page.
- * reCAPTCHA Enterprise scores based on user gestures; an idle headless page
- * yields a low score → PUBLIC_ERROR_UNUSUAL_ACTIVITY. Gestures push it up.
- */
-async function _simulateUserGesture(page) {
-    try {
-        const viewport = page.viewport() || { width: 1280, height: 900 };
-        // 2 mouse moves is enough to register interaction signal without much latency
-        for (let i = 0; i < 2; i++) {
-            const x = 50 + Math.floor(Math.random() * (viewport.width - 100));
-            const y = 50 + Math.floor(Math.random() * (viewport.height - 100));
-            await page.mouse.move(x, y, { steps: 4 + Math.floor(Math.random() * 4) });
-            await new Promise(r => setTimeout(r, 50 + Math.random() * 80));
-        }
-        await page.evaluate(() => {
-            window.scrollBy(0, Math.floor(Math.random() * 200) - 100);
-        });
-        await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
-    } catch { /* gestures are best-effort */ }
-}
-
-/**
- * Fetch a FRESH reCAPTCHA Enterprise token using a specific Chrome instance.
- */
-export async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
-    if (!sessionCookies) {
-        console.error('[reCAPTCHA] No session cookies — will rely on Chrome profile');
-    }
-
-    try {
-        const page = await _ensureRecaptchaPage(sessionCookies, instanceId);
-
-        // Boost trust score with brief gesture simulation before evaluating token
-        await _simulateUserGesture(page);
-
-        const token = await page.evaluate(async (siteKey, act) => {
-            return await grecaptcha.enterprise.execute(siteKey, { action: act });
-        }, RECAPTCHA_SITE_KEY, action);
-
-        _resetRecaptchaIdleTimer(instanceId);
-
-        if (token && token.length > 50) {
-            console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] ✅ Fresh token (${token.length} chars)`);
-            return token;
-        }
-
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Token too short or empty:`, token?.substring(0, 50));
-        return '';
-
-    } catch (e) {
-        console.error(`[reCAPTCHA:${instanceId.substring(0, 8)}] Failed to fetch token:`, e.message);
-        await closeRecaptchaBrowser(instanceId);
-        return '';
-    }
-}
-
-/**
- * Execute a fetch request INSIDE a specific Puppeteer Chrome page.
- * Falls back to Node.js fetch if browser is not available.
- */
-export async function browserFetch(url, token, body, instanceId = 'default') {
-    const inst = _chromePool.get(instanceId);
-    if (inst?.page && inst?.browser?.isConnected() && inst?.ready) {
-        try {
-            const result = await inst.page.evaluate(async (fetchUrl, bearerToken, fetchBody) => {
-                const res = await fetch(fetchUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'text/plain;charset=UTF-8',
-                        'Authorization': `Bearer ${bearerToken}`,
-                    },
-                    body: fetchBody,
-                    credentials: 'include',
-                });
-                const text = await res.text();
-                return { status: res.status, ok: res.ok, body: text };
-            }, url, token, JSON.stringify(body));
-
-            console.error(`[BrowserFetch:${instanceId.substring(0, 8)}] Response status: ${result.status}`);
-            // Only return browser result if successful — cookies can cause 403 reCAPTCHA
-            // failures even with a valid token, so fall through to Node.js on any error.
-            if (result.ok) return result;
-            console.error(`[BrowserFetch:${instanceId.substring(0, 8)}] Browser returned ${result.status} — falling back to Node.js fetch`);
-        } catch (e) {
-            console.error(`[BrowserFetch:${instanceId.substring(0, 8)}] Chrome fetch failed: ${e.message}, falling back`);
-        }
-    }
-
-    // Fallback to Node.js fetch (no cookies — Bearer token alone is sufficient)
-    const res = await fetch(url, {
-        method: 'POST',
-        headers: buildHeaders(token),
-        body: JSON.stringify(body),
-    });
-    const text = await res.text();
-    return { status: res.status, ok: res.ok, body: text };
-}
-
-/**
- * Clear a used reCAPTCHA token via Google's CLR endpoint.
+ * Tell Google's reCAPTCHA Enterprise to clear a used token. Pure Node fetch,
+ * no browser involved. Best-effort — failures are logged but don't throw.
  */
 export async function clearRecaptchaToken(usedToken) {
     if (!usedToken) return;
@@ -450,29 +81,64 @@ export async function clearRecaptchaToken(usedToken) {
     }
 }
 
+// ─── Broker-backed shims (same signatures, new implementation) ────────────
+
 /**
- * Build common auth headers (also used by Node.js fetch fallback).
+ * Mint a fresh reCAPTCHA Enterprise token for the given account. The broker
+ * ensures a Firefox session with the provided cookies is initialized, then
+ * runs grecaptcha.enterprise.execute() in-browser.
  */
-export function buildHeaders(token) {
-    return {
-        'Content-Type': 'text/plain;charset=UTF-8',
-        'Authorization': `Bearer ${token}`,
-        'Origin': 'https://labs.google',
-        'Referer': 'https://labs.google/',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-    };
+export async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
+    await broker.ensureSession(instanceId, sessionCookies);
+    const res = await broker.recaptchaToken(instanceId, action);
+    return res.token;
 }
 
 /**
- * Get the Chrome pool instance for a given instanceId (used by video download).
+ * Browser-side fetch — Google Flow APIs only accept calls originating from a
+ * page session with valid cookies + recent reCAPTCHA. Broker runs the fetch
+ * inside its Firefox page context.
  */
-export function getChromePoolInstance(instanceId) {
-    return _chromePool.get(instanceId);
+export async function browserFetch(url, token, body, instanceId = 'default') {
+    return broker.flowFetch(instanceId, url, token, body);
 }
 
 /**
- * Delete a Chrome pool entry (after cleanup).
+ * Reload the Flow page to recover from sticky SDK failures (e.g. transient
+ * grecaptcha errors). Doesn't rotate context — for full rotation, the broker
+ * does that internally @ 15 requests.
  */
-export function deleteChromePoolEntry(instanceId) {
-    _chromePool.delete(instanceId);
+export async function reloadRecaptchaPage(instanceId = 'default') {
+    return broker.reload(instanceId);
+}
+
+/**
+ * Close the broker session for this account (DELETE /sessions/{id}). Broker
+ * tears down Firefox and removes the session from the pool. Idempotent.
+ */
+export async function closeRecaptchaBrowser(instanceId = 'default') {
+    try {
+        await broker.close(instanceId);
+    } catch (e) {
+        if (e instanceof BrokerError && e.status === 404) return; // already gone
+        console.error(`[reCAPTCHA] close failed for ${instanceId}:`, e.message);
+    }
+}
+
+/**
+ * Legacy callers (token-refresh.js before refactor) used this to access the
+ * Chrome pool entry directly. After migration, broker manages all browser
+ * state — no in-process pool exists. Return null so callers can detect and
+ * fall back to broker API.
+ */
+export function getChromePoolInstance(_instanceId) {
+    return null;
+}
+
+/**
+ * No-op — broker manages its own pool lifecycle via close(). Kept for API
+ * compatibility with legacy callers.
+ */
+export function deleteChromePoolEntry(_instanceId) {
+    // intentionally empty
 }

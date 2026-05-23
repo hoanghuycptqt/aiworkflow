@@ -193,10 +193,11 @@ export const VIDEO_ASPECT_RATIO_MAP = {
     '1:1': 'VIDEO_ASPECT_RATIO_SQUARE',
 };
 
-/**
- * Auto-refresh token if expired or near expiry.
- */
-export async function ensureFreshToken(credentials, prisma) {
+// ensureFreshToken() was DEAD CODE — never called by any tool. Removed during
+// Phase B2 migration. Token refresh now flows through `handleTokenRefresh()`
+// → `refreshToken()` (in token-refresh.js, broker-backed) only on 401.
+/* eslint-disable no-unused-vars */
+async function _removed_ensureFreshToken(credentials, prisma) {
     if (!credentials?.token || !credentials?.metadata?.sessionCookies) {
         return credentials;
     }
