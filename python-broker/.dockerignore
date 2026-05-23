@@ -1,0 +1,24 @@
+# Build cache + dev artifacts — exclude from Docker build context.
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# VPS-only setup script (Docker uses Dockerfile + entrypoint instead).
+scripts/setup_vps.sh
+
+# Systemd unit for VPS deployment, not used by container.
+deploy/
+
+# Local secrets — must NOT bake into image. Use docker-compose env_file or shell env instead.
+.env
+.env.local
+
+# Local test artifacts.
+profile-smoke/
+
+# Docs.
+README.md

@@ -1,0 +1,81 @@
+# Mac MCP Server broker — Docker Desktop on Apple Silicon (Rosetta 2 emulation).
+# Plan v4.3 — see MIGRATION-MAC-MCP.md.
+#
+# Setup:
+#   1. Install Docker Desktop + Rosetta 2 (see plan pre-implementation checklist).
+#   2. Generate auth token:  echo "BROKER_AUTH_TOKEN=$(openssl rand -hex 32)" > .env
+#   3. Build + run:          docker compose up -d --build
+#   4. Verify healthy:       curl -fs http://127.0.0.1:8002/healthz
+#                            (Should return {"ok":true,"sessions":[]} — no auth needed for healthz)
+#
+# Stop:
+#   docker compose down               # keep image + volume (fast restart next time)
+#   docker compose down -v --rmi all  # nuke everything (free ~1.5GB disk)
+
+services:
+  broker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+    image: vcw-broker-mac:latest
+    container_name: vcw-broker-mac
+    # Explicit platform tag — Docker Desktop's Rosetta 2 emulates this on Apple Silicon.
+    platform: linux/amd64
+
+    # Bind to host loopback only — broker is on the same Mac as the MCP server.
+    # Never expose 0.0.0.0 on a Mac without auth tightening + firewall rules.
+    ports:
+      - "127.0.0.1:8002:8002"
+
+    environment:
+      # Shared secret between MCP server (Node) and broker (Python).
+      # Reads from `python-broker/.env` in the same dir as this compose file.
+      # Must match MCP_BROKER_TOKEN in mcp-server/.env. The `:?` fails fast at
+      # `docker compose up` if .env is missing — better than starting with empty auth.
+      BROKER_AUTH_TOKEN: "${BROKER_AUTH_TOKEN:?must set BROKER_AUTH_TOKEN in python-broker/.env}"
+
+      # Phase 0 finding: stochastic 20-25 req/context cliff. 15 is the safe margin.
+      BROKER_ROTATION_THRESHOLD: "15"
+
+      # User preference (plan v4.3): Mac giữ Firefox forever, match `recaptcha.js:21`
+      # behavior (`RECAPTCHA_PAGE_IDLE_TIMEOUT = 0` on darwin). VPS uses 600 (10 min).
+      # 86400 = 24h ≈ "never" in a single Mac session. Trust score still protected by
+      # rotation @ 15 (context rotates, browser process stays alive).
+      BROKER_IDLE_TIMEOUT_S: "86400"
+
+      # Rosetta 2 emulation: Firefox cold-launch ~10-15s (vs ~5s native on VPS).
+      # 90s gives comfortable headroom for page nav + grecaptcha SDK load.
+      BROKER_PAGE_NAV_TIMEOUT_MS: "90000"
+
+      # Plan v4.3 Layer B: latency-based proactive rotation.
+      # If 3 consecutive reCAPTCHA mints all exceed 5s, rotate context early
+      # (catch soft cliff before hard cliff). First 3 mints after context-open
+      # are skipped from tracking (cold-launch warmup phase, latency unreliable).
+      # Set to 0 to disable (counter-based @ 15 only). VPS systemd doesn't set this.
+      BROKER_SMART_ROTATION_LATENCY_S: "5"
+
+    restart: unless-stopped
+
+    # Hard memory limits (mirror VPS systemd MemoryHigh=1.5G, MemoryMax=2G).
+    # Mac has 32GB RAM, dư sức cho ceiling này.
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+    # tmpfs for /tmp — invisible_playwright creates `/tmp/playwright_firefoxdev_profile-*`
+    # for each ephemeral BrowserContext. tmpfs is RAM-backed: auto-clears on container
+    # restart, preventing the dir accumulation observed on VPS Phase 0. 1GB enough for
+    # ~20 concurrent profile dirs (each ~50MB).
+    tmpfs:
+      - /tmp:size=1G,mode=1777
+
+    # Persist broker logs across restarts (uvicorn stdout/stderr captured here if
+    # `LOG_FILE` env points to /app/logs). Optional — `docker compose logs broker`
+    # also works without volume mount.
+    volumes:
+      - ./logs:/app/logs
