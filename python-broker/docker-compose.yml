@@ -37,8 +37,12 @@ services:
       # `docker compose up` if .env is missing — better than starting with empty auth.
       BROKER_AUTH_TOKEN: "${BROKER_AUTH_TOKEN:?must set BROKER_AUTH_TOKEN in python-broker/.env}"
 
-      # Phase 0 finding: stochastic 20-25 req/context cliff. 15 is the safe margin.
-      BROKER_ROTATION_THRESHOLD: "15"
+      # Phase 0 finding: stochastic 20-25 req/context cliff. 15 was VPS-tested
+      # safe margin. Bumped to 12 on Mac 2026-05-23 after observing 2 x
+      # PUBLIC_ERROR_UNUSUAL_ACTIVITY (403) right after fresh noVNC login —
+      # trust score still warming up, tighter rotation reduces cliff exposure.
+      # Can revert to 15 once daily usage stabilizes trust score.
+      BROKER_ROTATION_THRESHOLD: "12"
 
       # User preference (plan v4.3): Mac giữ Firefox forever, match `recaptcha.js:21`
       # behavior (`RECAPTCHA_PAGE_IDLE_TIMEOUT = 0` on darwin). VPS uses 600 (10 min).
