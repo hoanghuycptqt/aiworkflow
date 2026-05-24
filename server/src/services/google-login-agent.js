@@ -706,6 +706,17 @@ export async function getAccessToken(cookieString) {
     }
 
     const data = await res.json();
+    // Ground-truth dead-session signal: NextAuth returns this on every
+    // /api/auth/session call once the upstream Google OAuth refresh token
+    // is revoked/expired (account suspended, password change, security
+    // event, refresh-token expiry). The `access_token` field is still
+    // present alongside this error but the token itself is dead, and
+    // `expires` freezes at the last valid timestamp — refreshing forever
+    // can't recover. Caller must escalate to a fresh OAuth signin.
+    // Observed 2026-05-24 02:00Z, account minababy17012004@gmail.com.
+    if (data.error === 'ACCESS_TOKEN_REFRESH_NEEDED') {
+        throw new Error('ACCESS_TOKEN_REFRESH_NEEDED — Google OAuth refresh token revoked, needs re-login');
+    }
     if (!data.access_token) {
         throw new Error('No access_token in session response');
     }
