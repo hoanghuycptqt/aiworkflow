@@ -102,13 +102,22 @@ async def save_cookies_to_profile(account_id: str, cookies_str: str) -> dict:
         return {"status": "error", "message": f"persistent launch: {e}"}
 
     try:
-        # Reuse page if Firefox opened one; else make a fresh one.
-        page = context.pages[0] if context.pages else await context.new_page()
         await context.add_cookies(cookies)
-        # about:blank navigation is enough to make Firefox flush its
-        # cookie store to sqlite — no need to hit labs.google here (we
-        # don't want to trigger any NextAuth rotation in the snapshot).
-        await page.goto("about:blank")
+        # Spawn a FRESH page (never reuse context.pages[0]). On Linux Xvfb
+        # the default page that launch_persistent_context creates has no
+        # browsing context yet — page.goto fails with "browsingContext is
+        # undefined". A freshly opened page is wired up properly. The goto
+        # is best-effort: its real job is forcing Firefox to flush the
+        # in-memory cookie store to sqlite; context close (via __aexit__)
+        # does the same, so a goto failure is non-fatal here.
+        try:
+            page = await context.new_page()
+            await page.goto("about:blank")
+            await page.close()
+        except Exception as e:
+            logger.warning(
+                f"[{account_id}] flush goto failed (cookies still flushed on close): {e}"
+            )
         logger.info(
             f"[{account_id}] snapshot wrote {len(cookies)} cookie entries "
             f"to {profile_dir}"
@@ -116,7 +125,7 @@ async def save_cookies_to_profile(account_id: str, cookies_str: str) -> dict:
     except Exception as e:
         logger.exception(f"snapshot write failed for {account_id}")
         await _safe_aexit(cm, account_id)
-        return {"status": "error", "message": f"add_cookies/goto: {e}"}
+        return {"status": "error", "message": f"add_cookies: {e}"}
 
     await _safe_aexit(cm, account_id)
     return {
