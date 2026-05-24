@@ -158,6 +158,20 @@ async function refreshCookiesViaBroker(userId, sendTelegram = null) {
 
     await saveCredentialsToDB(userId, res.cookies, tokenData);
 
+    // Roll the persistent profile forward with each validated-alive refresh.
+    // Static login-time snapshots die after NextAuth session.maxAge (~20h
+    // observed on labs.google) — without this, the profile is only useful
+    // for recoveries that happen within the first 20h after login, which
+    // defeats the point of having a long-lived recovery source. Because
+    // getAccessToken above already threw on ACCESS_TOKEN_REFRESH_NEEDED,
+    // the cookies we're snapshotting are guaranteed alive at this moment.
+    try {
+        await flowBroker.saveCookiesToProfile(accountId, res.cookies);
+    } catch (e) {
+        const m = e instanceof BrokerError ? `${e.status || ''}: ${e.message}` : e.message;
+        console.warn(`[CookieRefresh:broker] profile snapshot non-fatal: ${m}`);
+    }
+
     const successMsg = `✅ Cookie refreshed via broker (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
     console.log(`[CookieRefresh:broker] ${successMsg}`);
     if (sendTelegram) await sendTelegram(successMsg);
@@ -227,6 +241,19 @@ async function tryProfileRecovery(userId, sendTelegram) {
 
     // 4. Commit fresh cookies + token to DB. Sibling sync happens in caller.
     await saveCredentialsToDB(userId, res.cookies, tokenData);
+
+    // Roll the profile forward to the post-validation cookies. The cookies
+    // we just promoted to DB may have been rotated by the /session call
+    // above (NextAuth refreshes access_token + rotates session-token JWT),
+    // so writing them back to profile keeps the snapshot current for the
+    // NEXT recovery, instead of leaving stale pre-recovery cookies on disk.
+    try {
+        await flowBroker.saveCookiesToProfile(accountId, res.cookies);
+    } catch (e) {
+        const m = e instanceof BrokerError ? `${e.status || ''}: ${e.message}` : e.message;
+        console.warn(`[CookieRefresh:profile-recovery] re-snapshot non-fatal: ${m}`);
+    }
+
     const msg = `✅ Cookie recovered from broker persistent profile (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
     console.log(`[CookieRefresh:profile-recovery] ${msg}`);
     if (sendTelegram) await sendTelegram(msg);
