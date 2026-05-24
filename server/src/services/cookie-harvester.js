@@ -88,6 +88,67 @@ async function isCookieExpired(userId) {
 }
 
 /**
+ * Fast token refresh — pure Node `/fx/api/auth/session` call with current DB
+ * cookies. Covers the normal ~1h access_token expiry without touching the
+ * broker (no Firefox launch, no /session rotation risk). Saves only the
+ * fresh `access_token` + `tokenExpiresAt`; cookies in DB stay unchanged.
+ *
+ * Falls back to the slower broker path (refreshCookiesViaBroker) when:
+ *   - DB has no cookies (fresh user, first-time setup)
+ *   - getAccessToken throws ACCESS_TOKEN_REFRESH_NEEDED (session past
+ *     NextAuth maxAge ≈ 20h, NextAuth refusing to refresh further)
+ *   - any other /session failure (HTTP error, network blip, ...)
+ *
+ * Mirrors the Mac MCP two-tier strategy in mcp-server/lib/token-refresh.js
+ * (commit f4b7560) — cheap /session for the hourly case, expensive broker
+ * Firefox refresh only at the maxAge boundary.
+ *
+ * Returns { success: bool, reason: string }.
+ */
+async function tryFastRefresh(userId) {
+    const cred = await prisma.credential.findFirst({
+        where: { userId, provider: 'google-flow' },
+    });
+    if (!cred) return { success: false, reason: 'no google-flow credential' };
+
+    let meta = {};
+    try { meta = JSON.parse(cred.metadata || '{}'); } catch { /* ok */ }
+    const oldCookies = meta.sessionCookies;
+    if (!oldCookies) return { success: false, reason: 'no sessionCookies in metadata' };
+
+    let tokenData;
+    try {
+        tokenData = await getAccessToken(oldCookies);
+    } catch (e) {
+        // ACCESS_TOKEN_REFRESH_NEEDED is the explicit "go to slow path" signal —
+        // see google-login-agent.getAccessToken which throws on this. Any other
+        // error is a transient /session failure; in both cases we fall through
+        // to the broker path which can re-navigate Flow and rotate the JWT.
+        return { success: false, reason: e.message };
+    }
+    if (!tokenData.expiresAt) {
+        return { success: false, reason: '/session returned no expiresAt' };
+    }
+    if (meta.userEmail && tokenData.userEmail && tokenData.userEmail.toLowerCase() !== meta.userEmail.toLowerCase()) {
+        // Defensive: shouldn't happen on a fast refresh (cookies in DB are
+        // already pinned to this user) but if it does, escalate so the
+        // slow path's account-match logic can re-verify.
+        return {
+            success: false,
+            reason: `account mismatch: got ${tokenData.userEmail}, expected ${meta.userEmail}`,
+        };
+    }
+
+    // Save just the fresh token + expiresAt. saveCredentialsToDB writes both
+    // cookies and token in the same row, but since we pass the EXISTING
+    // cookies the sessionCookies field stays unchanged byte-for-byte.
+    await saveCredentialsToDB(userId, oldCookies, tokenData);
+    const successMsg = `✅ Fast token refresh (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
+    console.log(`[CookieRefresh:fast] ${successMsg}`);
+    return { success: true, reason: successMsg };
+}
+
+/**
  * Refresh cookies for a user via the Python broker (invisible_playwright Firefox).
  * Replaces the legacy Chrome-based refreshCookies() in google-login-agent.js.
  *
@@ -268,6 +329,19 @@ async function harvestForUser(userId, googleAccountCredentialId) {
     const sendTelegram = createSendFn(userId);
 
     console.log(`[CookieHarvester] Processing user: ${userId.substring(0, 8)}`);
+
+    // Step 0: Fast token refresh — pure /session call, no broker. Covers the
+    // common ~1h access_token expiry (~95% of refreshes). Cookies in DB stay
+    // unchanged; only the bearer token + tokenExpiresAt are updated. Slow
+    // broker path runs only when fast fails (session past NextAuth maxAge or
+    // any other /session failure).
+    const fastResult = await tryFastRefresh(userId);
+    if (fastResult.success) {
+        console.log(`[CookieHarvester] ✅ User ${userId.substring(0, 8)}: fast token refresh (no broker)`);
+        await _syncAfterHarvest(userId);
+        return { userId, success: true, action: 'fast_refresh' };
+    }
+    console.log(`[CookieHarvester] Fast path skipped (${fastResult.reason}) — falling through to broker refresh`);
 
     // Step 1: Try simple refresh via broker (Firefox). Legacy Chrome refreshCookies
     // is kept in google-login-agent.js as a fallback until Phase 3 is fully verified.
