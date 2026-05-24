@@ -87,9 +87,19 @@ export async function clearRecaptchaToken(usedToken) {
  * Mint a fresh reCAPTCHA Enterprise token for the given account. The broker
  * ensures a Firefox session with the provided cookies is initialized, then
  * runs grecaptcha.enterprise.execute() in-browser.
+ *
+ * Why prefer process.env over the `sessionCookies` arg: callers
+ * (generate-image.js, batchGenerateImages 403-retry path) read cookies into
+ * a local snapshot at handler start and pass them down. If token-refresh's
+ * profile-recovery path runs mid-call, it updates process.env with fresh
+ * cookies but the caller's local snapshot is now stale. Reading process.env
+ * here lets the recovery propagate without each caller re-deriving its
+ * snapshot. Falls back to the arg if process.env hasn't been seeded (e.g.
+ * fresh MCP startup before db.js ran).
  */
 export async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
-    await broker.ensureSession(instanceId, sessionCookies);
+    const cookies = process.env.GOOGLE_FLOW_SESSION_COOKIES || sessionCookies;
+    await broker.ensureSession(instanceId, cookies);
     const res = await broker.recaptchaToken(instanceId, action);
     return res.token;
 }

@@ -902,6 +902,22 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
                     throw new Error(`Wrong account: ${tokenData.userEmail} (expected ${email})`);
                 }
                 await saveCredentialsToDB(userId, status.cookies, tokenData);
+                // Snapshot the fresh cookies to broker's per-account persistent profile
+                // dir (BROKER_PROFILE_BASE/<accountId>). cookie-harvester reads from
+                // there on dead-JWT recovery — see python-broker/broker/profile_snapshot.py.
+                // Best-effort: broker returns no_profile_base on Mac (env unset), and any
+                // Playwright/IO error here must not fail an otherwise-good login.
+                try {
+                    const snapRes = await flowBroker.saveCookiesToProfile(accountId, status.cookies);
+                    if (snapRes?.status === 'ok') {
+                        console.log(`[GoogleLogin] Profile snapshot saved: ${snapRes.profile_dir} (${snapRes.cookies_count} cookies)`);
+                    } else if (snapRes?.status && snapRes.status !== 'no_profile_base') {
+                        console.warn(`[GoogleLogin] Profile snapshot non-ok: ${JSON.stringify(snapRes).substring(0, 200)}`);
+                    }
+                } catch (e) {
+                    const m = e instanceof BrokerError ? `${e.status || ''}: ${e.message}` : e.message;
+                    console.warn(`[GoogleLogin] Profile snapshot error (non-fatal): ${m}`);
+                }
                 const msg = `✅ Login Google Flow thành công (${tokenData.userEmail})! Token expires: ${tokenData.expiresAt || 'N/A'}`;
                 await sendTelegram(msg);
                 return { success: true, message: msg };

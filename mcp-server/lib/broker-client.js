@@ -121,6 +121,20 @@ export class FlowBroker {
             { cookies });
     }
 
+    /**
+     * Read cookies directly from the broker's Firefox profile (the dir
+     * populated by scripts/manual-login.sh). Recovery path for dead-session
+     * detection in token-refresh.js — the profile is untouched by broker's
+     * ephemeral mode so its JWT stays alive across rotation incidents.
+     *
+     * Returns { status: 'ok', cookies } or
+     * { status: 'no_profile' | 'no_session_token' }.
+     */
+    async cookiesFromProfile(accountId) {
+        return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/cookies-from-profile`,
+            undefined);
+    }
+
     async close(accountId) {
         return this._call('DELETE', `/sessions/${encodeURIComponent(accountId)}`, undefined);
     }

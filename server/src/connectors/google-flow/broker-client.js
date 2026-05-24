@@ -121,6 +121,35 @@ export class FlowBroker {
     }
 
     /**
+     * Read cookies straight from the broker's per-account persistent profile
+     * dir (populated by save-cookies-to-profile at last successful login).
+     * Recovery path for cookie-harvester when broker's refresh-cookies
+     * produced a dead session (NextAuth rotated to an unrefreshable JWT).
+     *
+     * Returns { status: 'ok', cookies } |
+     *         { status: 'no_profile' | 'no_session_token' }.
+     */
+    async cookiesFromProfile(accountId) {
+        return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/cookies-from-profile`,
+            undefined);
+    }
+
+    /**
+     * Snapshot a freshly-issued cookieString into the per-account persistent
+     * profile dir. Caller is google-login-agent.loginGoogleFlow, right after a
+     * successful broker login. The dir then sits untouched by the broker's
+     * ephemeral ops pool, so cookies-from-profile can read its alive JWT later
+     * when DB cookies get rotated to death.
+     *
+     * No-op on the broker side when BROKER_PROFILE_BASE env var is unset
+     * (returns { status: 'no_profile_base' }) — that's the Mac docker default.
+     */
+    async saveCookiesToProfile(accountId, cookies) {
+        return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/save-cookies-to-profile`,
+            { cookies });
+    }
+
+    /**
      * Start a background login flow on the broker. Returns immediately.
      * Poll loginStatus(accountId) to track progress (state, screenshot_path, cookies).
      * Replaces the Chrome google-login-worker.mjs spawn in google-login-agent.js.

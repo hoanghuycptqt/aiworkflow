@@ -166,6 +166,74 @@ async function refreshCookiesViaBroker(userId, sendTelegram = null) {
 }
 
 /**
+ * Profile-recovery: pull cookies from the broker's per-account persistent
+ * profile dir (populated at last login via save-cookies-to-profile) and
+ * promote them into DB.
+ *
+ * Bypasses a Telegram 2FA full re-login when the underlying Google session
+ * is still alive — the only thing that broke was the DB cookieString
+ * getting rotated to a dead JWT by an unlucky NextAuth refresh.
+ *
+ * Returns { success: bool, reason: string }.
+ */
+async function tryProfileRecovery(userId, sendTelegram) {
+    const cred = await prisma.credential.findFirst({
+        where: { userId, provider: 'google-flow' },
+    });
+    if (!cred) {
+        return { success: false, reason: 'no google-flow credential' };
+    }
+    let meta = {};
+    try { meta = JSON.parse(cred.metadata || '{}'); } catch { /* ok */ }
+    const accountId = getAccountInstanceId({ metadata: meta });
+    const expectedEmail = (meta.userEmail || '').toLowerCase();
+
+    // 1. Pull cookies from per-account profile dir
+    let res;
+    try {
+        res = await flowBroker.cookiesFromProfile(accountId);
+    } catch (e) {
+        const m = e instanceof BrokerError ? `${e.status || ''}: ${e.message}` : e.message;
+        return { success: false, reason: `broker cookies-from-profile: ${m}` };
+    }
+    if (res.status === 'no_profile') {
+        return { success: false, reason: 'broker has no persistent profile for this account (BROKER_PROFILE_BASE unset or login pre-dates rollout)' };
+    }
+    if (res.status === 'no_session_token') {
+        return { success: false, reason: 'profile lacks session-token (incomplete login snapshot)' };
+    }
+    if (res.status !== 'ok' || !res.cookies) {
+        return { success: false, reason: `unexpected broker response: ${JSON.stringify(res).substring(0, 200)}` };
+    }
+
+    // 2. Validate via /fx/api/auth/session — getAccessToken throws when the
+    //    response carries ACCESS_TOKEN_REFRESH_NEEDED (profile JWT also dead;
+    //    likely past NextAuth's ~60-day maxAge → real re-login needed).
+    let tokenData;
+    try {
+        tokenData = await getAccessToken(res.cookies);
+    } catch (e) {
+        return { success: false, reason: `profile cookies failed /session validation: ${e.message}` };
+    }
+
+    // 3. Verify account match (broker profile_snapshot trusts the caller-supplied
+    //    account_id, so defend against a swapped/mislabeled profile dir).
+    if (expectedEmail && tokenData.userEmail && tokenData.userEmail.toLowerCase() !== expectedEmail) {
+        return { success: false, reason: `profile holds different account: ${tokenData.userEmail} (expected ${expectedEmail})` };
+    }
+    if (!tokenData.expiresAt) {
+        return { success: false, reason: 'profile cookies returned no expires field' };
+    }
+
+    // 4. Commit fresh cookies + token to DB. Sibling sync happens in caller.
+    await saveCredentialsToDB(userId, res.cookies, tokenData);
+    const msg = `✅ Cookie recovered from broker persistent profile (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
+    console.log(`[CookieRefresh:profile-recovery] ${msg}`);
+    if (sendTelegram) await sendTelegram(msg);
+    return { success: true, reason: msg };
+}
+
+/**
  * Process a single user's cookie refresh.
  * After success, sync to all sibling credentials sharing the same Google account.
  */
@@ -188,6 +256,29 @@ async function harvestForUser(userId, googleAccountCredentialId) {
         // Sync to siblings sharing the same Google account
         await _syncAfterHarvest(userId);
         return { userId, success: true, action: 'refresh' };
+    }
+
+    // Step 1.5: Profile recovery — broker.refresh said needs-relogin, but the
+    // broker is ephemeral so what it sees as "dead" is often a NextAuth
+    // session-token rotation that produced an unrefreshable JWT in DB. The
+    // per-account profile dir at BROKER_PROFILE_BASE/<accountId>, populated
+    // at last successful login by save-cookies-to-profile, is NEVER touched
+    // by broker ops — its JWT-A stays alive until the next login overwrites
+    // it. Read it and try to recover before paying the cost of a full
+    // Telegram-2FA re-login.
+    //
+    // If BROKER_PROFILE_BASE is not set (e.g. fresh VPS that hasn't been
+    // upgraded yet, or Mac docker), broker returns no_profile and this
+    // step is a fast no-op — Step 2 still runs.
+    if (refreshResult.needsRelogin) {
+        const recovery = await tryProfileRecovery(userId, sendTelegram);
+        if (recovery.success) {
+            console.log(`[CookieHarvester] ✅ User ${userId.substring(0, 8)}: Recovered from broker persistent profile`);
+            await _syncAfterHarvest(userId);
+            return { userId, success: true, action: 'profile_recovery' };
+        }
+        // Recovery didn't work — keep needsRelogin path and fall through.
+        console.log(`[CookieHarvester] Profile recovery skipped/failed (${recovery.reason}); escalating to full re-login`);
     }
 
     // Step 2: If needs re-login, try auto login

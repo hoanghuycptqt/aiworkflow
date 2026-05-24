@@ -1,5 +1,6 @@
 """FastAPI app exposing the Google Flow broker endpoints over loopback."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -7,6 +8,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 
 from broker.config import AUTH_TOKEN
+from broker.profile_cookies import read_profile_cookies, resolve_profile_dir
+from broker.profile_snapshot import save_cookies_to_profile
 from broker.session_pool import SessionPool, SigninRedirectError
 
 logging.basicConfig(
@@ -132,6 +135,70 @@ async def harvest_cookies(account_id: str):
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.exception(f"harvest_cookies failed for {account_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SaveCookiesToProfileRequest(BaseModel):
+    cookies: str
+
+
+@app.post("/sessions/{account_id}/cookies-from-profile", dependencies=[Depends(require_auth)])
+async def cookies_from_profile(account_id: str):
+    """Extract cookies directly from a persistent Firefox profile on disk.
+
+    Recovery path used by `mcp-server/lib/token-refresh.js` (Mac) and
+    `server/src/services/cookie-harvester.js` (VPS) when the normal
+    refresh produces a dead session — NextAuth rotated
+    `__Secure-next-auth.session-token` to a JWT that can't be refreshed.
+
+    Profile location:
+    - VPS (BROKER_PROFILE_BASE set): reads `{BROKER_PROFILE_BASE}/{account_id}`,
+      which `save_cookies_to_profile` populated at the last successful login.
+    - Mac (BROKER_PROFILE_BASE unset): reads `/app/firefox-profile`, populated
+      by scripts/manual-login.sh (single-account dev setup).
+
+    Either way the dir is NEVER touched by the broker's normal ephemeral
+    session pool, so its JWT stays at the post-login state until the next
+    login overwrites it.
+
+    Returns:
+        {"status": "ok", "cookies": "name=val; …"}
+        {"status": "no_profile"}        — dir/sqlite missing
+        {"status": "no_session_token"}  — sqlite exists but login never completed
+    """
+    profile_dir = resolve_profile_dir(account_id)
+    try:
+        return await asyncio.to_thread(read_profile_cookies, profile_dir)
+    except Exception as e:
+        logger.exception(f"cookies_from_profile failed for {account_id} ({profile_dir})")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sessions/{account_id}/save-cookies-to-profile", dependencies=[Depends(require_auth)])
+async def save_cookies_to_profile_endpoint(account_id: str, req: SaveCookiesToProfileRequest):
+    """Persist a cookieString to the per-account profile dir for later recovery.
+
+    Called by `server/src/services/google-login-agent.js` immediately after a
+    successful broker login. Spawns a short-lived persistent_context Firefox,
+    runs add_cookies, navigates to about:blank (forces Firefox to flush its
+    cookie store to sqlite), and closes. The profile dir is then ready for
+    `cookies-from-profile` to read on dead-JWT recovery.
+
+    No-op (returns `no_profile_base`) when BROKER_PROFILE_BASE is unset,
+    which is the Mac docker default — manual-login.sh handles that case
+    instead of this endpoint.
+
+    Returns:
+        {"status": "ok", "profile_dir": "...", "cookies_count": N}
+        {"status": "no_profile_base"}  — env var not set, snapshot disabled
+        {"status": "error", "message": "..."}
+    """
+    if not req.cookies or len(req.cookies) < 50:
+        raise HTTPException(status_code=400, detail="cookies too short / missing")
+    try:
+        return await save_cookies_to_profile(account_id, req.cookies)
+    except Exception as e:
+        logger.exception(f"save_cookies_to_profile failed for {account_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
