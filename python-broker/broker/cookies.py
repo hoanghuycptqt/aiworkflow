@@ -35,14 +35,28 @@ def parse_cookie_string(cookie_string: str) -> list[dict]:
 def stringify_cookies(cookies: list[dict]) -> str:
     """Convert Playwright cookies list back to 'name=val; name=val' format for DB storage.
 
-    Deduplicates by name (cookies often appear with multiple domains).
+    Deduplicates by name. When the same name appears under multiple domains
+    (because parse_cookie_string seeds every cookie to both .google.com AND
+    .labs.google), prefer the .labs.google entry: NextAuth's session-token
+    rotation writes a fresh Set-Cookie scoped to labs.google, leaving the
+    .google.com shadow with the stale pre-rotation value. Picking the wrong
+    one feeds the server an already-rotated JWT and freezes `expires` in the
+    past (root cause of the 2026-05-24 02:00Z 10s-loop incident).
     """
-    seen: dict[str, str] = {}
+    by_name: dict[str, dict] = {}  # name → cookie dict
     for c in cookies:
         name = c.get("name")
-        value = c.get("value")
         if not name:
             continue
-        if name not in seen:
-            seen[name] = value
-    return "; ".join(f"{n}={v}" for n, v in seen.items())
+        prev = by_name.get(name)
+        if prev is None:
+            by_name[name] = c
+            continue
+        # Prefer entry whose domain ends with "labs.google" over a .google.com shadow.
+        prev_domain = (prev.get("domain") or "").lower()
+        curr_domain = (c.get("domain") or "").lower()
+        prev_is_labs = prev_domain.endswith("labs.google")
+        curr_is_labs = curr_domain.endswith("labs.google")
+        if curr_is_labs and not prev_is_labs:
+            by_name[name] = c
+    return "; ".join(f"{n}={c.get('value', '')}" for n, c in by_name.items())
