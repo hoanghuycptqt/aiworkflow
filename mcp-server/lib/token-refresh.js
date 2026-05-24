@@ -1,18 +1,30 @@
 /**
- * Token Auto-Refresh — Broker-backed (Plan v4.3 / v5.0).
+ * Token Auto-Refresh — two-tier strategy.
  *
- * Triggered by handleTokenRefresh() in google-flow-api.js when an API call
- * returns 401. Flow:
- *   1. Call broker /refresh-cookies — broker re-navigates Flow page with
- *      existing session, returns fresh cookies (or needs_relogin if session
- *      truly expired).
- *   2. Call /api/auth/session via pure Node fetch with fresh cookies — returns
- *      new access_token + expires timestamp.
- *   3. Write both to mcp-server/.env (cache for subsequent MCP server startup).
- *      Also updates process.env for the running process.
+ * Triggered by handleTokenRefresh() in google-flow-api.js on 401. Two paths
+ * depending on whether the underlying NextAuth session is still alive:
  *
- * No Chrome page interception (legacy approach) — broker's Firefox session
- * handles the heavy lifting via its persistent state. Simpler + more reliable.
+ *   FAST (~1s, normal case, runs every ~1h on access_token expiry):
+ *     /fx/api/auth/session with the cookies already in process.env →
+ *     NextAuth refreshes Google access_token via the refresh_token inside
+ *     the session-token JWT → returns a new access_token. We save only
+ *     the new access_token to .env; cookies stay the same (NextAuth may
+ *     have rotated session-token internally, but the existing one is
+ *     still accepted during its grace window).
+ *
+ *   SLOW (~20s, only when fast path returns ACCESS_TOKEN_REFRESH_NEEDED,
+ *   runs ~once per NextAuth session.maxAge — labs.google ≈ 20h):
+ *     /session is rejecting the JWT (past maxAge or session-token grace
+ *     window expired). Launch standalone Firefox at /app/firefox-profile
+ *     via docker exec — Firefox itself drives the page-level NextAuth
+ *     refresh inside its full persistent context, rotates session-token
+ *     to a brand-new JWT, writes it to cookies.sqlite. We re-extract via
+ *     broker.cookiesFromProfile and save BOTH cookies and access_token.
+ *
+ *   If the slow path ALSO returns ACCESS_TOKEN_REFRESH_NEEDED, Google has
+ *   genuinely revoked the refresh_token (security event, password change,
+ *   real account suspension) or the profile is past NextAuth's ~60d
+ *   absolute maxAge ceiling. Only scripts/manual-login.sh can recover.
  *
  * Concurrency: `_refreshing` flag prevents two parallel refreshes from
  * stomping on .env or hammering Google's session API.
@@ -64,21 +76,69 @@ export async function refreshToken(accountId) {
     }
     _refreshing = true;
     try {
-        // 1. Fresh cookies via standalone Firefox reload at /app/firefox-profile.
-        //    Replaces the old broker.refreshCookies path — see firefox-refresh.js
-        //    for rationale (rotation-to-dead JWT was happening in broker's
-        //    ephemeral pool but not in the full-profile standalone Firefox).
-        //    Costs ~20s per call but only fires on access_token expiry (~1h).
-        const cookies = await refreshViaFirefox(accountId);
-        if (!cookies) {
+        // FAST PATH (1h boundary): just call /session with the cookies we
+        // already have. NextAuth uses the JWT's stored refresh_token to fetch
+        // a new Google access_token, returns it. No Firefox launch. ~1s.
+        const currentCookies = process.env.GOOGLE_FLOW_SESSION_COOKIES || '';
+        if (currentCookies) {
+            const fast = await callSessionApi(currentCookies);
+            if (fast.alive) {
+                updateEnvKey('GOOGLE_FLOW_TOKEN', fast.access_token);
+                console.error('[TokenRefresh] ✅ fast path: token refreshed (~1s, cookies unchanged)');
+                return fast.access_token;
+            }
+            // fast.dead — session past maxAge or refresh_token rejected.
+            // Fall through to slow path.
+            console.error('[TokenRefresh] ⚠️ fast path returned ACCESS_TOKEN_REFRESH_NEEDED — '
+                + 'session past NextAuth maxAge (~20h), triggering Firefox reload…');
+        } else {
+            console.error('[TokenRefresh] no cookies in process.env yet — going straight to Firefox reload');
+        }
+
+        // SLOW PATH (20h boundary): NextAuth session is past maxAge, so
+        // /session won't refresh anymore. Launch standalone Firefox at
+        // /app/firefox-profile — Firefox itself drives the page-level
+        // NextAuth refresh inside its full persistent context, rotates
+        // session-token to a fresh JWT, writes it to cookies.sqlite. We
+        // re-extract and save BOTH cookies + token. ~20s.
+        const reloadedCookies = await refreshViaFirefox(accountId);
+        if (!reloadedCookies) {
             console.error('[TokenRefresh] ❌ Firefox reload produced no cookies — '
                 + 'manual re-login required (python-broker/scripts/manual-login.sh)');
             return null;
         }
+        const slow = await callSessionApi(reloadedCookies);
+        if (!slow.alive) {
+            console.error('[TokenRefresh] ❌ /app/firefox-profile session is also dead '
+                + '(Google revoked refresh_token, or profile past NextAuth ~60d maxAge). '
+                + 'Re-login via python-broker/scripts/manual-login.sh');
+            return null;
+        }
+        updateEnvKey('GOOGLE_FLOW_SESSION_COOKIES', reloadedCookies);
+        updateEnvKey('GOOGLE_FLOW_TOKEN', slow.access_token);
+        console.error('[TokenRefresh] ✅ slow path: Firefox-reloaded cookies + token saved');
+        return slow.access_token;
+    } catch (e) {
+        console.error(`[TokenRefresh] Failed: ${e.message}`);
+        return null;
+    } finally {
+        _refreshing = false;
+    }
+}
 
-        // 2. Fresh bearer token via Node fetch to /api/auth/session. Same pattern
-        //    as VPS server's ensureFreshToken — broker not needed for this step.
-        const sessionRes = await fetch('https://labs.google/fx/api/auth/session', {
+/**
+ * GET /fx/api/auth/session and classify the response.
+ *
+ * Returns:
+ *   { alive: true, access_token }    — fresh token from NextAuth's JWT refresh.
+ *   { alive: false, reason }         — dead session (ACCESS_TOKEN_REFRESH_NEEDED,
+ *                                       missing access_token, or HTTP error).
+ *                                       Caller should escalate to slow path.
+ */
+async function callSessionApi(cookies) {
+    let res;
+    try {
+        res = await fetch('https://labs.google/fx/api/auth/session', {
             method: 'GET',
             headers: {
                 'Accept': '*/*',
@@ -88,43 +148,27 @@ export async function refreshToken(accountId) {
                 'Referer': 'https://labs.google/fx/vi/tools/flow/',
             },
         });
-        if (!sessionRes.ok) {
-            console.error(`[TokenRefresh] Session API returned ${sessionRes.status}`);
-            return null;
-        }
-        const data = await sessionRes.json();
-        // After Firefox-reload, if /session STILL returns this signal then
-        // the underlying Google refresh_token in /app/firefox-profile is
-        // genuinely revoked (security event, password change) or past
-        // NextAuth's ~60-day maxAge ceiling. No silent recovery left —
-        // user has to re-log via scripts/manual-login.sh and complete 2FA.
-        // (Pre-2026-05-24 we had a recoverFromProfile fallback here that
-        // re-read the same profile sqlite; now that the primary refresh
-        // path IS the profile, that fallback would just see the same
-        // dead cookies and is dropped.)
-        if (data.error === 'ACCESS_TOKEN_REFRESH_NEEDED') {
-            console.error('[TokenRefresh] ❌ /app/firefox-profile session is dead '
-                + '(Google revoked refresh_token, or profile past NextAuth maxAge). '
-                + 'Re-login via python-broker/scripts/manual-login.sh');
-            return null;
-        }
-        if (!data.access_token) {
-            console.error('[TokenRefresh] No access_token in session response');
-            return null;
-        }
-
-        // 3. Persist to .env (subsequent MCP server startups read this) +
-        //    process.env (this running process picks it up immediately).
-        updateEnvKey('GOOGLE_FLOW_SESSION_COOKIES', cookies);
-        updateEnvKey('GOOGLE_FLOW_TOKEN', data.access_token);
-        console.error('[TokenRefresh] ✅ .env updated with fresh cookies + token');
-
-        return data.access_token;
     } catch (e) {
-        console.error(`[TokenRefresh] Failed: ${e.message}`);
-        return null;
-    } finally {
-        _refreshing = false;
+        return { alive: false, reason: `fetch error: ${e.message}` };
     }
+    if (!res.ok) {
+        return { alive: false, reason: `HTTP ${res.status}` };
+    }
+    let data;
+    try {
+        data = await res.json();
+    } catch (e) {
+        return { alive: false, reason: `JSON parse: ${e.message}` };
+    }
+    // Dead-session ground truth — NextAuth still returns an access_token
+    // alongside this error but it's stale and `expires` is frozen in the
+    // past. Saving it would just retrigger the refresh loop.
+    if (data.error === 'ACCESS_TOKEN_REFRESH_NEEDED') {
+        return { alive: false, reason: 'ACCESS_TOKEN_REFRESH_NEEDED' };
+    }
+    if (!data.access_token) {
+        return { alive: false, reason: 'no access_token in response' };
+    }
+    return { alive: true, access_token: data.access_token };
 }
 
