@@ -46,12 +46,14 @@ logger = logging.getLogger("broker.profile_snapshot")
 
 PROFILE_BASE = os.environ.get("BROKER_PROFILE_BASE", "")
 
-# Minimal moz_cookies schema — only columns that profile_cookies.read_profile_cookies
-# actually SELECTs (host/name/value) plus a few defaults Firefox would set if it
-# wrote the row itself. Direct-write approach was chosen over launching a
-# persistent_context Firefox because launch_persistent_context fails on both
-# Docker (CLONE_NEWUSER blocked by default seccomp) AND systemd VPS
-# (CLONE_NEWPID EPERM) — see 2026-05-24 VPS test logs.
+# Full Firefox 150 moz_cookies schema. The minimal-columns version we tried
+# first got wiped by Firefox on reload-via-firefox (2026-05-25 VPS test):
+# Firefox detected schema mismatch (missing inBrowserElement, sameSite,
+# schemeMap, isPartitionedAttributeSet, updateTime), dropped our 52-row
+# snapshot, and recreated the table with its native schema. Match Firefox
+# byte-for-byte so it accepts the snapshot and the rotated session-token
+# survives the reload dance. Source: live `.schema moz_cookies` from a
+# Firefox-touched cookies.sqlite at /opt/vcw/broker-profiles/<id>.
 _MOZ_COOKIES_DDL = """
 CREATE TABLE IF NOT EXISTS moz_cookies (
     id INTEGER PRIMARY KEY,
@@ -59,13 +61,18 @@ CREATE TABLE IF NOT EXISTS moz_cookies (
     name TEXT,
     value TEXT,
     host TEXT,
-    path TEXT DEFAULT '/',
-    expiry INTEGER DEFAULT 9999999999,
-    lastAccessed INTEGER DEFAULT 0,
-    creationTime INTEGER DEFAULT 0,
-    isSecure INTEGER DEFAULT 1,
-    isHttpOnly INTEGER DEFAULT 0,
-    UNIQUE (name, host, path, originAttributes)
+    path TEXT,
+    expiry INTEGER,
+    lastAccessed INTEGER,
+    creationTime INTEGER,
+    isSecure INTEGER,
+    isHttpOnly INTEGER,
+    inBrowserElement INTEGER DEFAULT 0,
+    sameSite INTEGER DEFAULT 0,
+    schemeMap INTEGER DEFAULT 0,
+    isPartitionedAttributeSet INTEGER DEFAULT 0,
+    updateTime INTEGER,
+    CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes)
 )
 """
 
@@ -155,11 +162,11 @@ def _write_cookies_sqlite(profile_dir: str, cookies: list[dict]) -> dict:
     con = sqlite3.connect(str(sqlite_path))
     try:
         cur = con.cursor()
-        # journal_mode=DELETE: keep on-disk format to a single .sqlite file
-        # (no WAL sidecar), matching what cookies-from-profile expects for
-        # a stable snapshot. Firefox's real profiles use WAL but for our
-        # static snapshot DELETE mode is cleaner.
-        cur.execute("PRAGMA journal_mode=DELETE")
+        # Use WAL mode — Firefox itself uses WAL, and switching DELETE→WAL
+        # on first Firefox launch was the trigger for "schema mismatch,
+        # recreate" behavior in the 2026-05-25 incident. Matching Firefox
+        # up front avoids the wipe.
+        cur.execute("PRAGMA journal_mode=WAL")
         cur.execute(_MOZ_COOKIES_DDL)
         cur.execute("DELETE FROM moz_cookies")
         now_us = int(time.time() * 1_000_000)
@@ -175,13 +182,14 @@ def _write_cookies_sqlite(profile_dir: str, cookies: list[dict]) -> dict:
                 now_us,
                 1 if c.get("secure", True) else 0,
                 1 if c.get("httpOnly", False) else 0,
+                now_us,  # updateTime — Firefox bumps this on each cookie write
             )
             for c in cookies
         ]
         cur.executemany(
             "INSERT OR REPLACE INTO moz_cookies "
-            "(name, value, host, path, expiry, lastAccessed, creationTime, isSecure, isHttpOnly) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(name, value, host, path, expiry, lastAccessed, creationTime, isSecure, isHttpOnly, updateTime) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         con.commit()
