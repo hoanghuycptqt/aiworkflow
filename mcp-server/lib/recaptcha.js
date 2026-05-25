@@ -25,6 +25,7 @@
 
 import fetch from 'node-fetch';
 import { broker, BrokerError } from './broker-client.js';
+import { refreshToken } from './token-refresh.js';
 
 // ─── Pure helpers (unchanged from legacy) ────────────────────────────────
 
@@ -99,9 +100,22 @@ export async function clearRecaptchaToken(usedToken) {
  */
 export async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERATION', instanceId = 'default') {
     const cookies = process.env.GOOGLE_FLOW_SESSION_COOKIES || sessionCookies;
-    await broker.ensureSession(instanceId, cookies);
-    const res = await broker.recaptchaToken(instanceId, action);
-    return res.token;
+    try {
+        await broker.ensureSession(instanceId, cookies);
+        const res = await broker.recaptchaToken(instanceId, action);
+        return res.token;
+    } catch (error) {
+        console.error(`[reCAPTCHA] Token fetch failed: ${error.message}. Attempting auto slow-refresh via Firefox...`);
+        const freshToken = await refreshToken(instanceId);
+        if (freshToken) {
+            console.error('[reCAPTCHA] Auto slow-refresh completed successfully! Retrying token fetch...');
+            const freshCookies = process.env.GOOGLE_FLOW_SESSION_COOKIES || '';
+            await broker.ensureSession(instanceId, freshCookies);
+            const res = await broker.recaptchaToken(instanceId, action);
+            return res.token;
+        }
+        throw error;
+    }
 }
 
 /**

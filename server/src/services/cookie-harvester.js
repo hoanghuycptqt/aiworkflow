@@ -574,6 +574,11 @@ async function scheduleForUser(userId, googleAccountCredentialId) {
  * After refresh, syncs to all sibling credentials automatically.
  */
 export async function startHarvestCron() {
+    if (process.env.DISABLE_COOKIE_HARVESTER === 'true') {
+        console.log('[CookieHarvester] 🕐 Cron is disabled via DISABLE_COOKIE_HARVESTER env var');
+        return;
+    }
+
     if (cronStarted) {
         console.log('[CookieHarvester] Cron already started');
         return;

@@ -142,13 +142,17 @@ httpServer.listen(PORT, async () => {
   }
 
   // Start Cookie Harvester cron (auto-refresh Google Flow cookies)
-  try {
-    const profileDir = `${uploadDir}/.google-profiles`;
-    await mkdir(profileDir, { recursive: true });
-    const { startHarvestCron } = await import('./services/cookie-harvester.js');
-    startHarvestCron();
-  } catch (err) {
-    console.error('[CookieHarvester] Failed to start:', err.message);
+  if (process.env.DISABLE_COOKIE_HARVESTER === 'true') {
+    console.log('[CookieHarvester] Cron is disabled via DISABLE_COOKIE_HARVESTER env var.');
+  } else {
+    try {
+      const profileDir = `${uploadDir}/.google-profiles`;
+      await mkdir(profileDir, { recursive: true });
+      const { startHarvestCron } = await import('./services/cookie-harvester.js');
+      startHarvestCron();
+    } catch (err) {
+      console.error('[CookieHarvester] Failed to start:', err.message);
+    }
   }
 });
 
