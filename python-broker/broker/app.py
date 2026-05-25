@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from broker.config import AUTH_TOKEN
 from broker.profile_cookies import read_profile_cookies, resolve_profile_dir
+from broker.profile_reload import reload_profile_via_firefox
 from broker.profile_snapshot import save_cookies_to_profile
 from broker.session_pool import SessionPool, SigninRedirectError
 
@@ -171,6 +172,35 @@ async def cookies_from_profile(account_id: str):
         return await asyncio.to_thread(read_profile_cookies, profile_dir)
     except Exception as e:
         logger.exception(f"cookies_from_profile failed for {account_id} ({profile_dir})")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sessions/{account_id}/reload-via-firefox", dependencies=[Depends(require_auth)])
+async def reload_via_firefox_endpoint(account_id: str):
+    """Real-browser refresh: spawn standalone Firefox at the per-account
+    persistent profile dir, let it navigate Google Flow so NextAuth's
+    page-level OAuth silent-refresh runs inside that context, then read
+    back the rotated cookies from sqlite.
+
+    Slow-path counterpart to the cheap `/fx/api/auth/session` Node call —
+    used by `server/src/services/cookie-harvester.js` once the fast path
+    returns ACCESS_TOKEN_REFRESH_NEEDED (session past NextAuth maxAge,
+    NextAuth refusing to refresh further). Unlike `refresh-cookies`
+    (which uses broker's ephemeral session pool), this endpoint runs
+    Firefox at the full per-account profile dir so OAuth silent refresh
+    has the Google account cookies it needs to mint a brand-new
+    NextAuth session-token without the user touching a 2FA prompt.
+
+    Returns one of:
+        {"status": "ok", "cookies": "...", "profile_dir": "..."}
+        {"status": "no_profile_base"}  — BROKER_PROFILE_BASE unset
+        {"status": "no_profile"}       — per-account dir missing
+        {"status": "error", "message": "..."}
+    """
+    try:
+        return await reload_profile_via_firefox(account_id)
+    except Exception as e:
+        logger.exception(f"reload_via_firefox failed for {account_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

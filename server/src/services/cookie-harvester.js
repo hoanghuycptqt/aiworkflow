@@ -149,8 +149,21 @@ async function tryFastRefresh(userId) {
 }
 
 /**
- * Refresh cookies for a user via the Python broker (invisible_playwright Firefox).
- * Replaces the legacy Chrome-based refreshCookies() in google-login-agent.js.
+ * Slow-path refresh — broker spawns standalone Firefox at the per-account
+ * persistent profile dir (`BROKER_PROFILE_BASE/<account_id>`), lets it
+ * navigate Google Flow so NextAuth's page-level OAuth silent-refresh runs
+ * inside a full-state browser, then returns the rotated cookies read off
+ * cookies.sqlite. ~25-30s per call.
+ *
+ * Replaces the old `flowBroker.refreshCookies()` ephemeral path (broker's
+ * shared session pool injecting DB cookies into a fresh BrowserContext)
+ * because the ephemeral context lacks the Google account cookies (SID,
+ * SAPISID, ...) and other browser state that OAuth silent-refresh needs
+ * once the NextAuth session-token is past `session.maxAge` (~20h on
+ * labs.google). At that point the ephemeral broker would fail and the
+ * harvester would escalate to Telegram-2FA loginGoogleFlow — surprising
+ * the user even though the underlying Google session is still alive in
+ * the persistent profile dir.
  *
  * Returns { success: bool, needsRelogin: bool, message: string }.
  */
@@ -166,24 +179,26 @@ async function refreshCookiesViaBroker(userId, sendTelegram = null) {
     try { meta = JSON.parse(cred.metadata || '{}'); } catch { /* ok */ }
 
     const accountId = getAccountInstanceId({ metadata: meta });
-    const oldCookies = meta.sessionCookies || '';
 
     let res;
     try {
-        res = await flowBroker.refreshCookies(accountId, oldCookies);
+        res = await flowBroker.reloadViaFirefox(accountId);
     } catch (e) {
         const msg = e instanceof BrokerError ? `broker ${e.status || ''}: ${e.message}` : e.message;
-        console.error(`[CookieRefresh:broker] ${msg}`);
-        // Treat broker errors (timeout, crash, etc.) as needsRelogin so the harvester
-        // falls through to loginGoogleFlow rather than just giving up. A real outage
-        // will still surface as 'Login failed' on the next step; in the common case
-        // the broker was stuck mid-cold-start and login will spin up a fresh page.
-        return { success: false, needsRelogin: true, message: `Broker refresh failed: ${msg}` };
+        console.error(`[CookieRefresh:broker] reload-via-firefox: ${msg}`);
+        return { success: false, needsRelogin: true, message: `Firefox reload failed: ${msg}` };
     }
 
-    if (res.status === 'needs_relogin') {
-        console.log(`[CookieRefresh:broker] User ${userId.substring(0, 8)}: signin redirect — needs re-login`);
-        return { success: false, needsRelogin: true, message: res.message || 'Session expired' };
+    if (res.status === 'no_profile_base' || res.status === 'no_profile') {
+        // Broker not configured for per-account profiles, or this user has
+        // no profile yet (first-time setup pre-rollout) — fall through to
+        // Telegram-2FA login which will populate the profile via the
+        // login-time snapshot in google-login-agent.loginGoogleFlow.
+        return {
+            success: false,
+            needsRelogin: true,
+            message: `broker has no usable profile for ${accountId}: ${res.status}`,
+        };
     }
 
     if (res.status !== 'ok' || !res.cookies) {
@@ -219,21 +234,12 @@ async function refreshCookiesViaBroker(userId, sendTelegram = null) {
 
     await saveCredentialsToDB(userId, res.cookies, tokenData);
 
-    // Roll the persistent profile forward with each validated-alive refresh.
-    // Static login-time snapshots die after NextAuth session.maxAge (~20h
-    // observed on labs.google) — without this, the profile is only useful
-    // for recoveries that happen within the first 20h after login, which
-    // defeats the point of having a long-lived recovery source. Because
-    // getAccessToken above already threw on ACCESS_TOKEN_REFRESH_NEEDED,
-    // the cookies we're snapshotting are guaranteed alive at this moment.
-    try {
-        await flowBroker.saveCookiesToProfile(accountId, res.cookies);
-    } catch (e) {
-        const m = e instanceof BrokerError ? `${e.status || ''}: ${e.message}` : e.message;
-        console.warn(`[CookieRefresh:broker] profile snapshot non-fatal: ${m}`);
-    }
+    // No explicit profile snapshot here — Firefox itself wrote the rotated
+    // cookies to `BROKER_PROFILE_BASE/<account_id>/cookies.sqlite` during
+    // the reload-via-firefox dance above. Overwriting with our manual
+    // minimal-schema sqlite would just downgrade Firefox's full write.
 
-    const successMsg = `✅ Cookie refreshed via broker (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
+    const successMsg = `✅ Cookie refreshed via Firefox-at-profile (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
     console.log(`[CookieRefresh:broker] ${successMsg}`);
     if (sendTelegram) await sendTelegram(successMsg);
 

@@ -150,6 +150,28 @@ export class FlowBroker {
     }
 
     /**
+     * Real-browser refresh: broker launches a standalone Firefox at the
+     * per-account profile dir, lets it navigate Flow so NextAuth's OAuth
+     * silent-refresh runs in a full-state context (Google account cookies,
+     * IndexedDB, fingerprint coherence), then returns the rotated cookies
+     * read off cookies.sqlite.
+     *
+     * Slow path for cookie-harvester: only fired when the fast `/session`
+     * call returns ACCESS_TOKEN_REFRESH_NEEDED (session past NextAuth maxAge).
+     * Takes ~25-30s because of the in-Firefox wait. Returns:
+     *   { status: 'ok', cookies, profile_dir }
+     *   { status: 'no_profile_base' | 'no_profile' | 'error', ... }
+     *
+     * Endpoint has its own timeout budget on the broker side; bump the
+     * client-side _call timeout to give ample room for a cold-start
+     * Firefox launch on a sleepy VPS.
+     */
+    async reloadViaFirefox(accountId) {
+        return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/reload-via-firefox`,
+            undefined, { timeoutMs: 60000 });
+    }
+
+    /**
      * Start a background login flow on the broker. Returns immediately.
      * Poll loginStatus(accountId) to track progress (state, screenshot_path, cookies).
      * Replaces the Chrome google-login-worker.mjs spawn in google-login-agent.js.
