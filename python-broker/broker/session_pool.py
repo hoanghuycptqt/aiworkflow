@@ -15,6 +15,9 @@ import time
 from enum import Enum
 from typing import Any, Optional
 
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from broker.config import IDLE_TIMEOUT_S, PAGE_NAV_TIMEOUT_MS, ROTATION_THRESHOLD
 from broker.cookies import parse_cookie_string, stringify_cookies
 from broker.flow import (
@@ -250,8 +253,8 @@ class Session:
         state is fresh.
 
         Cost: ~12-15s (vs ~2s ephemeral rotation) since Firefox process restarts.
-        Mitigated by user preference `BROKER_IDLE_TIMEOUT_S=86400` — rotation
-        only happens at quota cliff, not at idle.
+        Mitigated by disabling idle close (`BROKER_IDLE_TIMEOUT_S=0`) — rotation
+        only happens at the quota cliff, never at idle.
         """
         logger.info(f"[{self.account_id}] persistent rotation: tearing down + relaunching")
         await self._teardown_invisible(reason="persistent rotation")
@@ -271,6 +274,104 @@ class Session:
             else:
                 await self._open_context()
 
+    async def _context_has_session_token(self) -> bool:
+        """True if the live browser context still holds a NextAuth session-token.
+
+        Used by _mint_with_settle to tell a recoverable SDK glitch (reload fixes
+        it) from a dead session (reload won't). Fail-open on a cookie-read hiccup
+        — a transient read error shouldn't block legitimate reload recovery.
+        """
+        try:
+            cookies = await self.context.cookies()
+        except Exception:
+            return True
+        return any(c.get("name") == "__Secure-next-auth.session-token" for c in cookies)
+
+    async def _mint_with_settle(self, action: str) -> str:
+        """Mint a token, recovering IN-PLACE when grecaptcha is missing.
+
+        Root cause (2026-05-29): the grecaptcha Enterprise SDK can be absent on
+        the page at mint time even though _navigate_and_check_signin marked the
+        session ready. Two observed triggers, same symptom:
+
+          1. Fresh launch: the Flow SPA does a late client-side redirect (e.g.
+             locale /fx/tools/flow → /fx/vi/tools/flow) a few seconds AFTER
+             `load` fires — after the initial wait_for_grecaptcha passed. A mint
+             racing it hits "Execution context was destroyed" / "grecaptcha is
+             not defined".
+          2. Warm reuse: on a session reused after some idle, the SDK is gone and
+             wait_for_grecaptcha times out (15s) on a blank/stale document.
+
+        ensure_ready() short-circuits on a ready session (`if self.ready ...:
+        return`), so it never re-asserts grecaptcha. Previously both triggers
+        bubbled up and forced the Node side to broker.close() + relaunch the whole
+        ephemeral Firefox — ~10s of cold launch per recovery. (Note: this broker
+        runs ephemeral, BROKER_PROFILE_DIR="" — every ensureSession is a fresh
+        injected context, so the cost here is latency + Firefox teardown, NOT the
+        persistent-profile trust-score loss that motivates the VPS Chrome path's
+        "never close on retry" rule. The in-place reload still follows the spirit
+        of memory recaptcha-page-reload-recovery: reload to recover a sticky SDK,
+        don't tear the browser down.) Here we reload the page in place to re-init
+        grecaptcha and retry on the same context.
+
+        Signin is re-checked each attempt: a redirect to accounts.google.com that
+        lands AFTER the initial navigate (stale cookies surfacing late) was
+        previously misreported as an SDK error. Raising SigninRedirectError routes
+        it to a 409 → genuine cookie refresh on the Node side.
+        """
+        last_err: Optional[Exception] = None
+        for attempt in range(3):
+            if await is_signin_redirect(self.page):
+                raise SigninRedirectError(
+                    f"[{self.account_id}] post-load signin redirect at {self.page.url} "
+                    "— cookies stale, refresh required"
+                )
+            try:
+                # wait_for_grecaptcha polls, so it blocks through an in-flight
+                # redirect until the SDK reloads on the destination page.
+                await wait_for_grecaptcha(self.page)
+                return await mint_recaptcha_token(self.page, action)
+            except PlaywrightError as e:
+                last_err = e
+                detail = str(e)
+                # All three mean "SDK not callable on the current document" — a
+                # page.reload() re-initialises grecaptcha without dropping the
+                # warm browser/context (reload, never close — see docstring).
+                recoverable = (
+                    isinstance(e, PlaywrightTimeoutError)
+                    or "Execution context was destroyed" in detail
+                    or "grecaptcha is not defined" in detail
+                )
+                if attempt < 2 and recoverable:
+                    # Fast-escalate a genuinely-dead session: if the live context
+                    # has lost its NextAuth session-token the page is
+                    # unauthenticated, so no number of reloads brings grecaptcha
+                    # back — they'd just burn ~45s before bubbling. Surface a
+                    # signin redirect (→ 409) so the Node side runs real cookie
+                    # recovery now (mirrors refresh_cookies' session-token guard).
+                    if not await self._context_has_session_token():
+                        raise SigninRedirectError(
+                            f"[{self.account_id}] grecaptcha unavailable and no "
+                            "NextAuth session-token in context — auth required "
+                            "(skipping reload retries)"
+                        ) from e
+                    logger.warning(
+                        f"[{self.account_id}] grecaptcha unavailable at mint "
+                        f"({detail.splitlines()[0]}); reloading page in place "
+                        f"(attempt {attempt + 1}/3)"
+                    )
+                    try:
+                        await self.page.reload(
+                            wait_until="load", timeout=PAGE_NAV_TIMEOUT_MS
+                        )
+                    except Exception:
+                        pass  # best-effort; wait_for_grecaptcha on retry is the real gate
+                    await asyncio.sleep(0.3)
+                    continue
+                raise
+        # range(3) always returns or raises above; this is defensive only.
+        raise last_err  # type: ignore[misc]
+
     async def mint_token(self, action: str) -> tuple[str, int]:
         """Mint reCAPTCHA token. Returns (token, post_increment_request_count).
 
@@ -280,7 +381,7 @@ class Session:
         async with self.lock:
             await self.ensure_ready()
             await self._rotate_if_needed()
-            token = await mint_recaptcha_token(self.page, action)
+            token = await self._mint_with_settle(action)
             self.request_count += 1
             self.last_used = time.monotonic()
             self._restart_idle_timer()
@@ -467,6 +568,13 @@ class Session:
     def _restart_idle_timer(self) -> None:
         if self._idle_task and not self._idle_task.done():
             self._idle_task.cancel()
+        # IDLE_TIMEOUT_S <= 0 disables idle close entirely — the session stays
+        # warm forever (Mac single-user preference: trade RAM for zero cold
+        # relaunches; context still rotates @ ROTATION_THRESHOLD requests, and
+        # explicit broker.close() / Node recovery still tear down on demand).
+        if IDLE_TIMEOUT_S <= 0:
+            self._idle_task = None
+            return
         self._idle_task = asyncio.create_task(self._idle_close_after(IDLE_TIMEOUT_S))
 
     async def _idle_close_after(self, seconds: float) -> None:

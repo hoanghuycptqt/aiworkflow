@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 
-from broker.config import AUTH_TOKEN
+from broker.config import AUTH_TOKEN, IDLE_TIMEOUT_S, ROTATION_THRESHOLD
 from broker.profile_cookies import read_profile_cookies, resolve_profile_dir
 from broker.profile_reload import reload_profile_via_firefox
 from broker.profile_snapshot import save_cookies_to_profile
@@ -24,8 +24,10 @@ pool = SessionPool()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("broker starting; auth=%s rotation=15 idle=10m",
-                "enabled" if AUTH_TOKEN else "disabled")
+    logger.info("broker starting; auth=%s rotation=%d idle=%s",
+                "enabled" if AUTH_TOKEN else "disabled",
+                ROTATION_THRESHOLD,
+                "disabled" if IDLE_TIMEOUT_S <= 0 else f"{IDLE_TIMEOUT_S}s")
     yield
     logger.info("broker shutting down; closing all sessions")
     await pool.close_all()
