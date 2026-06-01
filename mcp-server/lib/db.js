@@ -19,7 +19,7 @@ try {
         if (eqIdx <= 0) continue;
         const key = trimmed.substring(0, eqIdx).trim();
         const value = trimmed.substring(eqIdx + 1).trim();
-        if (!process.env[key]) process.env[key] = value; // don't override existing
+        process.env[key] = value; // override to make .env the source of truth
     }
 } catch { /* .env not found, rely on existing env vars */ }
 

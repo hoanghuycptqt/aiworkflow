@@ -36,6 +36,7 @@ import { broker } from './broker-client.js';
 const execAsync = promisify(exec);
 
 const CONTAINER = process.env.MCP_BROKER_CONTAINER || 'vcw-broker-mac';
+const DOCKER_BIN = process.env.MCP_DOCKER_BIN || '/usr/local/bin/docker';
 const PROFILE_DIR = '/app/firefox-profile';
 // Match what manual-login.sh's standalone Firefox launches — same patched
 // binary the broker uses internally, just driven directly instead of via
@@ -56,7 +57,7 @@ async function killProfileFirefox() {
     // pkill returns non-zero when nothing matched — wrap in `|| true`
     // so we don't choke on "no leftover Firefox" (the normal case).
     try {
-        await execAsync(`docker exec ${CONTAINER} bash -c "pkill -9 -f 'profile ${PROFILE_DIR}' || true"`);
+        await execAsync(`${DOCKER_BIN} exec ${CONTAINER} bash -c "pkill -9 -f 'profile /app/firefox-[p]rofile' || true"`);
     } catch (e) {
         console.error(`[FirefoxRefresh] pkill error (non-fatal): ${e.message}`);
     }
@@ -67,14 +68,14 @@ async function launchProfileFirefox() {
     // running inside the container until we kill it. log to /tmp inside
     // the container for diag if launch silently fails.
     await execAsync(
-        `docker exec -d ${CONTAINER} bash -c "DISPLAY=:99 HOME=/root ${FIREFOX_BIN} --no-remote --profile ${PROFILE_DIR} ${FLOW_URL} > /tmp/firefox-mcp-refresh.log 2>&1"`
+        `${DOCKER_BIN} exec -d ${CONTAINER} bash -c "DISPLAY=:99 HOME=/root ${FIREFOX_BIN} --no-remote --profile ${PROFILE_DIR} ${FLOW_URL} > /tmp/firefox-mcp-refresh.log 2>&1"`
     );
 }
 
 async function isFirefoxAlive() {
     try {
         const { stdout } = await execAsync(
-            `docker exec ${CONTAINER} bash -c "pgrep -f 'profile ${PROFILE_DIR}' > /dev/null && echo alive || echo dead"`
+            `${DOCKER_BIN} exec ${CONTAINER} bash -c "pgrep -f '[p]rofile ${PROFILE_DIR}' > /dev/null && echo alive || echo dead"`
         );
         return stdout.trim() === 'alive';
     } catch {

@@ -8,7 +8,7 @@
  *   - Persistent Firefox session per Google account (keyed by accountId)
  *   - Per-account asyncio.Lock — serializes operations
  *   - Context rotation @ 15 requests (Phase 0 cliff defense)
- *   - 24h "Firefox forever" idle timeout (Mac preference vs VPS's 10m)
+ *   - Idle close DISABLED on Mac ("Firefox forever", BROKER_IDLE_TIMEOUT_S=0) vs VPS's 10m
  *
  * MCP server only needs:
  *   1. ensureSession(accountId, sessionCookies) — once per execute()
@@ -38,8 +38,16 @@ class BrokerError extends Error {
 
 export class FlowBroker {
     constructor(baseUrl, authToken) {
-        this.baseUrl = (baseUrl || process.env.MCP_BROKER_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
-        this.authToken = authToken || process.env.MCP_BROKER_TOKEN || '';
+        this._baseUrl = baseUrl;
+        this._authToken = authToken;
+    }
+
+    get baseUrl() {
+        return (this._baseUrl || process.env.MCP_BROKER_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
+    }
+
+    get authToken() {
+        return this._authToken || process.env.MCP_BROKER_TOKEN || '';
     }
 
     async _call(method, path, body, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {

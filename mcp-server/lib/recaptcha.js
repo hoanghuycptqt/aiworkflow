@@ -105,10 +105,37 @@ export async function fetchRecaptchaToken(sessionCookies, action = 'IMAGE_GENERA
         const res = await broker.recaptchaToken(instanceId, action);
         return res.token;
     } catch (error) {
-        console.error(`[reCAPTCHA] Token fetch failed: ${error.message}. Attempting auto slow-refresh via Firefox...`);
+        const errorMsg = error.message || '';
+        const isBrowserClosed = errorMsg.includes('browser has been closed') || 
+                               errorMsg.includes('Target page, context or browser has been closed') ||
+                               errorMsg.includes('Target closed') ||
+                               errorMsg.includes('context has been destroyed') ||
+                               errorMsg.includes('destroyed');
+
+        if (isBrowserClosed) {
+            console.error(`[reCAPTCHA] Detected dead browser session in broker: ${errorMsg}. Clearing broker session and retrying...`);
+            try {
+                await broker.close(instanceId);
+            } catch (e) {
+                // Ignore errors closing an already dead session
+            }
+            try {
+                await broker.ensureSession(instanceId, cookies);
+                const res = await broker.recaptchaToken(instanceId, action);
+                return res.token;
+            } catch (retryError) {
+                console.error(`[reCAPTCHA] Retry after clearing session also failed: ${retryError.message}`);
+                // Fall through to full refresh if retry fails
+            }
+        }
+
+        console.error(`[reCAPTCHA] Token fetch failed: ${errorMsg}. Attempting auto slow-refresh via Firefox...`);
         const freshToken = await refreshToken(instanceId);
         if (freshToken) {
             console.error('[reCAPTCHA] Auto slow-refresh completed successfully! Retrying token fetch...');
+            try {
+                await broker.close(instanceId);
+            } catch (e) {}
             const freshCookies = process.env.GOOGLE_FLOW_SESSION_COOKIES || '';
             await broker.ensureSession(instanceId, freshCookies);
             const res = await broker.recaptchaToken(instanceId, action);

@@ -44,11 +44,13 @@ services:
       # Can revert to 15 once daily usage stabilizes trust score.
       BROKER_ROTATION_THRESHOLD: "12"
 
-      # User preference (plan v4.3): Mac giữ Firefox forever, match `recaptcha.js:21`
-      # behavior (`RECAPTCHA_PAGE_IDLE_TIMEOUT = 0` on darwin). VPS uses 600 (10 min).
-      # 86400 = 24h ≈ "never" in a single Mac session. Trust score still protected by
-      # rotation @ 15 (context rotates, browser process stays alive).
-      BROKER_IDLE_TIMEOUT_S: "86400"
+      # User preference: Mac giữ Firefox forever (single-user box, spare RAM).
+      # 0 = idle close DISABLED — the session never self-tears-down on inactivity
+      # (see config.py IDLE_TIMEOUT_S and Session._restart_idle_timer's <=0 guard).
+      # Truly "never", not the old 86400≈24h approximation. VPS uses 600 (10 min).
+      # Trust score still protected by rotation @ BROKER_ROTATION_THRESHOLD (context
+      # rotates, browser process stays alive); explicit close still works on demand.
+      BROKER_IDLE_TIMEOUT_S: "0"
 
       # Rosetta 2 emulation: Firefox cold-launch ~10-15s (vs ~5s native on VPS).
       # 90s gives comfortable headroom for page nav + grecaptcha SDK load.
