@@ -40,21 +40,29 @@ import sqlite3
 import time
 from pathlib import Path
 
+from broker.config import BROWSER_ENGINE
 from broker.cookies import parse_cookie_string
 
 logger = logging.getLogger("broker.profile_snapshot")
 
 PROFILE_BASE = os.environ.get("BROKER_PROFILE_BASE", "")
 
-# Full Firefox 150 moz_cookies schema. The minimal-columns version we tried
-# first got wiped by Firefox on reload-via-firefox (2026-05-25 VPS test):
-# Firefox detected schema mismatch (missing inBrowserElement, sameSite,
-# schemeMap, isPartitionedAttributeSet, updateTime), dropped our 52-row
-# snapshot, and recreated the table with its native schema. Match Firefox
-# byte-for-byte so it accepts the snapshot and the rotated session-token
-# survives the reload dance. Source: live `.schema moz_cookies` from a
-# Firefox-touched cookies.sqlite at /opt/vcw/broker-profiles/<id>.
-_MOZ_COOKIES_DDL = """
+# The moz_cookies schema MUST match the bundled Firefox of the active browser
+# engine byte-for-byte. If it doesn't, Firefox detects a schema mismatch on the
+# next launch, DROPS our snapshot, and recreates the table with its native
+# schema — wiping the rotated session-token (observed 2026-05-25 VPS test with
+# the minimal-columns version). The two engines bundle different Firefoxes and
+# their moz_cookies schemas differ in the trailing columns:
+#
+#   invisible_playwright → Firefox 150: ...sameSite, schemeMap,
+#       isPartitionedAttributeSet, updateTime   (NO rawSameSite)
+#   camoufox 0.4.11       → Firefox 135: ...sameSite, rawSameSite, schemeMap,
+#       isPartitionedAttributeSet               (NO updateTime)
+#
+# Verified by dumping `.schema moz_cookies` from a freshly-launched profile of
+# each engine. If the engine or its bundled Firefox version changes, re-dump and
+# update here.
+_FF150_DDL = """
 CREATE TABLE IF NOT EXISTS moz_cookies (
     id INTEGER PRIMARY KEY,
     originAttributes TEXT NOT NULL DEFAULT '',
@@ -75,6 +83,31 @@ CREATE TABLE IF NOT EXISTS moz_cookies (
     CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes)
 )
 """
+
+_FF135_DDL = """
+CREATE TABLE IF NOT EXISTS moz_cookies (
+    id INTEGER PRIMARY KEY,
+    originAttributes TEXT NOT NULL DEFAULT '',
+    name TEXT,
+    value TEXT,
+    host TEXT,
+    path TEXT,
+    expiry INTEGER,
+    lastAccessed INTEGER,
+    creationTime INTEGER,
+    isSecure INTEGER,
+    isHttpOnly INTEGER,
+    inBrowserElement INTEGER DEFAULT 0,
+    sameSite INTEGER DEFAULT 0,
+    rawSameSite INTEGER DEFAULT 0,
+    schemeMap INTEGER DEFAULT 0,
+    isPartitionedAttributeSet INTEGER DEFAULT 0,
+    CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes)
+)
+"""
+
+_IS_CAMOUFOX = BROWSER_ENGINE == "camoufox"
+_MOZ_COOKIES_DDL = _FF135_DDL if _IS_CAMOUFOX else _FF150_DDL
 
 
 def is_enabled() -> bool:
@@ -171,7 +204,12 @@ def _write_cookies_sqlite(profile_dir: str, cookies: list[dict]) -> dict:
         cur.execute("DELETE FROM moz_cookies")
         now_us = int(time.time() * 1_000_000)
         expiry = int(time.time()) + 60 * 86400  # 60 days, matches NextAuth maxAge
-        rows = [
+        # Columns we set explicitly; every other column (originAttributes,
+        # inBrowserElement, sameSite, rawSameSite/schemeMap, …) takes its DDL
+        # default. FF150 has an extra trailing `updateTime` column that FF135
+        # lacks — include it only for the invisible_playwright (FF150) engine,
+        # else the INSERT references a non-existent column on FF135 (camoufox).
+        base = [
             (
                 c.get("name", ""),
                 c.get("value", ""),
@@ -182,17 +220,26 @@ def _write_cookies_sqlite(profile_dir: str, cookies: list[dict]) -> dict:
                 now_us,
                 1 if c.get("secure", True) else 0,
                 1 if c.get("httpOnly", False) else 0,
-                now_us,  # updateTime — Firefox bumps this on each cookie write
             )
             for c in cookies
         ]
-        cur.executemany(
-            "INSERT OR REPLACE INTO moz_cookies "
-            "(name, value, host, path, expiry, lastAccessed, creationTime, isSecure, isHttpOnly, updateTime) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rows,
-        )
+        if _IS_CAMOUFOX:
+            cur.executemany(
+                "INSERT OR REPLACE INTO moz_cookies "
+                "(name, value, host, path, expiry, lastAccessed, creationTime, isSecure, isHttpOnly) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                base,
+            )
+        else:
+            # FF150: append updateTime (Firefox bumps this on each cookie write).
+            rows = [row + (now_us,) for row in base]
+            cur.executemany(
+                "INSERT OR REPLACE INTO moz_cookies "
+                "(name, value, host, path, expiry, lastAccessed, creationTime, isSecure, isHttpOnly, updateTime) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
         con.commit()
-        return {"cookies_count": len(rows)}
+        return {"cookies_count": len(base)}
     finally:
         con.close()

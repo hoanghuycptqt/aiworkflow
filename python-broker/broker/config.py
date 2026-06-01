@@ -10,6 +10,13 @@ PORT = int(os.environ.get("BROKER_PORT", "8002"))
 # Empty string disables auth (dev mode). In prod set via systemd EnvironmentFile.
 AUTH_TOKEN = os.environ.get("BROKER_AUTH_TOKEN", "")
 
+# Browser engine: "camoufox" (native aarch64 stealth Firefox, used on the ARM VPS)
+# or "invisible" (invisible_playwright x86_64, the Mac/legacy path). Both are
+# source-level patched Firefox with the same Playwright-compatible async-CM API,
+# so the session logic is engine-agnostic. Defaults to "invisible" to preserve
+# existing Mac behaviour; the VPS systemd unit sets BROKER_BROWSER_ENGINE=camoufox.
+BROWSER_ENGINE = os.environ.get("BROKER_BROWSER_ENGINE", "invisible").strip().lower()
+
 # Rotation threshold — confirmed via Phase 0 testing (stochastic cliff 20-25, safe @ 15).
 ROTATION_THRESHOLD = int(os.environ.get("BROKER_ROTATION_THRESHOLD", "15"))
 

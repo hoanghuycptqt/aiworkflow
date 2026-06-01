@@ -38,18 +38,24 @@ import signal
 import time
 from pathlib import Path
 
+from broker.config import BROWSER_ENGINE
 from broker.profile_cookies import read_profile_cookies, resolve_profile_dir
 from broker.profile_snapshot import is_enabled as profile_snapshot_enabled
 
 logger = logging.getLogger("broker.profile_reload")
 
-# Firefox binary lives under invisible_playwright's cache dir. HOME differs
-# between Mac docker (root) and VPS systemd (truonghoanghuy), so derive at
-# runtime; override with FIREFOX_BIN env var if the binary moves.
-FIREFOX_BIN = os.environ.get(
-    "FIREFOX_BIN",
-    str(Path(os.environ.get("HOME", "/root")) / ".cache/invisible-playwright/firefox-7/firefox"),
-)
+# Standalone-Firefox binary used for the slow-path JWT refresh. Both engines
+# ship a real Gecko binary that honours `--no-remote --profile <dir> <url>`
+# (verified on aarch64: camoufox's binary populates cookies.sqlite identically
+# to vanilla Firefox). The default path differs per engine; HOME differs between
+# Mac docker (root) and VPS systemd (truonghoanghuy), so derive at runtime.
+# Override with the FIREFOX_BIN env var if the binary moves.
+_HOME = Path(os.environ.get("HOME", "/root"))
+if BROWSER_ENGINE == "camoufox":
+    _DEFAULT_FIREFOX_BIN = str(_HOME / ".cache/camoufox/camoufox")
+else:
+    _DEFAULT_FIREFOX_BIN = str(_HOME / ".cache/invisible-playwright/firefox-7/firefox")
+FIREFOX_BIN = os.environ.get("FIREFOX_BIN", _DEFAULT_FIREFOX_BIN)
 FLOW_URL = "https://labs.google/fx/tools/flow"
 # Display where Xvfb runs — broker systemd unit / docker entrypoint both
 # set this to :99. Firefox won't launch without a display target.

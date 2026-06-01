@@ -1,14 +1,24 @@
 [project]
 name = "vcw-flow-broker"
 version = "0.1.0"
-description = "Python side-car broker for Google Flow reCAPTCHA Enterprise via invisible_playwright Firefox"
+description = "Python side-car broker for Google Flow reCAPTCHA Enterprise via a source-level patched stealth Firefox (Camoufox on aarch64, invisible_playwright on x86_64)"
 requires-python = ">=3.11"
 dependencies = [
-    "invisible_playwright @ git+https://github.com/feder-cr/invisible_playwright.git",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
 ]
+
+# Browser engine is selected at runtime via BROKER_BROWSER_ENGINE; install the
+# matching extra. The two engines pull different (and potentially conflicting)
+# playwright pins, so they are intentionally NOT both installed at once.
+#   VPS (aarch64):  pip install -e '.[camoufox]'   → BROKER_BROWSER_ENGINE=camoufox
+#   Mac (x86_64):   pip install -e '.[invisible]'  → BROKER_BROWSER_ENGINE=invisible (default)
+# camoufox is pinned: 0.4.11 bundles Firefox 135, whose moz_cookies schema the
+# profile-snapshot code matches. Re-verify that schema before bumping.
+[project.optional-dependencies]
+camoufox = ["camoufox[geoip]==0.4.11"]
+invisible = ["invisible_playwright @ git+https://github.com/feder-cr/invisible_playwright.git"]
 
 [build-system]
 requires = ["setuptools>=68"]

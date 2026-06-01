@@ -1,0 +1,14 @@
+[Unit]
+Description=Virtual Framebuffer X server (:99) for headful stealth Firefox
+After=network.target
+
+[Service]
+# Headful Camoufox/Firefox renders here. 1280x900x24 matches the old VPS — big
+# enough for the Flow SPA + reCAPTCHA challenge (NOT camoufox headless="virtual",
+# which spawns a 1x1 display — daijro/camoufox#458).
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x900x24 -ac -nolisten tcp
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,25 +1,33 @@
 [Unit]
-Description=VCW Google Flow Python Broker (invisible_playwright)
-After=network.target
+Description=VCW Google Flow Python Broker (Camoufox / aarch64)
+After=network.target xvfb.service
+Wants=xvfb.service
 
 [Service]
 Type=simple
 User=truonghoanghuy
 Group=truonghoanghuy
 WorkingDirectory=/opt/vcw/app/python-broker
-# Pull BROKER_AUTH_TOKEN (optional) + DISPLAY from this file.
+# Pull BROKER_AUTH_TOKEN + any overrides from this file.
 # Server's existing .env stays untouched.
 EnvironmentFile=-/opt/vcw/app/python-broker/broker.env
+# Headful Firefox renders on the external Xvfb display (xvfb.service, :99).
 Environment=DISPLAY=:99
+# Select the aarch64 stealth engine. HOME is set explicitly so the Camoufox
+# binary + GeoIP cache resolve under ~truonghoanghuy/.cache/camoufox even if
+# systemd does not propagate the user's HOME.
+Environment=BROKER_BROWSER_ENGINE=camoufox
+Environment=HOME=/home/truonghoanghuy
 ExecStart=/opt/vcw/app/python-broker/venv/bin/python -m broker
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:/opt/vcw/logs/broker.log
 StandardError=append:/opt/vcw/logs/broker-error.log
 
-# Resource guard — Firefox can balloon; restart if it exceeds 2 GB.
-MemoryHigh=1.5G
-MemoryMax=2G
+# Resource guard — Camoufox (Firefox + content procs + uBO) can balloon.
+# Box has 23G RAM + 4G swap, so headroom above the old 2G ceiling is safe.
+MemoryHigh=2G
+MemoryMax=3G
 
 [Install]
 WantedBy=multi-user.target

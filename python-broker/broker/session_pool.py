@@ -18,7 +18,12 @@ from typing import Any, Optional
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from broker.config import IDLE_TIMEOUT_S, PAGE_NAV_TIMEOUT_MS, ROTATION_THRESHOLD
+from broker.config import (
+    BROWSER_ENGINE,
+    IDLE_TIMEOUT_S,
+    PAGE_NAV_TIMEOUT_MS,
+    ROTATION_THRESHOLD,
+)
 from broker.cookies import parse_cookie_string, stringify_cookies
 from broker.flow import (
     FLOW_URL,
@@ -35,6 +40,38 @@ logger = logging.getLogger("broker.session")
 # Default empty → existing ephemeral context + cookie injection (VPS preserves).
 PROFILE_DIR = os.environ.get("BROKER_PROFILE_DIR", "")
 USE_PERSISTENT_PROFILE = bool(PROFILE_DIR)
+
+
+def _make_browser_cm(persistent: bool) -> Any:
+    """Construct the stealth-Firefox async context manager for the active engine.
+
+    Both engines honour the same contract, so all downstream session logic
+    (new_context / add_cookies / goto / mint) is identical regardless of engine:
+      - ephemeral  → __aenter__() returns a Browser (we open the context manually)
+      - persistent → __aenter__() returns a BrowserContext (cookies live in the
+                     profile dir on disk)
+
+    camoufox (VPS, aarch64): launched headful with an EXTERNAL Xvfb (DISPLAY=:99
+    from the systemd unit). We deliberately avoid headless="virtual" — that makes
+    Camoufox spawn its own 1×1 Xvfb (daijro/camoufox#458) which is too small to
+    render Flow / the reCAPTCHA challenge reliably.
+
+    invisible_playwright (Mac/legacy, x86_64): unchanged behaviour.
+
+    Imported lazily so the module loads even when only one engine is installed.
+    """
+    if BROWSER_ENGINE == "camoufox":
+        from camoufox.async_api import AsyncCamoufox
+
+        if persistent:
+            return AsyncCamoufox(
+                headless=False, persistent_context=True, user_data_dir=PROFILE_DIR
+            )
+        return AsyncCamoufox(headless=False)
+
+    from invisible_playwright.async_api import InvisiblePlaywright
+
+    return InvisiblePlaywright(profile_dir=PROFILE_DIR) if persistent else InvisiblePlaywright()
 
 
 class SigninRedirectError(RuntimeError):
@@ -90,14 +127,12 @@ class Session:
         await self._teardown_invisible(reason="pre-launch cleanup")
 
         mode = "persistent" if USE_PERSISTENT_PROFILE else "ephemeral"
-        logger.info(f"[{self.account_id}] launching invisible_playwright Firefox ({mode} mode)")
-        # Import inside method so module loads even before invisible_playwright is installed.
-        from invisible_playwright.async_api import InvisiblePlaywright
+        logger.info(f"[{self.account_id}] launching {BROWSER_ENGINE} Firefox ({mode} mode)")
 
-        # Plan v5.0: persistent mode passes profile_dir → wrapper returns BrowserContext
-        # directly (no separate Browser handle). Ephemeral mode (no kwarg) returns
-        # Browser; we create ephemeral context manually in _open_context.
-        cm = InvisiblePlaywright(profile_dir=PROFILE_DIR) if USE_PERSISTENT_PROFILE else InvisiblePlaywright()
+        # Persistent mode → wrapper returns BrowserContext directly (no separate
+        # Browser handle). Ephemeral mode → returns Browser; we create the
+        # ephemeral context manually in _open_context. See _make_browser_cm.
+        cm = _make_browser_cm(USE_PERSISTENT_PROFILE)
         self._invisible_cm = cm
         try:
             result = await cm.__aenter__()
@@ -189,10 +224,18 @@ class Session:
         if not shutil.which("pkill"):
             logger.warning(f"[{self.account_id}] pkill not available; cannot force-kill")
             return
+        # Both engines drive Firefox via the playwright node driver and create
+        # /tmp/playwright_firefoxdev_profile-* temp dirs, so those patterns match
+        # either engine. The browser-process basename differs: camoufox launches
+        # "camoufox-bin" (master + content procs, -appDir .cache/camoufox);
+        # invisible_playwright launches firefox out of its firefox-4/-7 cache dir.
         patterns = [
             "playwright/driver/node",
             "playwright_firefoxdev_profile",
-            "firefox-4/firefox",
+            "camoufox-bin",        # camoufox (VPS, aarch64)
+            ".cache/camoufox",     # camoufox content procs (-appDir)
+            "firefox-4/firefox",   # invisible_playwright (Mac/legacy)
+            "firefox-7/firefox",   # invisible_playwright (newer cache tag)
         ]
         proc = await asyncio.create_subprocess_exec(
             "pkill", "-9", "-f", "|".join(patterns).replace("|", "\\|"),
@@ -511,8 +554,7 @@ class Session:
         try:
             async with self.lock:
                 await self._teardown_invisible(reason="login starts fresh")
-                from invisible_playwright.async_api import InvisiblePlaywright
-                self._invisible_cm = InvisiblePlaywright()
+                self._invisible_cm = _make_browser_cm(persistent=False)
                 self.browser = await self._invisible_cm.__aenter__()
                 self.context = await self.browser.new_context(bypass_csp=True)
                 page = await self.context.new_page()
