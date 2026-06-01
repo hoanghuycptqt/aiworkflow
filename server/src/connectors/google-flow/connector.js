@@ -711,7 +711,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
     }
 
     async _executeLocked(input, credentials, config, context, instanceId) {
-        const token = credentials.token;
+        let token = credentials.token;
         const projectId = config.projectId;
         if (!projectId) {
             throw new Error('Project ID is required. Set it in the Flow Image node config.');
@@ -771,7 +771,15 @@ export class GoogleFlowImageConnector extends BaseConnector {
         }
 
         // ── Batch generation: 1 API call per image, fresh reCAPTCHA each ──
-        const sessionCookies = credentials.metadata?.sessionCookies || '';
+        let sessionCookies = credentials.metadata?.sessionCookies || '';
+        // #3c: a mid-run 401 inside batchGenerateImages/_upscaleImage rotates the bearer
+        // (forceRefreshAuth → _activeCreds). Re-sync the loop's token/cookies from the
+        // registry before each call so later images in a multi-image batch don't reuse a
+        // stale token (each stale reuse would otherwise cost a wasted 401 + retry).
+        const syncAuth = () => {
+            const reg = _activeCreds.get(instanceId);
+            if (reg) { token = reg.token; sessionCookies = reg.metadata?.sessionCookies || sessionCookies; }
+        };
         const batchId = uuidv4();
         const sessionId = `;${Date.now()}`;
         const allResults = [];
@@ -779,6 +787,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
         console.log(`[FlowImage] Starting batch of ${count} image(s), batchId=${batchId}, account=${instanceId}`);
 
         for (let i = 0; i < count; i++) {
+            syncAuth(); // pick up any bearer/cookie rotation from a prior image's 401-recovery
             // Fresh reCAPTCHA token for each API call
             const recaptchaToken = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
 
@@ -828,6 +837,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
                         // Delay to avoid reCAPTCHA rate limiting between gen and upscale on same profile.
                         await new Promise(r => setTimeout(r, 5000));
                         // No inner lock: outer withFlowLock in execute() already serializes per-account.
+                        syncAuth(); // pick up any rotation from the generate phase
                         const upscaleRecaptcha = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
                         const upscaleResult = await this._upscaleImage(token, projectId, r.mediaId, resolution, upscaleRecaptcha, instanceId, sessionCookies);
                         await clearRecaptchaToken(upscaleRecaptcha);
@@ -1271,7 +1281,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
         // Poll until video generation is 100% complete
         console.log(`[FlowVideo] Starting polling for completion...`);
-        const pollResult = await this._pollVideoOperation(token, projectId, operationName, mediaId, workflowId);
+        const pollResult = await this._pollVideoOperation(token, projectId, operationName, mediaId, workflowId, instanceId);
 
         console.log(`[FlowVideo] ✅ Video generation complete!`);
 
@@ -1601,7 +1611,7 @@ export class GoogleFlowVideoConnector extends BaseConnector {
      * Body: {"media":[{"name":"<mediaId>","projectId":"<projectId>"}]}
      * This is exactly what the Google Flow UI polls every ~10s.
      */
-    async _pollVideoOperation(token, projectId, operationName, mediaId, workflowId, maxAttempts = 120) {
+    async _pollVideoOperation(token, projectId, operationName, mediaId, workflowId, instanceId = 'default', maxAttempts = 120) {
         const POLL_URL = `${API_BASE}/v1/video:batchCheckAsyncVideoGenerationStatus`;
         const pollBody = JSON.stringify({
             media: [{ name: mediaId, projectId }],
@@ -1613,6 +1623,11 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         // Veo render typically takes 30-60s; start polling at 8s to catch the early-finish case.
         await new Promise(r => setTimeout(r, 8000));
 
+        // #3c guard: once a poll-time 401 refresh comes back unrecoverable (dead session),
+        // stop re-firing the expensive slow Firefox reload on every remaining iteration —
+        // just degrade to cheap retry+timeout. A SUCCESSFUL refresh leaves this false, so a
+        // later (rare) expiry in the same poll can still self-heal.
+        let pollAuthDead = false;
         for (let i = 0; i < maxAttempts; i++) {
             try {
                 const res = await fetch(POLL_URL, {
@@ -1641,7 +1656,21 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                     });
 
                     if (!resWithAuth.ok) {
-                        if (i % 4 === 0) {
+                        if (resWithAuth.status === 401 && !pollAuthDead) {
+                            // #3c: bearer expired mid-poll (a long Veo render outlasted the ~1h
+                            // token). Force-refresh (fast→slow, single-flighted) and keep polling
+                            // with the new bearer instead of silently timing out after 120 tries.
+                            const auth = await forceRefreshAuth(instanceId, token);
+                            if (auth) {
+                                token = auth.token;
+                                console.warn(`[FlowVideo] Poll ${i + 1}: 401 → bearer refreshed, continuing`);
+                            } else {
+                                // Unrecoverable (dead session) — stop re-firing the slow refresh
+                                // for the rest of this poll; degrade to cheap retry until timeout.
+                                pollAuthDead = true;
+                                console.warn(`[FlowVideo] Poll ${i + 1}: 401 + refresh failed (dead session) — no more refresh attempts this poll`);
+                            }
+                        } else if (i % 4 === 0) {
                             console.log(`[FlowVideo] Poll ${i + 1}: status=${res.status}/${resWithAuth.status}`);
                         }
                         await new Promise(r => setTimeout(r, 10000));

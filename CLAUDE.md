@@ -107,7 +107,7 @@ The standalone stdio MCP server on the user's **Mac** (NOT on the VPS). Stdio tr
 
 ## Deployment
 
-**Production VPS** — migrated 2026-06-01 from GCP x86_64 to an **Oracle Cloud Ampere A1 ARM64** instance (the old GCP box `instance-template-20260309-…` may still exist briefly as rollback; decommission per `HANDOFF-NEW-SESSION.md`). Details + full migration story: memory `system-thhflow-vps` + `migration-arm-camoufox-progress`.
+**Production VPS** — migrated 2026-06-01 from GCP x86_64 to an **Oracle Cloud Ampere A1 ARM64** instance (the old GCP box `instance-template-20260309-…` was decommissioned 2026-06-01 — snapshot `vcw-old-final` retained). Details + full migration story: memory `system-thhflow-vps` + `migration-arm-camoufox-progress`.
 - Public IP: `149.118.130.165` · Arch: **aarch64** (Ubuntu 24.04) · Domain: `thhflow.com` (matbao registrar, A→IP)
 - App dir: `/opt/vcw/app` · System user: `truonghoanghuy` · nginx 443 (Sectigo cert `/etc/ssl/thhflow`, valid 2027-03) + Xvfb `:99`
 - **Broker = `invisible_playwright` x86_64 stealth Firefox running under FEX-Emu** (binfmt x86_64 auto-emulation on ARM), systemd `vcw-flow-broker` (`venv-x86`, `DISPLAY=:99`, `HOME=/home/truonghoanghuy`, `BROKER_BROWSER_ENGINE=invisible`). FEX rootfs `~truonghoanghuy/.local/share/fex-emu/RootFS/Ubuntu_24_04`; Firefox cache `~/.cache/invisible-playwright/firefox-7` (placed manually — invisible's `fetch` aborts on aarch64).

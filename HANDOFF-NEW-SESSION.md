@@ -9,7 +9,7 @@
 - **Broker:** `python-broker` runs **invisible_playwright (x86_64 stealth Firefox) under FEX‑Emu** (binfmt auto-emulation on aarch64), `engine=invisible`, systemd unit `vcw-flow-broker` (`venv-x86`, `DISPLAY=:99`, `HOME=/home/truonghoanghuy`). Camoufox was tried and **fails reCAPTCHA Enterprise** (grecaptcha never initializes) — do not use it. FEX runs the *proven* engine.
 - **Self-heal:** broker recovers from FEX node-driver pipe drops (`mint_token`/`flow_fetch` detect a dead browser → teardown + relaunch + retry; `_is_dead_browser_error`/`_is_alive` in `session_pool.py`).
 - **Code:** branch `migrate/camoufox-arm` **merged to `main`** (HEAD `60a6ad6`); box tracks `main`; CI (`deploy.yml`) restarts the broker on `python-broker/` changes and works against the new box (`VPS_HOST` updated; `VPS_USER`/`VPS_SSH_KEY` unchanged — the `github-actions-deploy` pubkey was added to the box).
-- **Old GCP VPS** (`instance-template-20260309-20260309-113128-a`, `34.21.142.187`) is **still running, untouched, as rollback** — NOT yet deleted.
+- **Old GCP VPS** (`instance-template-20260309-20260309-113128-a`, `34.21.142.187`) was **DELETED 2026-06-01** (TASK 1 done). Archival snapshot **`vcw-old-final`** (20GB) retained in the GCP project for recovery; dead rollback artifacts on the new box (camoufox unit `.bak`, `/opt/fex-spike`) removed; `dev.db.pre-cutover` kept deliberately.
 - **Rollback safety on new box:** `/opt/vcw/app/server/prisma/dev.db.pre-cutover`; old broker unit `vcw-flow-broker.service.camoufox.bak`.
 - **FEX spike scratch:** `/opt/fex-spike` (~455M) on the box can be deleted.
 
@@ -17,7 +17,9 @@ Full migration narrative: see memory `migration-arm-camoufox-progress` (+ `syste
 
 ---
 
-## TASK 1 — Delete the old GCP VPS
+## TASK 1 — Delete the old GCP VPS — ✅ DONE (2026-06-01)
+
+Done: pre-checks green (DNS→new box, https 200, all-day production stability), archival snapshot `vcw-old-final` created, instance deleted, new-box rollback artifacts cleaned. The checklist below is kept as the historical record.
 
 Pre-delete checklist (verify the new box has been solid for ~24h first):
 1. `dig +short thhflow.com` → `149.118.130.165` (DNS fully propagated; matbao registrar, TTL 120).
