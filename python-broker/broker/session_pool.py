@@ -74,6 +74,26 @@ def _make_browser_cm(persistent: bool) -> Any:
     return InvisiblePlaywright(profile_dir=PROFILE_DIR) if persistent else InvisiblePlaywright()
 
 
+def _is_dead_browser_error(e: Exception) -> bool:
+    """True when the error means the browser/driver connection is gone (not a
+    page-level glitch). These are unrecoverable in-place — the only fix is a
+    full teardown + relaunch. Seen under FEX emulation when the playwright node
+    driver drops its pipe mid-session ("Connection closed while reading from the
+    driver" / "WriteUnixTransport closed ... handler is closed"), and on abrupt
+    Firefox death ("Target page, context or browser has been closed").
+    """
+    s = str(e)
+    return any(m in s for m in (
+        "Connection closed while reading from the driver",
+        "handler is closed",
+        "Transport closed",
+        "Target page, context or browser has been closed",
+        "Target closed",
+        "Browser closed",
+        "has been closed",
+    ))
+
+
 class SigninRedirectError(RuntimeError):
     """Raised when the Flow page redirects to Google signin — DB cookies are stale."""
 
@@ -109,6 +129,18 @@ class Session:
         self._login_page: Optional[Any] = None  # holds page during _run_login for failure debug
         self._context_opened_at: float = 0.0  # monotonic time of last _open_context completion
 
+    def _is_alive(self) -> bool:
+        """Best-effort liveness of the live browser/driver. Returns False when the
+        driver pipe dropped or the page died, so ensure_ready relaunches instead
+        of handing back a dead page (the FEX node-driver-drop failure mode)."""
+        try:
+            if self.browser is not None:
+                return self.browser.is_connected()  # ephemeral: Browser handle
+            # persistent: no Browser handle — fall back to page liveness
+            return self.page is not None and not self.page.is_closed()
+        except Exception:
+            return False
+
     async def ensure_ready(self) -> None:
         """Lazy launch browser + initial context. Caller MUST hold self.lock.
 
@@ -120,7 +152,7 @@ class Session:
         """
         if self._closed:
             raise RuntimeError(f"session {self.account_id} is closed")
-        if self.ready and self.browser and self.context and self.page:
+        if self.ready and self.browser and self.context and self.page and self._is_alive():
             return
 
         # Drop any orphan from a previous failed attempt before starting fresh.
@@ -422,22 +454,54 @@ class Session:
         it's later accepted by the backend.
         """
         async with self.lock:
-            await self.ensure_ready()
-            await self._rotate_if_needed()
-            token = await self._mint_with_settle(action)
-            self.request_count += 1
-            self.last_used = time.monotonic()
-            self._restart_idle_timer()
-            return token, self.request_count
+            for attempt in range(2):
+                try:
+                    await self.ensure_ready()
+                    await self._rotate_if_needed()
+                    token = await self._mint_with_settle(action)
+                    self.request_count += 1
+                    self.last_used = time.monotonic()
+                    self._restart_idle_timer()
+                    return token, self.request_count
+                except Exception as e:
+                    if attempt == 0 and _is_dead_browser_error(e):
+                        logger.warning(
+                            f"[{self.account_id}] browser/driver died during mint "
+                            f"({str(e).splitlines()[0]}); tearing down + relaunching"
+                        )
+                        await self._teardown_invisible(reason="dead-browser recovery (mint)")
+                        self.ready = False
+                        continue
+                    raise
+            raise RuntimeError("unreachable")  # loop returns or raises above
 
     async def flow_fetch(self, url: str, bearer: str, body: dict) -> dict:
-        """Browser-side API fetch — see broker.flow.flow_fetch_in_page."""
+        """Browser-side API fetch — see broker.flow.flow_fetch_in_page.
+
+        Self-heals a dead browser/driver (FEX node-driver pipe drop, abrupt
+        Firefox death): tears down + relaunches + retries once. The retry pays a
+        cold-launch (~30s under FEX) but the alternative is every subsequent call
+        failing on a stale closed page until idle-close (the 2026-06-01 video bug).
+        """
         async with self.lock:
-            await self.ensure_ready()
-            result = await flow_fetch_in_page(self.page, url, bearer, body)
-            self.last_used = time.monotonic()
-            self._restart_idle_timer()
-            return result
+            for attempt in range(2):
+                try:
+                    await self.ensure_ready()
+                    result = await flow_fetch_in_page(self.page, url, bearer, body)
+                    self.last_used = time.monotonic()
+                    self._restart_idle_timer()
+                    return result
+                except Exception as e:
+                    if attempt == 0 and _is_dead_browser_error(e):
+                        logger.warning(
+                            f"[{self.account_id}] browser/driver died during flow_fetch "
+                            f"({str(e).splitlines()[0]}); tearing down + relaunching"
+                        )
+                        await self._teardown_invisible(reason="dead-browser recovery (flow_fetch)")
+                        self.ready = False
+                        continue
+                    raise
+            raise RuntimeError("unreachable")  # loop returns or raises above
 
     async def reload(self) -> None:
         """Reload the Flow page — for sticky-failure recovery on the same context.
