@@ -1,5 +1,5 @@
 [Unit]
-Description=VCW Google Flow Python Broker (Camoufox / aarch64)
+Description=VCW Google Flow Python Broker (invisible_playwright x86_64 via FEX-Emu)
 After=network.target xvfb.service
 Wants=xvfb.service
 
@@ -13,18 +13,19 @@ WorkingDirectory=/opt/vcw/app/python-broker
 EnvironmentFile=-/opt/vcw/app/python-broker/broker.env
 # Headful Firefox renders on the external Xvfb display (xvfb.service, :99).
 Environment=DISPLAY=:99
-# Select the aarch64 stealth engine. HOME is set explicitly so the Camoufox
-# binary + GeoIP cache resolve under ~truonghoanghuy/.cache/camoufox even if
-# systemd does not propagate the user's HOME.
-Environment=BROKER_BROWSER_ENGINE=camoufox
+# PROVEN engine: invisible_playwright (x86_64 stealth Firefox) running under
+# FEX-Emu on this aarch64 box. Camoufox was tried and FAILS reCAPTCHA on Flow
+# (grecaptcha never initializes) — DO NOT switch to camoufox here. HOME is set
+# explicitly so the FEX rootfs + Firefox cache resolve under ~truonghoanghuy.
+Environment=BROKER_BROWSER_ENGINE=invisible
 Environment=HOME=/home/truonghoanghuy
-ExecStart=/opt/vcw/app/python-broker/venv/bin/python -m broker
+ExecStart=/opt/vcw/app/python-broker/venv-x86/bin/python3 -m broker
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:/opt/vcw/logs/broker.log
 StandardError=append:/opt/vcw/logs/broker-error.log
 
-# Resource guard — Camoufox (Firefox + content procs + uBO) can balloon.
+# Resource guard — Firefox under FEX (parent + content procs) can balloon.
 # Box has 23G RAM + 4G swap, so headroom above the old 2G ceiling is safe.
 MemoryHigh=2G
 MemoryMax=3G
