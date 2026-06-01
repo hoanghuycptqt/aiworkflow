@@ -241,8 +241,16 @@ export async function startBot() {
         console.error('[Telegram] Failed to start bot:', err.message);
     }
 
-    // Graceful shutdown
-    const shutdown = () => bot.stop('SIGTERM');
+    // Graceful shutdown. In webhook mode bot.launch() is never called, so bot.stop()
+    // throws "Bot is not running!" — harmless on shutdown; swallow it (it was the
+    // recurring noise in server-error.log on every PM2 restart).
+    const shutdown = () => {
+        try {
+            bot.stop('SIGTERM');
+        } catch (e) {
+            // bot wasn't polling (webhook mode) — nothing to stop.
+        }
+    };
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);
 }
