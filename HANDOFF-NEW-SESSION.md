@@ -13,7 +13,7 @@
 - **Rollback safety on new box:** `/opt/vcw/app/server/prisma/dev.db.pre-cutover`; old broker unit `vcw-flow-broker.service.camoufox.bak`.
 - **FEX spike scratch:** `/opt/fex-spike` (~455M) on the box can be deleted.
 
-Full migration narrative: see memory `migration-arm-camoufox-progress` and `MIGRATION-ARM-CAMOUFOX.md`.
+Full migration narrative: see memory `migration-arm-camoufox-progress` (+ `system-thhflow-vps` / `system-mcp-server-mac`).
 
 ---
 
