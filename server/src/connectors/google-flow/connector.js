@@ -27,6 +27,14 @@ import { flowBroker, BrokerError } from './broker-client.js';
 const API_BASE = 'https://aisandbox-pa.googleapis.com';
 const TOOL = 'PINHOLE';
 
+// Per-account single-flight guard for token refresh — instanceId -> in-flight Promise.
+// When a JobBatch runs N executions in parallel on ONE Google account, only the first
+// runs the real refresh; the rest await the SAME promise and apply its result to their
+// own credentials. Critical BEFORE the slow Firefox-at-profile path (#3): without it,
+// N concurrent standalone-Firefox launches would hit one profile dir and kill each
+// other (profile_reload's _pkill_profile_firefox) mid-NextAuth-refresh.
+const _refreshInFlight = new Map();
+
 /**
  * Check if Google Flow token is expired or near expiry (< 5 min).
  * If so, call the session API to get a fresh token and update DB.
@@ -63,19 +71,51 @@ async function ensureFreshToken(credentials) {
 
     if (!needsRefresh) return credentials;
 
+    // Per-account single-flight: if a refresh for this account is already running,
+    // await it instead of starting a second one. Keyed by instanceId (= profile dir).
+    const instanceId = getAccountInstanceId(credentials);
+    let refreshPromise = _refreshInFlight.get(instanceId);
+    if (refreshPromise) {
+        console.log(`[GoogleFlow:${instanceId.substring(0, 8)}] Refresh already in-flight — awaiting shared refresh`);
+    } else {
+        refreshPromise = _performTokenRefresh(credentials, instanceId)
+            .finally(() => { _refreshInFlight.delete(instanceId); });
+        _refreshInFlight.set(instanceId, refreshPromise);
+    }
+
+    const result = await refreshPromise;
+    // Dead session or failed refresh → keep existing creds untouched (the in-flight
+    // refresh already logged + left the DB row alone). On success apply the fresh
+    // token+meta to THIS credentials object — token/meta are account-level and
+    // identical across siblings, so the leader's result is correct for every caller.
+    if (!result) return credentials;
+    return { ...credentials, token: result.token, metadata: result.metadata };
+}
+
+/**
+ * Run the actual token refresh ONCE per account (guarded by _refreshInFlight, so a
+ * parallel JobBatch on one account doesn't fire N concurrent /session calls — and,
+ * once the slow Firefox-at-profile path is wired in (#3), N concurrent standalone
+ * Firefox launches against ONE profile dir, which would kill each other mid-refresh).
+ * Returns { token, metadata } on success, or null on a dead session / failure.
+ * Never throws.
+ */
+async function _performTokenRefresh(credentials, instanceId) {
+    const meta = credentials.metadata || {};
+    const tag = `[GoogleFlow:${instanceId.substring(0, 8)}]`;
     try {
-        // Use the canonical session-API client (flow-session.getAccessToken),
-        // which classifies the ACCESS_TOKEN_REFRESH_NEEDED ground-truth dead-session
-        // signal and THROWS instead of returning the stale-but-present token NextAuth
-        // still ships (its `expires` is frozen in the past). Mirrors the Mac
-        // mcp-server reference (token-refresh.js:166) and avoids the ae23052/120d17b
-        // loop where a dead-but-200 /session response was written to the DB as fresh.
+        // Use the canonical session-API client (flow-session.getAccessToken), which
+        // classifies the ACCESS_TOKEN_REFRESH_NEEDED ground-truth dead-session signal
+        // and THROWS instead of returning the stale-but-present token NextAuth still
+        // ships (its `expires` is frozen in the past). Mirrors the Mac mcp-server
+        // reference (token-refresh.js:166) and avoids the ae23052/120d17b loop where a
+        // dead-but-200 /session response was written to the DB as fresh.
         const tokenData = await getAccessToken(meta.sessionCookies);
 
         const newToken = tokenData.accessToken;
         const expiresAt = tokenData.expiresAt;
 
-        console.log('[GoogleFlow] ✅ Auto-refreshed token!', newToken.substring(0, 30) + '...');
+        console.log(`${tag} ✅ Auto-refreshed token!`, newToken.substring(0, 30) + '...');
         console.log('[GoogleFlow] New expiry:', expiresAt);
 
         // Update DB
@@ -98,26 +138,21 @@ async function ensureFreshToken(credentials) {
         // Sync to sibling credentials sharing the same Google account
         await syncSiblingCredentials(credentials.id, newToken, newMeta);
 
-        // Return updated credentials
-        return {
-            ...credentials,
-            token: newToken,
-            metadata: newMeta,
-        };
+        return { token: newToken, metadata: newMeta };
 
     } catch (e) {
         // Dead-session ground truth: do NOT overwrite the DB with a stale token and
         // do NOT reset lastRefreshed — that would mask the death and make the next
-        // execute() believe it just refreshed. Keep the existing creds untouched;
-        // recovery is the job of the hot-path 401 handler / harvester slow-path
-        // (the next ports). Without this, a dead-but-200 /session was persisted as
-        // fresh, which is exactly the infinite-loop bug ae23052 introduced.
+        // execute() believe it just refreshed. Return null so the caller keeps its
+        // existing creds; recovery is the job of the hot-path 401 handler / harvester
+        // slow-path (#3). Without this, a dead-but-200 /session was persisted as fresh,
+        // which is exactly the infinite-loop bug ae23052 introduced.
         if (e.message && e.message.includes('ACCESS_TOKEN_REFRESH_NEEDED')) {
-            console.warn('[GoogleFlow] ⚠️ Session DEAD (ACCESS_TOKEN_REFRESH_NEEDED) — keeping existing token, NOT overwriting; needs slow-refresh / re-login.');
+            console.warn(`${tag} ⚠️ Session DEAD (ACCESS_TOKEN_REFRESH_NEEDED) — keeping existing token, NOT overwriting; needs slow-refresh / re-login.`);
         } else {
             console.warn('[GoogleFlow] Auto-refresh failed:', e.message, '— using existing token');
         }
-        return credentials;
+        return null;
     }
 }
 
