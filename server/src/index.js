@@ -141,19 +141,11 @@ httpServer.listen(PORT, async () => {
     console.error('[Telegram] Failed to start bot:', err.message);
   }
 
-  // Start Cookie Harvester cron (auto-refresh Google Flow cookies)
-  if (process.env.DISABLE_COOKIE_HARVESTER === 'true') {
-    console.log('[CookieHarvester] Cron is disabled via DISABLE_COOKIE_HARVESTER env var.');
-  } else {
-    try {
-      const profileDir = `${uploadDir}/.google-profiles`;
-      await mkdir(profileDir, { recursive: true });
-      const { startHarvestCron } = await import('./services/cookie-harvester.js');
-      startHarvestCron();
-    } catch (err) {
-      console.error('[CookieHarvester] Failed to start:', err.message);
-    }
-  }
+  // Cookie Harvester cron REMOVED — the Google Flow connector now self-heals token/cookie
+  // expiry inline: fast /session → slow Firefox-at-profile reload (#3) + mid-run 401
+  // recovery (#3b), so the ~20h NextAuth rollover no longer needs a scheduled refresh.
+  // Full re-login (Telegram-2FA number relay) stays on-demand via the bot
+  // (loginGoogleFlow / harvestForSpecificUser in telegram-ai.js).
 });
 
 // Graceful shutdown

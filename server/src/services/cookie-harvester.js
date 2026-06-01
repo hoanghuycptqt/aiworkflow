@@ -1,21 +1,15 @@
 /**
- * Cookie Harvester — Smart per-Google-account cron service
+ * Cookie Harvester — on-demand Google Flow cookie/token refresh + re-login helpers.
  *
- * Groups users by Google account email — only 1 Chrome per account.
- * After refresh, syncs cookies/token to all sibling credentials.
+ * The periodic CRON was REMOVED (2026-06): the Google Flow connector self-heals expiry
+ * inline (fast /session → slow Firefox-at-profile reload + mid-run 401 recovery), so a
+ * scheduled refresh is redundant. What remains here is the on-demand path used by the
+ * Telegram bot (telegram-ai.js → harvestForSpecificUser) plus the slow/profile-recovery +
+ * Telegram-2FA re-login orchestration (harvestForUser → loginGoogleFlow) for the ~2-month
+ * case when the persistent-profile JWT itself dies and a full re-login is required.
  *
- * Two layers of protection:
- *   Layer 1: Per-account setTimeout at tokenExpiresAt + 1 min
- *   Layer 2: Before opening Chrome, check DB — skip if cookie still valid
- *
- * Flow per Google account:
- *   1. Check DB: if cookie not expired yet → skip (no Chrome)
- *   2. Launch Chrome with primary user's persistent profile
- *   3. Navigate to Google Flow → get fresh cookies
- *   4. Call session API → get access_token
- *   5. Save cookies + token to DB
- *   6. Sync to all sibling credentials (same Google account)
- *   7. Schedule next refresh at new tokenExpiresAt + 1 min
+ * harvestForUser escalation: fast /session → broker reload-via-firefox → profile-recovery
+ * → Telegram-2FA number-relay login. Syncs to all sibling credentials after success.
  */
 
 import { prisma } from '../index.js';
@@ -25,13 +19,7 @@ import { syncSiblingCredentials } from './credential-sync.js';
 import { flowBroker, BrokerError } from '../connectors/google-flow/broker-client.js';
 import { getAccountInstanceId } from '../connectors/google-flow/connector.js';
 
-const REFRESH_DELAY_MS = 60 * 1000; // 1 min after expiry
-const USER_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max per user
-const FALLBACK_INTERVAL_MS = 18 * 60 * 60 * 1000; // 18h fallback if no expiry info
-
-// Per-user timers: Map<userId, timerId>
-const userTimers = new Map();
-let cronStarted = false;
+const USER_TIMEOUT_MS = 5 * 60 * 1000; // 5 min max per on-demand refresh / re-login
 
 /**
  * Get the Telegram chat ID for a user.
@@ -492,156 +480,4 @@ export async function harvestForSpecificUser(userId) {
     }
 
     return harvestForUser(userId, googleAccount.id);
-}
-
-/**
- * Get tokenExpiresAt for a specific user.
- */
-async function getUserExpiry(userId) {
-    const cred = await prisma.credential.findFirst({
-        where: { userId, provider: 'google-flow' },
-        select: { metadata: true },
-    });
-    if (!cred) return null;
-    try {
-        const meta = JSON.parse(cred.metadata || '{}');
-        return meta.tokenExpiresAt ? new Date(meta.tokenExpiresAt) : null;
-    } catch { return null; }
-}
-
-/**
- * Schedule refresh for a single user.
- * Layer 1: setTimeout at tokenExpiresAt + 1 min
- * Layer 2: before refresh, isCookieExpired() check
- */
-async function scheduleForUser(userId, googleAccountCredentialId) {
-    // Clear existing timer for this user
-    if (userTimers.has(userId)) {
-        clearTimeout(userTimers.get(userId));
-        userTimers.delete(userId);
-    }
-
-    const expiry = await getUserExpiry(userId);
-    const now = Date.now();
-
-    let delayMs;
-    let reason;
-
-    if (!expiry) {
-        delayMs = FALLBACK_INTERVAL_MS;
-        reason = `no expiry info → fallback ${FALLBACK_INTERVAL_MS / 3600000}h`;
-    } else if (expiry.getTime() <= now) {
-        delayMs = 10 * 1000; // 10s for startup stabilization
-        const agoMin = Math.round((now - expiry.getTime()) / 60000);
-        reason = `expired ${agoMin}m ago → refreshing soon`;
-    } else {
-        delayMs = expiry.getTime() - now + REFRESH_DELAY_MS;
-        const inMin = Math.round(delayMs / 60000);
-        reason = `expires ${expiry.toISOString()} → refresh in ${inMin}m`;
-    }
-
-    const nextRun = new Date(now + delayMs);
-    console.log(`[CookieHarvester] ⏰ User ${userId.substring(0, 8)}: next refresh at ${nextRun.toISOString()} (${reason})`);
-
-    const timerId = setTimeout(async () => {
-        userTimers.delete(userId);
-        try {
-            // Layer 2: double-check if actually expired
-            const expired = await isCookieExpired(userId);
-            if (!expired) {
-                console.log(`[CookieHarvester] User ${userId.substring(0, 8)}: cookie renewed externally — rescheduling`);
-                await scheduleForUser(userId, googleAccountCredentialId);
-                return;
-            }
-
-            // Actually refresh
-            console.log(`[CookieHarvester] ═══ Harvesting user ${userId.substring(0, 8)} ═══`);
-            await harvestForUser(userId, googleAccountCredentialId);
-        } catch (e) {
-            console.error(`[CookieHarvester] Harvest error for ${userId.substring(0, 8)}: ${e.message}`);
-        }
-
-        // Reschedule for next expiry
-        await scheduleForUser(userId, googleAccountCredentialId);
-    }, delayMs);
-
-    userTimers.set(userId, timerId);
-}
-
-/**
- * Start the smart per-Google-account cron.
- * Groups users by Google account email — only 1 timer per account.
- * After refresh, syncs to all sibling credentials automatically.
- */
-export async function startHarvestCron() {
-    if (process.env.DISABLE_COOKIE_HARVESTER === 'true') {
-        console.log('[CookieHarvester] 🕐 Cron is disabled via DISABLE_COOKIE_HARVESTER env var');
-        return;
-    }
-
-    if (cronStarted) {
-        console.log('[CookieHarvester] Cron already started');
-        return;
-    }
-
-    cronStarted = true;
-    console.log('[CookieHarvester] 🕐 Smart per-Google-account cron started');
-
-    try {
-        const googleAccounts = await prisma.credential.findMany({
-            where: { provider: 'google-account' },
-            select: { id: true, userId: true, metadata: true },
-        });
-
-        if (googleAccounts.length === 0) {
-            console.log('[CookieHarvester] No google-account credentials. Will check again in 18h.');
-            setTimeout(() => {
-                cronStarted = false;
-                startHarvestCron();
-            }, FALLBACK_INTERVAL_MS);
-            return;
-        }
-
-        // Group by Google account email — 1 timer per account, not per user
-        const accountGroups = new Map(); // email → { primaryUserId, credentialId, allUserIds }
-        for (const account of googleAccounts) {
-            let email = 'unknown';
-            try {
-                const meta = JSON.parse(account.metadata || '{}');
-                email = meta.email?.toLowerCase() || 'unknown';
-            } catch { /* use unknown */ }
-
-            if (!accountGroups.has(email)) {
-                accountGroups.set(email, {
-                    primaryUserId: account.userId,
-                    credentialId: account.id,
-                    allUserIds: [account.userId],
-                });
-            } else {
-                accountGroups.get(email).allUserIds.push(account.userId);
-            }
-        }
-
-        console.log(`[CookieHarvester] Found ${accountGroups.size} Google account(s) across ${googleAccounts.length} user(s)`);
-
-        for (const [email, group] of accountGroups) {
-            console.log(`[CookieHarvester] 📧 ${email}: primary=${group.primaryUserId.substring(0, 8)}, ${group.allUserIds.length} user(s)`);
-            // Schedule ONLY for primary user — syncSiblingCredentials handles the rest
-            await scheduleForUser(group.primaryUserId, group.credentialId);
-        }
-    } catch (e) {
-        console.error('[CookieHarvester] Startup error:', e.message);
-    }
-}
-
-/**
- * Stop all user timers.
- */
-export function stopHarvestCron() {
-    for (const [userId, timerId] of userTimers) {
-        clearTimeout(timerId);
-    }
-    userTimers.clear();
-    cronStarted = false;
-    console.log('[CookieHarvester] All user timers stopped');
 }

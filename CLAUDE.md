@@ -12,7 +12,7 @@ The Google Flow connector's design constraints are load-bearing — there's a hi
 
 This is a multi-package repo with three Node services and no monorepo tool:
 
-- `server/` — Express + Prisma (SQLite) + Socket.IO API. Workflow engine, job runner, connectors, Telegram bot, Google login agent, Cookie Harvester cron. ESM (`"type": "module"`).
+- `server/` — Express + Prisma (SQLite) + Socket.IO API. Workflow engine, job runner, connectors, Telegram bot, Google login agent, on-demand cookie/re-login helpers (Cookie Harvester cron removed — connector self-heals inline). ESM (`"type": "module"`).
 - `client/` — React 19 + Vite 7 + React Router 7 + `@xyflow/react` (React Flow) + `socket.io-client`. SPA served as static files via nginx in prod.
 - `mcp-server/` — Standalone MCP server exposing Google Flow generation/upscale as tools over stdio. Has its own Prisma schema; reads credentials from the shared SQLite DB.
 - `nginx/`, `scripts/`, `ecosystem.config.cjs` — VPS deployment artifacts.
@@ -78,7 +78,7 @@ reCAPTCHA Enterprise is defeated by a **stealth Firefox driven through the Pytho
 
 The SAME `python-broker` + `invisible_playwright` Firefox runs in two distinct systems — see memories `system-thhflow-vps` and `system-mcp-server-mac`, and `HANDOFF-NEW-SESSION.md`:
 
-1. **thhflow (production web platform)** — Oracle Ampere **ARM64 VPS** `149.118.130.165`. The x86_64 Firefox runs **under FEX-Emu** (binfmt), `engine=invisible`, systemd `vcw-flow-broker`. Auth driven by the Express server's connector + `cookie-harvester` (currently disabled). Camoufox was tried here and **fails reCAPTCHA** — invisible-under-FEX is the only working engine.
+1. **thhflow (production web platform)** — Oracle Ampere **ARM64 VPS** `149.118.130.165`. The x86_64 Firefox runs **under FEX-Emu** (binfmt), `engine=invisible`, systemd `vcw-flow-broker`. Auth driven by the Express server's connector (self-healing fast→slow refresh + mid-run 401 recovery, warm-forever broker); `cookie-harvester` is on-demand re-login only (cron removed). Camoufox was tried here and **fails reCAPTCHA** — invisible-under-FEX is the only working engine.
 2. **mcp-server** — the user's **Mac**, broker in Docker via **Rosetta 2**. Auth driven by `mcp-server/lib/*` (warm-forever browser, auto-refresh-on-401, slow Firefox-at-profile refresh) — the rock-solid reference whose robustness is being ported to the VPS.
 
 `browser-manager.js` (Puppeteer/Chrome) is legacy for the dead `google-login-agent.js` path; the live Flow connector uses the broker, not browser-manager. On Linux the broker's Firefox renders headful on Xvfb `:99` (`headless:false` is required; never true-headless for Flow).
@@ -89,9 +89,11 @@ The SAME `python-broker` + `invisible_playwright` Firefox runs in two distinct s
 - Socket.IO authenticates via `socket.handshake.auth.token`, joins `user:<userId>` automatically, and clients can join `execution:<id>` / `batch:<id>` rooms for live progress.
 - The Telegram webhook route (`POST /api/telegram/webhook`) is mounted **before** `authMiddleware` — Telegram POSTs directly with no auth. Don't move it under the protected mount.
 
-### Cookie Harvester ([server/src/services/cookie-harvester.js](server/src/services/cookie-harvester.js)) — thhflow VPS only
+### Self-healing Flow auth + on-demand re-login ([connector.js](server/src/connectors/google-flow/connector.js) + [cookie-harvester.js](server/src/services/cookie-harvester.js)) — thhflow VPS only
 
-Per-account cron (started from `server/src/index.js`) that refreshes Google Flow cookies/tokens and stores them in the `Credential` table (`provider='google-flow'`, in `metadata.sessionCookies` + `token`). Two-tier: fast `/fx/api/auth/session` (~1h access_token) → slow `/reload-via-firefox` (standalone Firefox at `BROKER_PROFILE_BASE/<accountId>`, ~20h NextAuth maxAge). **Currently DISABLED** via `DISABLE_COOKIE_HARVESTER=true` (so in steady state the bearer is kept fresh only by the connector's per-execute `ensureFreshToken`) — re-enabling + wiring its slow path into the hot request path is the main robustness port (see `HANDOFF-NEW-SESSION.md`). This is the VPS's own credential store — the Mac mcp-server does NOT read these DB rows (it has its own `.env`).
+The Flow connector keeps its own credential store in the `Credential` table (`provider='google-flow'`, `metadata.sessionCookies` + `token`) and **self-heals expiry INLINE** in `ensureFreshToken`/`_performTokenRefresh` (per `execute()`, single-flighted per account via `_refreshInFlight`): FAST `/fx/api/auth/session` (~1h access_token) → on the `ACCESS_TOKEN_REFRESH_NEEDED` ground-truth dead signal, SLOW broker `/reload-via-firefox` (standalone Firefox at `BROKER_PROFILE_BASE/<accountId>`) rotates the ~20h NextAuth session-token → re-validate → persist (cookies+bearer). A mid-run 401 from a generate/submit/upscale call force-refreshes (fast→slow, `forceRefreshAuth`) and retries in-loop. So the ~20h rollover is recovered with **no cron and no 2FA**. The broker runs warm-forever (`BROKER_IDLE_TIMEOUT_S=0`) to avoid cold-launch trust-score 403s.
+
+The periodic **Cookie Harvester cron was REMOVED** (2026-06; superseded by the inline self-heal — `DISABLE_COOKIE_HARVESTER` is gone). `cookie-harvester.js` remains for the ON-DEMAND path only: the Telegram bot (`telegram-ai.js → harvestForSpecificUser`) and the full **Telegram-2FA number-relay re-login** (`harvestForUser → loginGoogleFlow`) for the ~2-month case when the persistent-profile JWT itself dies and a real re-login is needed (NOT a passkey — it's the "tap the number" 2-Step Verification, relayed to the user's phone via Telegram). The Mac mcp-server does NOT read these DB rows (it has its own `.env`).
 
 ### MCP Server ([mcp-server/](mcp-server/)) — the Mac system (separate from thhflow VPS)
 
