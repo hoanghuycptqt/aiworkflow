@@ -66,22 +66,22 @@ To add a node type: create `connectors/<name>/connector.js` extending `BaseConne
 
 ### Google Flow connector — read this before touching it
 
-[server/src/connectors/google-flow/connector.js](server/src/connectors/google-flow/connector.js) uses Puppeteer-controlled native Chrome to defeat reCAPTCHA. The current behavior is the product of multiple production incidents (commits `acc3a26`, `6f03021`). Do NOT change any of the following without consulting `git log -- server/src/connectors/google-flow/connector.js`:
+reCAPTCHA Enterprise is defeated by a **stealth Firefox driven through the Python broker** ([python-broker/](python-broker/)) — NOT Chrome/Puppeteer anymore (the old Chrome path in commits `acc3a26`/`6f03021` is history; the engine moved to `invisible_playwright` on 2026-05-21, see memory `google-flow-broker-live`). [server/src/connectors/google-flow/connector.js](server/src/connectors/google-flow/connector.js) is now a thin Node client: it gets the bearer from `/fx/api/auth/session`, asks the broker to mint a reCAPTCHA token, and does the generation fetch **inside the broker's warm Firefox page** (`flow-fetch`). The broker ([python-broker/broker/session_pool.py](python-broker/broker/session_pool.py)) owns the browser. Load-bearing invariants — do NOT change without reading `git log` + memory `recaptcha-incident-history`:
 
-- **Persistent Chrome profiles** in `uploads/.google-profiles/` kept warm via a `_chromePool` (10-min idle timeout) to accumulate reCAPTCHA trust score. Do not switch to ephemeral profiles.
-- **Self-heal on launch**: `SingletonLock`/`SingletonSocket`/`SingletonCookie` are deleted before every launch — Chrome leaves these behind on crash and silently fails to start next time.
-- **Cookie domain integrity**: `setCookie` is only called when the profile has no existing cookies on disk; otherwise the saved `.google.com` cookies are preserved. Setting them under `labs.google` tanks the trust score.
-- **Session recovery**: redirect to a login page triggers a cookie wipe + reload from the `CookieHarvester` DB.
-- **NEVER close Chrome on a 403 retry** (`6f03021` fix): the 403-retry path must reuse the warm browser and only fetch a fresh reCAPTCHA token. Closing Chrome destroys trust score and creates a self-reinforcing cold-launch loop (observed 78% fail rate on VPS). 10-min idle timeout is the ONLY mid-life close path.
+- **Warm browser, rotate the CONTEXT not the process**: one Firefox process per Google account stays alive; the context rotates at `ROTATION_THRESHOLD` (15) requests to stay under the stochastic ~20-25 reCAPTCHA cliff (Phase 0). Idle close is the only mid-life process teardown.
+- **NEVER close the browser on a 403 reCAPTCHA retry** (`6f03021`): reuse the warm browser, just mint a fresh token. Closing destroys trust score → self-reinforcing cold-launch loop (78% fail rate observed).
+- **Reload, never close, on a sticky/SDK glitch**: `_mint_with_settle` does an in-place `page.reload()` (≤3) when grecaptcha is missing (`broker-grecaptcha-mint-race`, `recaptcha-page-reload-recovery`).
+- **Cookie domain integrity**: cookies are seeded under BOTH `.google.com` AND `.labs.google`; on readback prefer the `.labs.google` copy (`cookies.stringify_cookies`) — the `.google.com` shadow can be a stale pre-rotation JWT (2026-05-24 10s-loop incident).
+- **Dead-browser self-heal** (ARM/FEX): `_is_dead_browser_error`/`_is_alive` + teardown+relaunch+retry in `mint_token`/`flow_fetch` recover from FEX node-driver pipe drops.
 
-### Browser Manager ([server/src/services/browser-manager.js](server/src/services/browser-manager.js))
+### Two deployments of the broker (keep them straight)
 
-Centralizes all Puppeteer launches. Two important details:
+The SAME `python-broker` + `invisible_playwright` Firefox runs in two distinct systems — see memories `system-thhflow-vps` and `system-mcp-server-mac`, and `HANDOFF-NEW-SESSION.md`:
 
-- Profiles live under `uploads/.cp/p<N>` (short paths) to stay under macOS's 104-byte Unix socket limit for Chrome's `SingletonSocket`.
-- On Linux without `$DISPLAY`, it auto-starts Xvfb on `:99` (1280×1024×24). The `headless: false` mode is required by Google Flow — never switch to true headless for that connector.
+1. **thhflow (production web platform)** — Oracle Ampere **ARM64 VPS** `149.118.130.165`. The x86_64 Firefox runs **under FEX-Emu** (binfmt), `engine=invisible`, systemd `vcw-flow-broker`. Auth driven by the Express server's connector + `cookie-harvester` (currently disabled). Camoufox was tried here and **fails reCAPTCHA** — invisible-under-FEX is the only working engine.
+2. **mcp-server** — the user's **Mac**, broker in Docker via **Rosetta 2**. Auth driven by `mcp-server/lib/*` (warm-forever browser, auto-refresh-on-401, slow Firefox-at-profile refresh) — the rock-solid reference whose robustness is being ported to the VPS.
 
-Two entry points: `acquireBrowser(key, opts)` for per-user keyed instances (close-and-relaunch semantics) and `launchTempBrowser(opts)` for one-off validators.
+`browser-manager.js` (Puppeteer/Chrome) is legacy for the dead `google-login-agent.js` path; the live Flow connector uses the broker, not browser-manager. On Linux the broker's Firefox renders headful on Xvfb `:99` (`headless:false` is required; never true-headless for Flow).
 
 ### Auth & Real-time
 
@@ -89,13 +89,13 @@ Two entry points: `acquireBrowser(key, opts)` for per-user keyed instances (clos
 - Socket.IO authenticates via `socket.handshake.auth.token`, joins `user:<userId>` automatically, and clients can join `execution:<id>` / `batch:<id>` rooms for live progress.
 - The Telegram webhook route (`POST /api/telegram/webhook`) is mounted **before** `authMiddleware` — Telegram POSTs directly with no auth. Don't move it under the protected mount.
 
-### Cookie Harvester ([server/src/services/cookie-harvester.js](server/src/services/cookie-harvester.js))
+### Cookie Harvester ([server/src/services/cookie-harvester.js](server/src/services/cookie-harvester.js)) — thhflow VPS only
 
-Cron started from `server/src/index.js` after listen. Refreshes Google Flow cookies/tokens on a schedule and stores them in the `Credential` table (`provider = 'google-flow'`). The MCP server reads the same rows.
+Per-account cron (started from `server/src/index.js`) that refreshes Google Flow cookies/tokens and stores them in the `Credential` table (`provider='google-flow'`, in `metadata.sessionCookies` + `token`). Two-tier: fast `/fx/api/auth/session` (~1h access_token) → slow `/reload-via-firefox` (standalone Firefox at `BROKER_PROFILE_BASE/<accountId>`, ~20h NextAuth maxAge). **Currently DISABLED** via `DISABLE_COOKIE_HARVESTER=true` (so in steady state the bearer is kept fresh only by the connector's per-execute `ensureFreshToken`) — re-enabling + wiring its slow path into the hot request path is the main robustness port (see `HANDOFF-NEW-SESSION.md`). This is the VPS's own credential store — the Mac mcp-server does NOT read these DB rows (it has its own `.env`).
 
-### MCP Server ([mcp-server/](mcp-server/))
+### MCP Server ([mcp-server/](mcp-server/)) — the Mac system (separate from thhflow VPS)
 
-Stdio transport — **all logs go to `console.error`**; `console.log` corrupts the MCP protocol. Tools: `list-credentials`, `generate-image`, `generate-video`, `upscale-image`, `upscale-video`. `lib/token-refresh.js` keeps Google Flow bearer tokens fresh; `lib/recaptcha.js` shares the same trust-score logic as the server connector.
+The standalone stdio MCP server on the user's **Mac** (NOT on the VPS). Stdio transport — **all logs go to `console.error`** (`console.log` corrupts the protocol; that's also why `lib/db.js` parses `.env` manually instead of dotenv). Tools: `list-credentials`, `generate-image`, `generate-video`, `upscale-image`, `upscale-video`. It keeps its OWN credentials in `mcp-server/.env` (`GOOGLE_FLOW_TOKEN`/`GOOGLE_FLOW_SESSION_COOKIES`), refreshed reactively on HTTP 401 by `lib/token-refresh.js` (fast `/session` → slow `lib/firefox-refresh.js` at the persistent profile). It drives the broker in **Docker via Rosetta 2**. This is the rock-solid reference being ported to the VPS — see memory `system-mcp-server-mac`.
 
 ### Frontend
 
@@ -105,27 +105,26 @@ Stdio transport — **all logs go to `console.error`**; `console.log` corrupts t
 
 ## Deployment
 
-**VPS infrastructure** (Google Cloud Platform):
-- Instance: `instance-template-20260309-20260309-113128-a`
-- Zone: `asia-southeast1-a`
-- Domain: `thhflow.com`
-- App directory on VPS: `/opt/vcw/app`
-- System user: `truonghoanghuy`
-- Environment: Ubuntu + Xvfb (headless browser) + Nginx reverse proxy
+**Production VPS** — migrated 2026-06-01 from GCP x86_64 to an **Oracle Cloud Ampere A1 ARM64** instance (the old GCP box `instance-template-20260309-…` may still exist briefly as rollback; decommission per `HANDOFF-NEW-SESSION.md`). Details + full migration story: memory `system-thhflow-vps`, `migration-arm-camoufox-progress`, `MIGRATION-ARM-CAMOUFOX.md`.
+- Public IP: `149.118.130.165` · Arch: **aarch64** (Ubuntu 24.04) · Domain: `thhflow.com` (matbao registrar, A→IP)
+- App dir: `/opt/vcw/app` · System user: `truonghoanghuy` · nginx 443 (Sectigo cert `/etc/ssl/thhflow`, valid 2027-03) + Xvfb `:99`
+- **Broker = `invisible_playwright` x86_64 stealth Firefox running under FEX-Emu** (binfmt x86_64 auto-emulation on ARM), systemd `vcw-flow-broker` (`venv-x86`, `DISPLAY=:99`, `HOME=/home/truonghoanghuy`, `BROKER_BROWSER_ENGINE=invisible`). FEX rootfs `~truonghoanghuy/.local/share/fex-emu/RootFS/Ubuntu_24_04`; Firefox cache `~/.cache/invisible-playwright/firefox-7` (placed manually — invisible's `fetch` aborts on aarch64).
 
 **SSH into the VPS:**
 ```bash
-gcloud compute ssh instance-template-20260309-20260309-113128-a --zone=asia-southeast1-a --tunnel-through-iap
+ssh -i "<repo>/cert/ssh-key-2026-06-01.key" truonghoanghuy@149.118.130.165   # chmod 600 the key first
 ```
 
-**VPS maintenance commands** (run after SSH):
-- Restart server: `pm2 restart vcw-server --update-env`
-- Tail logs: `pm2 logs vcw-server --lines 100`
-- Kill stuck Chrome: `pkill -f chrome`
+**VPS maintenance:**
+- Server: `pm2 restart vcw-server --update-env` · `pm2 logs vcw-server --lines 100`
+- Broker (FEX): `sudo systemctl restart vcw-flow-broker` · `sudo tail -f /opt/vcw/logs/broker-error.log` (broker INFO logs go to **stderr→broker-error.log**, not broker.log) · `curl 127.0.0.1:8002/healthz`
+- Kill stuck Firefox: `pkill -f firefox-7/firefox` (the FEX-emulated browser; there is no Chrome anymore)
 
-CI/CD is push-to-`main` only. Workflow in [.github/workflows/deploy.yml](.github/workflows/deploy.yml) SSHes into the VPS, runs `git pull && npm run install:all && prisma db push && vite build && pm2 restart ecosystem.config.cjs --update-env`. PM2 app name is `vcw-server`; logs are at `/opt/vcw/logs/`. Nginx config template is at [nginx/vcw.conf](nginx/vcw.conf).
+CI/CD is push-to-`main`. [.github/workflows/deploy.yml](.github/workflows/deploy.yml) SSHes in (secrets `VPS_HOST`=new IP, `VPS_USER`=truonghoanghuy, `VPS_SSH_KEY`=`github-actions-deploy`), runs `git pull && npm run install:all && prisma db push && vite build && pm2 restart`, and **restarts `vcw-flow-broker` when `python-broker/` changed** (+ healthz check). The broker venv (`venv-x86`) is editable-installed, so code changes apply on git-pull+restart; **broker DEPENDENCY changes need a manual `pip install` in venv-x86 under FEX**. PM2 app `vcw-server`; logs `/opt/vcw/logs/`.
 
-Two env templates exist: [server/.env.example](server/.env.example) (local — Telegram polling mode, no `CHROME_PATH`) and [server/.env.production.example](server/.env.production.example) (VPS — Telegram webhook mode, `CHROME_PATH=/usr/bin/google-chrome`). The Chrome path is critical; the wrong one silently breaks all browser-driven connectors.
+The legacy `CHROME_PATH` env is dead (no Chrome on the VPS). Telegram runs in webhook mode (`https://thhflow.com/api/telegram/webhook`).
+
+**The other system — `mcp-server` on the Mac** is a SEPARATE deployment (Docker broker via Rosetta 2), not on the VPS. See memory `system-mcp-server-mac`. Don't conflate the two.
 
 ## Conventions Worth Knowing
 
