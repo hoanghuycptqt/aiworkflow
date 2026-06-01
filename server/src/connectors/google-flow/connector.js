@@ -40,13 +40,16 @@ const _refreshInFlight = new Map();
  * If so, call the session API to get a fresh token and update DB.
  * Returns the (possibly refreshed) token and updated credentials object.
  */
-async function ensureFreshToken(credentials) {
+async function ensureFreshToken(credentials, force = false) {
     if (!credentials?.token || !credentials?.metadata?.sessionCookies) {
         return credentials; // Can't refresh without cookies, return as-is
     }
 
     const meta = credentials.metadata || {};
-    let needsRefresh = false;
+    // force=true skips the time-window check — used by mid-run 401 recovery, where the
+    // API has rejected the bearer even though the clock-based check might say "still ok"
+    // (e.g. the NextAuth session died rather than the access_token clock-expiring).
+    let needsRefresh = force;
 
     // Check tokenExpiresAt (set by session API)
     if (meta.tokenExpiresAt) {
@@ -83,7 +86,16 @@ async function ensureFreshToken(credentials) {
         _refreshInFlight.set(instanceId, refreshPromise);
     }
 
-    const result = await refreshPromise;
+    let result;
+    try {
+        result = await refreshPromise;
+    } catch (e) {
+        // Defensive: _performTokenRefresh is designed never to throw, but under
+        // single-flight a rejection is SHARED by every awaiter — so a stray throw would
+        // fail all parallel executions on this account at once. Keep existing creds.
+        console.warn(`[GoogleFlow] Refresh promise rejected (${e.message}) — using existing token`);
+        return credentials;
+    }
     // Dead session or failed refresh → keep existing creds untouched (the in-flight
     // refresh already logged + left the DB row alone). On success apply the fresh
     // token+meta to THIS credentials object — token/meta are account-level and
@@ -94,66 +106,174 @@ async function ensureFreshToken(credentials) {
 
 /**
  * Run the actual token refresh ONCE per account (guarded by _refreshInFlight, so a
- * parallel JobBatch on one account doesn't fire N concurrent /session calls — and,
- * once the slow Firefox-at-profile path is wired in (#3), N concurrent standalone
- * Firefox launches against ONE profile dir, which would kill each other mid-refresh).
- * Returns { token, metadata } on success, or null on a dead session / failure.
- * Never throws.
+ * parallel JobBatch on one account never fires N concurrent refreshes — critically,
+ * N concurrent standalone-Firefox launches against ONE profile dir, which would kill
+ * each other mid-refresh). Two-tier, mirroring the Mac mcp-server reference:
+ *   FAST — getAccessToken(DB cookies): a plain /session call (rotates the ~1h bearer).
+ *   SLOW — on the ACCESS_TOKEN_REFRESH_NEEDED ground-truth dead signal, escalate to the
+ *          broker's Firefox-at-profile reload (rotates the NextAuth session-token in a
+ *          REAL page load) → re-validate → persist. Self-heals the ~20h NextAuth
+ *          rollover inline, without the cron or user 2FA.
+ * Returns { token, metadata } on success, or null on an unrecoverable session / failure
+ * (caller keeps its existing creds). Never throws.
  */
 async function _performTokenRefresh(credentials, instanceId) {
     const meta = credentials.metadata || {};
     const tag = `[GoogleFlow:${instanceId.substring(0, 8)}]`;
+
+    // FAST tier — plain /session with the DB cookies. getAccessToken classifies the
+    // ACCESS_TOKEN_REFRESH_NEEDED ground-truth dead signal and THROWS rather than
+    // returning the stale-but-present token (frozen `expires`) — avoids the
+    // ae23052/120d17b loop of persisting a dead-but-200 response as fresh.
+    let tokenData;
     try {
-        // Use the canonical session-API client (flow-session.getAccessToken), which
-        // classifies the ACCESS_TOKEN_REFRESH_NEEDED ground-truth dead-session signal
-        // and THROWS instead of returning the stale-but-present token NextAuth still
-        // ships (its `expires` is frozen in the past). Mirrors the Mac mcp-server
-        // reference (token-refresh.js:166) and avoids the ae23052/120d17b loop where a
-        // dead-but-200 /session response was written to the DB as fresh.
-        const tokenData = await getAccessToken(meta.sessionCookies);
+        tokenData = await getAccessToken(meta.sessionCookies);
+    } catch (e) {
+        if (e.message && e.message.includes('ACCESS_TOKEN_REFRESH_NEEDED')) {
+            console.warn(`${tag} Fast /session DEAD (ACCESS_TOKEN_REFRESH_NEEDED) — escalating to slow Firefox-at-profile refresh…`);
+            return _slowRefresh(credentials, meta, instanceId, tag);
+        }
+        // Transient failure (network / 5xx / parse) — do NOT fire an expensive Firefox
+        // reload; keep existing creds and let the next execute (or a real 401) retry.
+        console.warn(`[GoogleFlow] Fast refresh failed (${e.message}) — using existing token`);
+        return null;
+    }
 
-        const newToken = tokenData.accessToken;
-        const expiresAt = tokenData.expiresAt;
+    console.log(`${tag} ✅ Auto-refreshed token (fast)!`, tokenData.accessToken.substring(0, 30) + '...');
+    console.log('[GoogleFlow] New expiry:', tokenData.expiresAt);
+    // Fast tier leaves cookies unchanged — only the bearer + expiry rotate.
+    return _persistRefresh(credentials, meta, meta.sessionCookies, tokenData);
+}
 
-        console.log(`${tag} ✅ Auto-refreshed token!`, newToken.substring(0, 30) + '...');
-        console.log('[GoogleFlow] New expiry:', expiresAt);
+/**
+ * SLOW tier — recover a dead NextAuth session WITHOUT a full re-login, using the
+ * per-account persistent profile reservoir (BROKER_PROFILE_BASE/<accountId>, seeded at
+ * login and never touched by the ephemeral broker pool). Runs only inside the
+ * per-account single-flight guard, so at most one Firefox reload per account at a time.
+ * Returns { token, metadata } on success, or null (→ keep existing creds; the session
+ * needs a real re-login: passkey/noVNC). Never throws.
+ *
+ * INVARIANTS (do NOT change without reading recaptcha-incident-history):
+ *   - reload-via-firefox launches a SEPARATE standalone Firefox at the profile dir; it
+ *     NEVER touches the warm broker browser, so the reCAPTCHA trust score is preserved.
+ *   - ALWAYS re-validate the recovered cookies via /session BEFORE persisting — a
+ *     too-short settle could otherwise write a stale JWT back to the DB.
+ */
+async function _slowRefresh(credentials, meta, instanceId, tag) {
+    const brokerErr = (e) => (e instanceof BrokerError ? `broker ${e.status || ''}: ${e.message}` : e.message);
 
-        // Update DB
-        const newMeta = {
-            ...meta,
-            lastRefreshed: new Date().toISOString(),
-            tokenExpiresAt: expiresAt,
-            userName: tokenData.userName || meta.userName,
-            userEmail: tokenData.userEmail || meta.userEmail,
-        };
+    // Tier A: reload-via-firefox — a REAL NextAuth page-load rotates the session-token.
+    let cookies = null;
+    try {
+        const res = await flowBroker.reloadViaFirefox(instanceId);
+        if (res.status === 'ok' && res.cookies) cookies = res.cookies;
+        else console.warn(`${tag} reload-via-firefox → ${res.status || 'no cookies'}`);
+    } catch (e) {
+        console.warn(`${tag} reload-via-firefox failed: ${brokerErr(e)}`);
+    }
 
+    // Tier B fallback: static read of the profile cookies.sqlite (no browser launch).
+    if (!cookies) {
+        try {
+            const res = await flowBroker.cookiesFromProfile(instanceId);
+            if (res.status === 'ok' && res.cookies) cookies = res.cookies;
+            else console.warn(`${tag} cookies-from-profile → ${res.status || 'no cookies'}`);
+        } catch (e) {
+            console.warn(`${tag} cookies-from-profile failed: ${brokerErr(e)}`);
+        }
+    }
+
+    if (!cookies) {
+        console.warn(`${tag} ⚠️ Slow refresh exhausted (no usable profile cookies) — needs re-login (passkey/noVNC). Keeping existing creds.`);
+        return null;
+    }
+
+    // Re-validate the recovered cookies BEFORE persisting. getAccessToken throws if
+    // they are still dead (profile JWT also expired → real re-login needed).
+    let tokenData;
+    try {
+        tokenData = await getAccessToken(cookies);
+    } catch (e) {
+        console.warn(`${tag} ⚠️ Recovered cookies still dead (${e.message}) — needs re-login. Keeping existing creds.`);
+        return null;
+    }
+    if (!tokenData.expiresAt) {
+        console.warn(`${tag} ⚠️ Slow refresh: /session returned no expires — treating as dead. Keeping existing creds.`);
+        return null;
+    }
+    // Defensive account-match (the broker trusts the caller-supplied accountId).
+    const expected = (meta.userEmail || '').toLowerCase();
+    if (expected && tokenData.userEmail && tokenData.userEmail.toLowerCase() !== expected) {
+        console.warn(`${tag} ⚠️ Slow refresh returned wrong account (${tokenData.userEmail}, expected ${expected}) — keeping existing creds.`);
+        return null;
+    }
+
+    console.log(`${tag} ✅ Slow refresh OK (Firefox-at-profile). New expiry: ${tokenData.expiresAt}`);
+    // Slow tier ROTATES the cookies — persist the new sessionCookies too.
+    return _persistRefresh(credentials, meta, cookies, tokenData);
+}
+
+/**
+ * Persist a successful refresh: write the bearer (+ rotated cookies, if any) to the
+ * credential row and sync to siblings sharing the same Google account. Returns the
+ * { token, metadata } the caller applies to its in-memory credentials.
+ */
+async function _persistRefresh(credentials, meta, cookies, tokenData) {
+    const newMeta = {
+        ...meta,
+        sessionCookies: cookies,
+        lastRefreshed: new Date().toISOString(),
+        tokenExpiresAt: tokenData.expiresAt,
+        userName: tokenData.userName || meta.userName,
+        userEmail: tokenData.userEmail || meta.userEmail,
+    };
+    try {
         await prisma.credential.update({
             where: { id: credentials.id },
             data: {
-                token: newToken,
+                token: tokenData.accessToken,
                 metadata: JSON.stringify(newMeta),
             },
         });
-
         // Sync to sibling credentials sharing the same Google account
-        await syncSiblingCredentials(credentials.id, newToken, newMeta);
-
-        return { token: newToken, metadata: newMeta };
-
+        await syncSiblingCredentials(credentials.id, tokenData.accessToken, newMeta);
     } catch (e) {
-        // Dead-session ground truth: do NOT overwrite the DB with a stale token and
-        // do NOT reset lastRefreshed — that would mask the death and make the next
-        // execute() believe it just refreshed. Return null so the caller keeps its
-        // existing creds; recovery is the job of the hot-path 401 handler / harvester
-        // slow-path (#3). Without this, a dead-but-200 /session was persisted as fresh,
-        // which is exactly the infinite-loop bug ae23052 introduced.
-        if (e.message && e.message.includes('ACCESS_TOKEN_REFRESH_NEEDED')) {
-            console.warn(`${tag} ⚠️ Session DEAD (ACCESS_TOKEN_REFRESH_NEEDED) — keeping existing token, NOT overwriting; needs slow-refresh / re-login.`);
-        } else {
-            console.warn('[GoogleFlow] Auto-refresh failed:', e.message, '— using existing token');
-        }
-        return null;
+        // A DB write hiccup (e.g. SQLite BUSY under a parallel JobBatch) must NOT throw:
+        // under single-flight a throw would fail EVERY parallel execution on this account.
+        // The token we hold is already re-validated, so still hand it back for THIS run
+        // (in-memory); the next execute() will simply refresh + persist again.
+        console.warn(`[GoogleFlow] Persist refresh failed (${e.message}) — using freshly-fetched token without DB write`);
     }
+    return { token: tokenData.accessToken, metadata: newMeta };
+}
+
+// Latest in-use credentials per account, so the deep fetch helpers (which carry
+// token + sessionCookies but not the credential object) can force a bearer refresh
+// after a mid-run 401. Safe as a plain Map: withFlowLock serializes _executeLocked per
+// instanceId, so there is at most one active reader/writer per key at a time.
+const _activeCreds = new Map();
+
+/**
+ * Mid-run 401 recovery (#3b): force a bearer refresh (fast→slow, single-flighted) for an
+ * account and return the rotated { token, sessionCookies }. `failedToken` is the bearer
+ * that just got rejected — if an earlier retry on this account already rotated it, reuse
+ * that without refreshing again (avoids a redundant refresh when several calls in one
+ * execute share a now-stale const token). Returns null when no creds are registered or
+ * the session is unrecoverable (→ caller surfaces the terminal token-expired error).
+ */
+async function forceRefreshAuth(instanceId, failedToken = null) {
+    const creds = _activeCreds.get(instanceId);
+    if (!creds) return null;
+    // Another retry on this account already refreshed → reuse it, don't refresh again.
+    if (failedToken && creds.token && creds.token !== failedToken) {
+        return { token: creds.token, sessionCookies: creds.metadata?.sessionCookies || '' };
+    }
+    const refreshed = await ensureFreshToken(creds, true);
+    _activeCreds.set(instanceId, refreshed);
+    // If the bearer didn't actually change, the refresh couldn't recover (dead session,
+    // slow path exhausted) — signal terminal so the caller stops retrying with a dead token.
+    if (!refreshed.token || refreshed.token === failedToken) return null;
+    return { token: refreshed.token, sessionCookies: refreshed.metadata?.sessionCookies || '' };
 }
 
 // ─────────────────────────────────────────────────────────
@@ -450,6 +570,17 @@ async function batchGenerateImages(token, projectId, { prompt, modelName, aspect
         if (result.body.includes('PUBLIC_ERROR_MINOR_INPUT_IMAGE')) {
             throw new Error('⚠️ Ảnh bạn tải lên có nội dung không phù hợp hoặc không được hỗ trợ. Vui lòng thử ảnh khác.');
         }
+        if (result.status === 401 && attempt < MAX_RETRIES) {
+            console.warn(`[FlowImage] ⚠️ 401 — bearer rejected mid-run; force-refreshing (fast→slow) + retrying (${attempt + 1}/${MAX_RETRIES})...`);
+            const auth = await forceRefreshAuth(instanceId, token);
+            if (auth) {
+                token = auth.token;
+                sessionCookies = auth.sessionCookies;
+                const freshRecap = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
+                body.clientContext.recaptchaContext = { token: freshRecap, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
+                continue;
+            }
+        }
         if (result.status === 401) {
             throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
         }
@@ -572,6 +703,7 @@ export class GoogleFlowImageConnector extends BaseConnector {
         // Auto-refresh token if expired or near expiry
         credentials = await ensureFreshToken(credentials);
         const instanceId = getAccountInstanceId(credentials);
+        _activeCreds.set(instanceId, credentials); // register for mid-run 401 recovery (#3b)
         // Per-account serialization: see _flowQueues comment. Wraps the whole
         // generate→poll→upscale→download pipeline so two workflows on the same
         // Google account never overlap Chrome/reCAPTCHA traffic.
@@ -817,6 +949,17 @@ export class GoogleFlowImageConnector extends BaseConnector {
                 continue;
             }
             if (result.status >= 500 && attempt < MAX_RETRIES) { await new Promise(r => setTimeout(r, 3000)); continue; }
+            if (result.status === 401 && attempt < MAX_RETRIES) {
+                console.warn(`[FlowImage] ⚠️ Upscale 401 — bearer rejected mid-run; force-refreshing (fast→slow) + retrying (${attempt + 1}/${MAX_RETRIES})...`);
+                const auth = await forceRefreshAuth(instanceId, token);
+                if (auth) {
+                    token = auth.token;
+                    sessionCookies = auth.sessionCookies;
+                    const freshRecap = await fetchRecaptchaToken(sessionCookies, 'IMAGE_GENERATION', instanceId);
+                    body.clientContext.recaptchaContext = { token: freshRecap, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
+                    continue;
+                }
+            }
             if (result.status === 401) {
                 throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
             }
@@ -940,12 +1083,13 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         // Auto-refresh token if expired or near expiry
         credentials = await ensureFreshToken(credentials);
         const instanceId = getAccountInstanceId(credentials);
+        _activeCreds.set(instanceId, credentials); // register for mid-run 401 recovery (#3b)
         // Per-account serialization — see _flowQueues comment.
         return withFlowLock(instanceId, () => this._executeLocked(input, credentials, config, context, instanceId));
     }
 
     async _executeLocked(input, credentials, config, context, instanceId) {
-        const token = credentials.token;
+        let token = credentials.token;
         const projectId = config.projectId;
         if (!projectId) throw new Error('Project ID is required.');
 
@@ -1079,6 +1223,17 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                 console.log(`[FlowVideo] ⚠️ Server error ${result.status}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
                 await new Promise(r => setTimeout(r, 3000));
                 continue;
+            }
+            if (result.status === 401 && attempt < MAX_RETRIES) {
+                console.warn(`[FlowVideo] ⚠️ 401 — bearer rejected mid-run; force-refreshing (fast→slow) + retrying (${attempt + 1}/${MAX_RETRIES})...`);
+                const auth = await forceRefreshAuth(instanceId, token);
+                if (auth) {
+                    token = auth.token;
+                    credentials = _activeCreds.get(instanceId) || credentials;
+                    const freshRecap = await fetchRecaptchaToken(auth.sessionCookies, 'VIDEO_GENERATION', instanceId);
+                    body.clientContext.recaptchaContext = { token: freshRecap, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' };
+                    continue;
+                }
             }
             if (result.status === 401) {
                 throw new Error('🔑 Token Google Flow đã hết hạn. Vui lòng vào Credentials và tạo token mới.');
