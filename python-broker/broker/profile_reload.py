@@ -52,7 +52,16 @@ logger = logging.getLogger("broker.profile_reload")
 # Override with the FIREFOX_BIN env var if the binary moves.
 _HOME = Path(os.environ.get("HOME", "/root"))
 if BROWSER_ENGINE == "camoufox":
-    _DEFAULT_FIREFOX_BIN = str(_HOME / ".cache/camoufox/camoufox")
+    # Resolve the launchable binary via camoufox's own path logic (drift-proof):
+    # on Linux the executable is camoufox-bin (pkgman LAUNCH_FILE['lin']), shipped
+    # alongside a byte-identical 'camoufox' alias. Fall back to the literal
+    # cache path if the import API ever changes.
+    try:
+        from camoufox.pkgman import launch_path as _camoufox_launch_path
+
+        _DEFAULT_FIREFOX_BIN = str(_camoufox_launch_path())
+    except Exception:
+        _DEFAULT_FIREFOX_BIN = str(_HOME / ".cache/camoufox/camoufox-bin")
 else:
     _DEFAULT_FIREFOX_BIN = str(_HOME / ".cache/invisible-playwright/firefox-7/firefox")
 FIREFOX_BIN = os.environ.get("FIREFOX_BIN", _DEFAULT_FIREFOX_BIN)

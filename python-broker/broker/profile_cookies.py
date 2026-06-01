@@ -102,20 +102,38 @@ def read_profile_cookies(profile_dir: str = DEFAULT_PROFILE_DIR) -> dict:
         try:
             cur = con.cursor()
             cur.execute(
-                f"SELECT name, value FROM moz_cookies WHERE {_HOSTS_FILTER} ORDER BY id"
+                f"SELECT name, value, host FROM moz_cookies WHERE {_HOSTS_FILTER} ORDER BY id"
             )
             rows = cur.fetchall()
         finally:
             con.close()
 
-    if not any(name == _REQUIRED_COOKIE for name, _ in rows):
+    # Dedup by name, preferring the `.labs.google` host over a `.google.com`
+    # shadow — mirrors cookies.stringify_cookies. A standalone Firefox profile
+    # (slow-path reload) can hold the session-token under BOTH domains; NextAuth
+    # rotation writes the fresh value scoped to labs.google, leaving the
+    # .google.com copy stale. Emitting the stale one (it sorts first by id)
+    # froze `expires` in the past — the 2026-05-24 02:00Z 10s-loop incident.
+    by_name: dict[str, str] = {}
+    labs_seen: set[str] = set()
+    for name, value, host in rows:
+        if not name:
+            continue
+        is_labs = (host or "").lower().endswith("labs.google")
+        if name not in by_name or (is_labs and name not in labs_seen):
+            by_name[name] = value
+            if is_labs:
+                labs_seen.add(name)
+
+    if _REQUIRED_COOKIE not in by_name:
         logger.info(
             f"profile cookies: {_REQUIRED_COOKIE} missing — login incomplete?"
         )
         return {"status": "no_session_token"}
 
-    cookie_string = "; ".join(f"{name}={value}" for name, value in rows)
+    cookie_string = "; ".join(f"{name}={value}" for name, value in by_name.items())
     logger.info(
-        f"profile cookies: extracted {len(rows)} cookies ({len(cookie_string)} chars)"
+        f"profile cookies: extracted {len(by_name)} cookies "
+        f"({len(rows)} rows, {len(cookie_string)} chars)"
     )
     return {"status": "ok", "cookies": cookie_string}

@@ -2,12 +2,13 @@
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 
-from broker.config import AUTH_TOKEN, IDLE_TIMEOUT_S, ROTATION_THRESHOLD
+from broker.config import AUTH_TOKEN, BROWSER_ENGINE, IDLE_TIMEOUT_S, ROTATION_THRESHOLD
 from broker.profile_cookies import read_profile_cookies, resolve_profile_dir
 from broker.profile_reload import reload_profile_via_firefox
 from broker.profile_snapshot import save_cookies_to_profile
@@ -24,10 +25,21 @@ pool = SessionPool()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("broker starting; auth=%s rotation=%d idle=%s",
+    logger.info("broker starting; engine=%s auth=%s rotation=%d idle=%s",
+                BROWSER_ENGINE,
                 "enabled" if AUTH_TOKEN else "disabled",
                 ROTATION_THRESHOLD,
                 "disabled" if IDLE_TIMEOUT_S <= 0 else f"{IDLE_TIMEOUT_S}s")
+    # Camoufox runs headful (headless=False, avoiding the camoufox#458 1x1 bug),
+    # so it needs an external X display (Xvfb :99 via the systemd unit). Without
+    # DISPLAY every browser launch fails as an opaque per-request 5xx loop — make
+    # the misconfiguration loud at boot instead.
+    if BROWSER_ENGINE == "camoufox" and not os.environ.get("DISPLAY"):
+        logger.error(
+            "BROKER_BROWSER_ENGINE=camoufox but DISPLAY is unset — headful Firefox "
+            "cannot launch. Ensure xvfb.service (:99) is running and the unit sets "
+            "Environment=DISPLAY=:99."
+        )
     yield
     logger.info("broker shutting down; closing all sessions")
     await pool.close_all()

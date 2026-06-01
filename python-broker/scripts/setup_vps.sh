@@ -31,17 +31,31 @@ if ! ./venv/bin/python -c "import camoufox" 2>/dev/null; then
     exit 1
 fi
 CACHE_DIR="$(./venv/bin/python -m camoufox path 2>/dev/null || true)"
-if [ -z "$CACHE_DIR" ] || [ ! -x "$CACHE_DIR/camoufox" ]; then
+# Linux launchable binary is camoufox-bin (pkgman LAUNCH_FILE['lin']); a
+# byte-identical 'camoufox' alias sits beside it. Use the canonical name.
+BIN="$CACHE_DIR/camoufox-bin"
+if [ -z "$CACHE_DIR" ] || [ ! -x "$BIN" ]; then
     echo "[setup] Fetching Camoufox Firefox binary (~700MB incl. GeoIP)..."
     ./venv/bin/python -m camoufox fetch
     CACHE_DIR="$(./venv/bin/python -m camoufox path)"
+    BIN="$CACHE_DIR/camoufox-bin"
 fi
 
-BIN="$CACHE_DIR/camoufox"
 echo "[setup] Camoufox binary: $BIN"
 file "$BIN" | grep -qi 'aarch64\|ARM' \
     && echo "[setup] OK: native aarch64 binary" \
-    || { echo "[setup] WARNING: binary is NOT aarch64 — check the fetch" >&2; }
+    || echo "[setup] WARNING: binary is NOT aarch64 — check the fetch" >&2
+
+# The profile-snapshot moz_cookies schema is hardcoded for Firefox 135 (camoufox
+# pip 0.4.11). If the bundled Firefox ever differs (camoufox upstream is moving
+# to FF150), Firefox WIPES our cookie snapshot on reload — so assert FF135 and
+# fail loud rather than silently breaking the slow-path JWT refresh.
+VER="$(./venv/bin/python -m camoufox version 2>&1 || true)"
+echo "[setup] $VER"
+echo "$VER" | grep -q 'v135\.' \
+    || { echo "[setup] FATAL: expected a Firefox 135 build, got: $VER" >&2
+         echo "[setup] moz_cookies DDL would mismatch — pin the camoufox pip/fetch to FF135." >&2
+         exit 1; }
 
 echo "[setup] DONE."
 echo

@@ -53,11 +53,16 @@ if `BROKER_AUTH_TOKEN` env var is set.
 ```bash
 cd python-broker
 python3.12 -m venv venv          # or python3.11; both >=3.11 supported
-./venv/bin/pip install -e .
 
-# Install invisible_playwright Firefox binary (~100MB)
-./venv/bin/python -m invisible_playwright fetch
-# ⚠️ If `fetch` fails with a checksum dict-miss, see "Known issues" below.
+# The browser engine is an optional extra (selected at runtime via
+# BROKER_BROWSER_ENGINE). Install the one matching your platform:
+#   aarch64 / Linux VPS:  camoufox  (native stealth Firefox 135)
+#   x86_64  / Mac legacy: invisible (invisible_playwright)
+./venv/bin/pip install -e '.[camoufox]'     # → set BROKER_BROWSER_ENGINE=camoufox
+# ./venv/bin/pip install -e '.[invisible]'  # → default engine (invisible_playwright)
+
+# Fetch the stealth Firefox binary (camoufox auto-selects the lin.arm64 build)
+./venv/bin/python -m camoufox fetch          # invisible engine: python -m invisible_playwright fetch
 
 # Run the broker (loopback only by default)
 ./venv/bin/python -m broker
