@@ -23,6 +23,11 @@ import { CHROME_PATH } from './browser-manager.js';
 import { syncSiblingCredentials } from './credential-sync.js';
 import { flowBroker, BrokerError } from '../connectors/google-flow/broker-client.js';
 import { getAccountInstanceId } from '../connectors/google-flow/connector.js';
+// getAccessToken now lives in a shared leaf module so the Flow connector can reuse
+// it without a circular import. Imported here for internal callers + re-exported
+// for existing external importers (e.g. cookie-harvester.js).
+import { getAccessToken } from './flow-session.js';
+export { getAccessToken };
 
 puppeteer.use(StealthPlugin());
 
@@ -686,48 +691,9 @@ async function extractAllCookies(page) {
     return { cookies: googleCookies, cookieString };
 }
 
-/**
- * Call the session API to get a fresh access token using cookies.
- */
-export async function getAccessToken(cookieString) {
-    const res = await fetch('https://labs.google/fx/api/auth/session', {
-        method: 'GET',
-        headers: {
-            'Accept': '*/*',
-            'Content-Type': 'application/json',
-            'Cookie': cookieString,
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-            'Referer': 'https://labs.google/fx/vi/tools/flow/',
-        },
-    });
-
-    if (!res.ok) {
-        throw new Error(`Session API returned ${res.status}`);
-    }
-
-    const data = await res.json();
-    // Ground-truth dead-session signal: NextAuth returns this on every
-    // /api/auth/session call once the upstream Google OAuth refresh token
-    // is revoked/expired (account suspended, password change, security
-    // event, refresh-token expiry). The `access_token` field is still
-    // present alongside this error but the token itself is dead, and
-    // `expires` freezes at the last valid timestamp — refreshing forever
-    // can't recover. Caller must escalate to a fresh OAuth signin.
-    // Observed 2026-05-24 02:00Z, account minababy17012004@gmail.com.
-    if (data.error === 'ACCESS_TOKEN_REFRESH_NEEDED') {
-        throw new Error('ACCESS_TOKEN_REFRESH_NEEDED — Google OAuth refresh token revoked, needs re-login');
-    }
-    if (!data.access_token) {
-        throw new Error('No access_token in session response');
-    }
-
-    return {
-        accessToken: data.access_token,
-        expiresAt: data.expires || null,
-        userName: data.user?.name,
-        userEmail: data.user?.email,
-    };
-}
+// getAccessToken() moved to ./flow-session.js (shared leaf module — see the
+// import + re-export near the top of this file). Internal callers below use the
+// imported binding unchanged.
 
 /**
  * Save extracted cookies and access token to the google-flow credential.

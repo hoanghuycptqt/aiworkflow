@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fetch from 'node-fetch';
 import { prisma } from '../../index.js';
 import { syncSiblingCredentials } from '../../services/credential-sync.js';
+import { getAccessToken } from '../../services/flow-session.js';
 import { flowBroker, BrokerError } from './broker-client.js';
 
 const API_BASE = 'https://aisandbox-pa.googleapis.com';
@@ -63,30 +64,16 @@ async function ensureFreshToken(credentials) {
     if (!needsRefresh) return credentials;
 
     try {
-        const sessionRes = await fetch('https://labs.google/fx/api/auth/session', {
-            method: 'GET',
-            headers: {
-                'Accept': '*/*',
-                'Content-Type': 'application/json',
-                'Cookie': meta.sessionCookies,
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-                'Referer': 'https://labs.google/fx/vi/tools/flow/',
-            },
-        });
+        // Use the canonical session-API client (flow-session.getAccessToken),
+        // which classifies the ACCESS_TOKEN_REFRESH_NEEDED ground-truth dead-session
+        // signal and THROWS instead of returning the stale-but-present token NextAuth
+        // still ships (its `expires` is frozen in the past). Mirrors the Mac
+        // mcp-server reference (token-refresh.js:166) and avoids the ae23052/120d17b
+        // loop where a dead-but-200 /session response was written to the DB as fresh.
+        const tokenData = await getAccessToken(meta.sessionCookies);
 
-        if (!sessionRes.ok) {
-            console.warn(`[GoogleFlow] Session API returned ${sessionRes.status} — using existing token`);
-            return credentials;
-        }
-
-        const sessionData = await sessionRes.json();
-        if (!sessionData.access_token) {
-            console.warn('[GoogleFlow] No access_token in session response — using existing token');
-            return credentials;
-        }
-
-        const newToken = sessionData.access_token;
-        const expiresAt = sessionData.expires || null;
+        const newToken = tokenData.accessToken;
+        const expiresAt = tokenData.expiresAt;
 
         console.log('[GoogleFlow] ✅ Auto-refreshed token!', newToken.substring(0, 30) + '...');
         console.log('[GoogleFlow] New expiry:', expiresAt);
@@ -96,8 +83,8 @@ async function ensureFreshToken(credentials) {
             ...meta,
             lastRefreshed: new Date().toISOString(),
             tokenExpiresAt: expiresAt,
-            userName: sessionData.user?.name || meta.userName,
-            userEmail: sessionData.user?.email || meta.userEmail,
+            userName: tokenData.userName || meta.userName,
+            userEmail: tokenData.userEmail || meta.userEmail,
         };
 
         await prisma.credential.update({
@@ -119,7 +106,17 @@ async function ensureFreshToken(credentials) {
         };
 
     } catch (e) {
-        console.warn('[GoogleFlow] Auto-refresh failed:', e.message, '— using existing token');
+        // Dead-session ground truth: do NOT overwrite the DB with a stale token and
+        // do NOT reset lastRefreshed — that would mask the death and make the next
+        // execute() believe it just refreshed. Keep the existing creds untouched;
+        // recovery is the job of the hot-path 401 handler / harvester slow-path
+        // (the next ports). Without this, a dead-but-200 /session was persisted as
+        // fresh, which is exactly the infinite-loop bug ae23052 introduced.
+        if (e.message && e.message.includes('ACCESS_TOKEN_REFRESH_NEEDED')) {
+            console.warn('[GoogleFlow] ⚠️ Session DEAD (ACCESS_TOKEN_REFRESH_NEEDED) — keeping existing token, NOT overwriting; needs slow-refresh / re-login.');
+        } else {
+            console.warn('[GoogleFlow] Auto-refresh failed:', e.message, '— using existing token');
+        }
         return credentials;
     }
 }
