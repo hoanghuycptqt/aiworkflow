@@ -140,7 +140,9 @@ export async function callOllamaChat({
             clear();
             try { reader.releaseLock(); } catch { /* already released */ }
         }
-        return { message: { content, tool_calls: toolCalls }, ...stats };
+        // ...stats FIRST: the `done` object carries an empty `message` that would
+        // otherwise clobber the content/tool_calls we just assembled.
+        return { ...stats, message: { content, tool_calls: toolCalls } };
     };
 
     let { res, clear } = await post(buildBody(true));
