@@ -672,6 +672,18 @@ async function callOpenRouter(messages) {
 }
 
 // ─── Ollama Provider (self-hosted local LLM) ─────────────
+// On a 4-core CPU, prompt-eval is ~30 tok/s, so the full 13-tool + 30-message
+// payload (~2400 tok) cost ~80s/message. Keep the Ollama prompt LEAN: only the
+// tools actually used via free-text chat (the photo→pick→ok flow is a state
+// machine that never calls the LLM), plus a short rolling history window. The
+// constant system+tools prefix is then KV-cached by Ollama → warm replies are
+// dominated only by generation length (~8-12s). Gemini/OpenRouter are untouched.
+const OLLAMA_TOOL_NAMES = new Set([
+    'login_google_flow', 'refresh_google_cookies', 'check_token_status', // auth (most-used via chat)
+    'list_workflows', 'run_job', 'get_status', 'stop_batch',             // run/monitor
+]);
+const OLLAMA_HISTORY_LIMIT = parseInt(process.env.OLLAMA_TG_HISTORY || '6', 10);
+
 async function callOllama(messages) {
     // Model comes from the global admin setting (telegram_ai_model); when the
     // admin picks the Ollama provider this holds an Ollama tag e.g. 'gemma4:e4b'.
@@ -681,16 +693,21 @@ async function callOllama(messages) {
         if (setting?.value) selectedModel = setting.value;
     } catch { /* use default */ }
 
-    const tools = functionDeclarations.map(f => ({
-        type: 'function',
-        function: { name: f.name, description: f.description, parameters: f.parameters },
-    }));
+    const tools = functionDeclarations
+        .filter(f => OLLAMA_TOOL_NAMES.has(f.name))
+        .map(f => ({
+            type: 'function',
+            function: { name: f.name, description: f.description, parameters: f.parameters },
+        }));
 
+    // Cap history to the last N messages — CPU prompt-eval cost is linear in tokens.
+    const trimmedHistory = OLLAMA_HISTORY_LIMIT > 0 ? messages.slice(-OLLAMA_HISTORY_LIMIT) : messages;
     const formattedMessages = [
         { role: 'system', content: SYSTEM_PROMPT },
-        ...messages,
+        ...trimmedHistory,
     ];
 
+    const t0 = Date.now();
     const data = await callOllamaChat({
         model: selectedModel,
         messages: formattedMessages,
@@ -698,6 +715,7 @@ async function callOllama(messages) {
         think: false,
         timeoutMs: 180_000,
     });
+    console.log(`[Telegram AI/Ollama] ${selectedModel} replied in ${((Date.now() - t0) / 1000).toFixed(1)}s (history=${trimmedHistory.length}, tools=${tools.length})`);
 
     const msg = data.message || {};
     const functionCalls = [];
@@ -815,31 +833,38 @@ export async function handleMessage(ctx) {
     // Load full conversation history from DB
     const history = await loadChatHistory(chatId);
 
-    // Show typing
-    await ctx.sendChatAction('typing');
+    // Keep the "typing…" indicator alive while the AI works. Local Ollama can
+    // take 10-30s on CPU; the indicator otherwise expires after ~5s and the
+    // user thinks the bot is dead. clearInterval in finally (incl. on error).
+    await ctx.sendChatAction('typing').catch(() => {});
+    const typingKeepalive = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
 
-    // Call AI with full persistent history
-    let response = await callAI(history);
-
-    // Handle function calls (may chain multiple)
-    let iterations = 0;
-    while (response.functionCalls.length > 0 && iterations < 5) {
-        iterations++;
-        const results = [];
-
-        for (const fc of response.functionCalls) {
-            console.log(`[Telegram AI] Calling function: ${fc.name}`, fc.arguments);
-            const result = await executeFunction(fc.name, fc.arguments, userId, chatId);
-            results.push({ name: fc.name, result });
-        }
-
-        // Add function context to history for this turn (not persisted)
-        const resultText = results.map(r => `[Function ${r.name} result]: ${r.result}`).join('\n');
-        history.push({ role: 'assistant', content: response.text || '(calling functions...)' });
-        history.push({ role: 'user', content: resultText });
-
-        await ctx.sendChatAction('typing');
+    let response;
+    try {
+        // Call AI with full persistent history
         response = await callAI(history);
+
+        // Handle function calls (may chain multiple)
+        let iterations = 0;
+        while (response.functionCalls.length > 0 && iterations < 5) {
+            iterations++;
+            const results = [];
+
+            for (const fc of response.functionCalls) {
+                console.log(`[Telegram AI] Calling function: ${fc.name}`, fc.arguments);
+                const result = await executeFunction(fc.name, fc.arguments, userId, chatId);
+                results.push({ name: fc.name, result });
+            }
+
+            // Add function context to history for this turn (not persisted)
+            const resultText = results.map(r => `[Function ${r.name} result]: ${r.result}`).join('\n');
+            history.push({ role: 'assistant', content: response.text || '(calling functions...)' });
+            history.push({ role: 'user', content: resultText });
+
+            response = await callAI(history);
+        }
+    } finally {
+        clearInterval(typingKeepalive);
     }
 
     // Save & send final response
