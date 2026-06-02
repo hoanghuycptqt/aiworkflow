@@ -136,6 +136,22 @@ async def _kill_all_invisible_firefox() -> None:
         logger.warning(f"kill-all-firefox error (non-fatal): {e}")
 
 
+async def _page_responsive(page) -> bool:
+    """True if the page's Juggler binding works. A broken persistent context throws
+    'browsingContext is undefined' / 'loadURI' → not responsive. Transient errors
+    (mid Firefox startup-nav) are re-probed. Non-navigating (evaluate) so it doesn't
+    race Firefox's own startup navigation the way a goto('about:blank') does."""
+    for _ in range(4):
+        try:
+            await asyncio.wait_for(page.evaluate("1+1"), timeout=8.0)
+            return True
+        except Exception as e:
+            if any(m in str(e) for m in ("browsingContext", "loadURI", "Target", "closed")):
+                return False
+            await asyncio.sleep(1.5)
+    return False
+
+
 def _is_dead_browser_error(e: Exception) -> bool:
     """True when the error means the browser/driver connection is gone (not a
     page-level glitch). These are unrecoverable in-place — the only fix is a
@@ -698,15 +714,28 @@ class Session:
                 except Exception:
                     pass
                 continue
-            # Health-check: a broken persistent context can't navigate
-            # ("browsingContext is undefined" / "loadURI"). Cheap about:blank probe.
+            # Acquire a FRESH page — NOT ctx.pages[0]: the default new-tab page churns
+            # during startup, so reading pages[0] races ("list index out of range") and
+            # goto('about:blank') on it races Firefox's own startup nav ("interrupted by
+            # another navigation"). A brand-new page avoids both. Then probe it with a
+            # non-navigating evaluate; a broken context ("browsingContext is undefined")
+            # makes new_page()/probe throw → retry the whole launch.
             try:
-                page = ctx.pages[0] if getattr(ctx, "pages", None) else await ctx.new_page()
-                await asyncio.wait_for(page.goto("about:blank"), timeout=20.0)
+                page = await asyncio.wait_for(ctx.new_page(), timeout=20.0)
             except Exception as e:
                 logger.warning(
-                    f"[{self.account_id}] persistent launch attempt {attempt} page-health "
+                    f"[{self.account_id}] persistent launch attempt {attempt} new_page "
                     f"failed ({str(e).splitlines()[0][:80]}) — retrying"
+                )
+                try:
+                    await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=10.0)
+                except Exception:
+                    pass
+                continue
+            if not await _page_responsive(page):
+                logger.warning(
+                    f"[{self.account_id}] persistent launch attempt {attempt} page not "
+                    f"responsive (broken context) — retrying"
                 )
                 try:
                     await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=10.0)
