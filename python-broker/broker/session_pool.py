@@ -856,7 +856,7 @@ class Session:
         except Exception as e:
             self.login_error = str(e)
             self.login_state = LoginState.FAILED
-            logger.warning(f"[{self.account_id}] login flow FAILED: {e}")
+            logger.exception(f"[{self.account_id}] login flow FAILED: {e}")
             # Capture page state on the login page (not self.page which is the
             # pre-login working page) so we can see where the nav got stuck.
             try:
