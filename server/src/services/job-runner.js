@@ -321,9 +321,12 @@ async function finalizeBatch(batchId, userId, completed, failed, total) {
                 .map(e => e.error)
                 .filter(Boolean)
                 .map(e => {
-                    // Extract the connector-level message from "Node X failed: <message>"
-                    const match = e.match(/failed:\s*(.+)$/);
-                    return match ? match[1] : e;
+                    // Extract the connector-level message from "Node X failed: <message>",
+                    // then collapse the (often multiline JSON) error into one bounded line so
+                    // the Telegram notification is readable and short. [\s\S] crosses newlines.
+                    const match = e.match(/failed:\s*([\s\S]+)$/);
+                    const m = (match ? match[1] : e).replace(/\s+/g, ' ').trim();
+                    return m.length > 180 ? m.slice(0, 180) + '…' : m;
                 });
             const uniqueErrors = [...new Set(errorDetails)];
             const errorMsg = uniqueErrors.length > 0

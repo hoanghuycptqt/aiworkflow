@@ -288,6 +288,22 @@ export async function downloadTelegramPhoto(ctx, fileId) {
  * Send media (images/videos) to all linked Telegram accounts for a user.
  * Called from job-runner when a job completes.
  */
+// Telegram rejects malformed Markdown ("can't parse entities") — e.g. a job-FAILURE
+// notification carrying a raw connector error dump with stray _ * ` [ { in it. With
+// parse_mode that 400s and the user gets NOTHING (the throw also skips any media). Try
+// Markdown, and on a parse error resend as plain text so the notification always lands.
+async function sendMarkdownSafe(chatId, text) {
+    try {
+        await bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+    } catch (err) {
+        if (/parse entities|parse_mode|parse markdown/i.test(err.message || '')) {
+            await bot.telegram.sendMessage(chatId, text); // plain-text fallback
+        } else {
+            throw err;
+        }
+    }
+}
+
 export async function notifyTelegramUser(userId, message, mediaFiles = []) {
     console.log(`[Telegram] notifyTelegramUser called: userId=${userId}, mediaFiles=${mediaFiles.length}, bot=${!!bot}`);
     if (!bot) {
@@ -303,7 +319,7 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
         try {
             // Send text message first
             console.log(`[Telegram] Sending message to chatId=${link.chatId}...`);
-            await bot.telegram.sendMessage(link.chatId, message, { parse_mode: 'Markdown' });
+            await sendMarkdownSafe(link.chatId, message);
 
             // Send media files: photos inline, videos as native video
             for (const media of mediaFiles.slice(0, 10)) { // max 10 files
