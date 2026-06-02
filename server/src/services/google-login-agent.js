@@ -871,22 +871,15 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
                     throw new Error(`Wrong account: ${tokenData.userEmail} (expected ${email})`);
                 }
                 await saveCredentialsToDB(userId, status.cookies, tokenData);
-                // Snapshot the fresh cookies to broker's per-account persistent profile
-                // dir (BROKER_PROFILE_BASE/<accountId>). cookie-harvester reads from
-                // there on dead-JWT recovery — see python-broker/broker/profile_snapshot.py.
-                // Best-effort: broker returns no_profile_base on Mac (env unset), and any
-                // Playwright/IO error here must not fail an otherwise-good login.
-                try {
-                    const snapRes = await flowBroker.saveCookiesToProfile(accountId, status.cookies);
-                    if (snapRes?.status === 'ok') {
-                        console.log(`[GoogleLogin] Profile snapshot saved: ${snapRes.profile_dir} (${snapRes.cookies_count} cookies)`);
-                    } else if (snapRes?.status && snapRes.status !== 'no_profile_base') {
-                        console.warn(`[GoogleLogin] Profile snapshot non-ok: ${JSON.stringify(snapRes).substring(0, 200)}`);
-                    }
-                } catch (e) {
-                    const m = e instanceof BrokerError ? `${e.status || ''}: ${e.message}` : e.message;
-                    console.warn(`[GoogleLogin] Profile snapshot error (non-fatal): ${m}`);
-                }
+                // NO profile snapshot here. On the VPS (BROKER_PROFILE_BASE set) the
+                // broker ran THIS login directly inside the per-account persistent
+                // profile dir (session_pool._run_login persistent mode), so Firefox
+                // already wrote a real, coherent login there — the exact dir
+                // reload-via-firefox launches at. A synthetic cookie snapshot would
+                // only DOWNGRADE that real login (wrong host/httpOnly/sameSite →
+                // Firefox renders logged-out → reload can never rotate). That
+                // profile-dir mismatch was the root cause of the ~20h-rollover
+                // re-login pain (fixed 2026-06-02).
                 const msg = `✅ Login Google Flow thành công (${tokenData.userEmail})! Token expires: ${tokenData.expiresAt || 'N/A'}`;
                 await sendTelegram(msg);
                 return { success: true, message: msg };

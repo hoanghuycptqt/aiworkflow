@@ -297,17 +297,12 @@ async function tryProfileRecovery(userId, sendTelegram) {
     // 4. Commit fresh cookies + token to DB. Sibling sync happens in caller.
     await saveCredentialsToDB(userId, res.cookies, tokenData);
 
-    // Roll the profile forward to the post-validation cookies. The cookies
-    // we just promoted to DB may have been rotated by the /session call
-    // above (NextAuth refreshes access_token + rotates session-token JWT),
-    // so writing them back to profile keeps the snapshot current for the
-    // NEXT recovery, instead of leaving stale pre-recovery cookies on disk.
-    try {
-        await flowBroker.saveCookiesToProfile(accountId, res.cookies);
-    } catch (e) {
-        const m = e instanceof BrokerError ? `${e.status || ''}: ${e.message}` : e.message;
-        console.warn(`[CookieRefresh:profile-recovery] re-snapshot non-fatal: ${m}`);
-    }
+    // NO re-snapshot to the profile dir. The dir holds a REAL Firefox login
+    // (written by the persistent-context Telegram login) and reload-via-firefox
+    // keeps it fresh by re-granting in-place. Writing a synthetic cookie snapshot
+    // here would DOWNGRADE it (wrong host/httpOnly/sameSite → Firefox renders
+    // logged-out → reload can never rotate) — the bug we just fixed. The static
+    // cookies-from-profile read above already returned the dir's real cookies.
 
     const msg = `✅ Cookie recovered from broker persistent profile (${tokenData.userEmail || 'unknown'}). Token expires: ${tokenData.expiresAt}`;
     console.log(`[CookieRefresh:profile-recovery] ${msg}`);

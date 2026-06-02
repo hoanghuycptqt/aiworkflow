@@ -70,16 +70,45 @@ FLOW_URL = "https://labs.google/fx/tools/flow"
 # set this to :99. Firefox won't launch without a display target.
 DISPLAY = os.environ.get("DISPLAY", ":99")
 
-# How long to let Firefox sit at Flow after launch. NextAuth's silent-OAuth
-# refresh dance (load page → call /api/auth/session → if dead, signin/google
-# redirect → accounts.google.com OAuth → callback → set new session-token)
-# completes well within 10s; 25s gives margin for slow GCE network and the
-# Xvfb-bound cold start.
-NAV_WAIT_S = 25
+# Max time to let Firefox sit at Flow per attempt before giving up on a reload.
+# Under FEX-Emu the x86_64 Firefox cold-loads the Flow SPA in ~80-100s (measured
+# 2026-06-02 — the old 25s read cookies BEFORE the page had even finished loading,
+# so the slow path could never observe a rotation). We poll for the session-token
+# to rotate and return as soon as it does, so this is a ceiling, not a fixed sleep.
+NAV_WAIT_S = 120
+
+# Poll cadence while waiting for the rotation / detecting an early FEX crash.
+POLL_INTERVAL_S = 12
+
+# How many times to relaunch Firefox if it segfaults early (FEX randomly SIGSEGVs
+# the browser, especially on a freshly-written cookies-only profile's first launch).
+RELOAD_MAX_ATTEMPTS = 3
 
 # How long to wait for Firefox to actually exit after SIGTERM before
 # escalating to SIGKILL.
 KILL_GRACE_S = 4
+
+_SESSION_TOKEN_NAME = "__Secure-next-auth.session-token"
+
+
+def _read_session_token(profile_dir: str) -> str | None:
+    """Current `__Secure-next-auth.session-token` value in the profile, or None.
+
+    Reuses read_profile_cookies' safe-snapshot read (copies sqlite+WAL+SHM before
+    opening), so it's safe to call repeatedly while Firefox is writing. Used to
+    detect rotation (value CHANGES when NextAuth re-grants).
+    """
+    try:
+        res = read_profile_cookies(profile_dir)
+    except Exception:
+        return None
+    if res.get("status") != "ok":
+        return None
+    for part in res["cookies"].split(";"):
+        part = part.strip()
+        if part.startswith(_SESSION_TOKEN_NAME + "="):
+            return part[len(_SESSION_TOKEN_NAME) + 1:]
+    return None
 
 
 async def reload_profile_via_firefox(account_id: str) -> dict:
@@ -106,68 +135,101 @@ async def reload_profile_via_firefox(account_id: str) -> dict:
     if not Path(FIREFOX_BIN).is_file():
         return {"status": "error", "message": f"firefox binary not found at {FIREFOX_BIN}"}
 
-    # 1. Kill any stale Firefox holding this profile (concurrent reload,
-    #    leftover from a previous failed run, manual-login.sh on Mac, …).
-    await _pkill_profile_firefox(profile_dir)
-    await asyncio.sleep(0.5)
+    # Capture the session-token BEFORE the reload so we can detect rotation
+    # (NextAuth mints a fresh session-token JWT when it re-grants). Polling for
+    # the value to CHANGE lets us return as soon as the refresh lands instead of
+    # always blocking the full NAV_WAIT_S.
+    pre_token = await asyncio.to_thread(_read_session_token, profile_dir)
 
-    # 2. Spawn. Detach stdin/stdout so we don't deadlock on Firefox's
-    #    chatty console output filling the pipe buffer.
     env = {**os.environ, "DISPLAY": DISPLAY}
     log_path = f"/tmp/firefox-reload-{account_id}.log"
-    try:
-        with open(log_path, "wb") as logf:
-            proc = await asyncio.create_subprocess_exec(
-                FIREFOX_BIN,
-                "--no-remote",
-                "--profile", profile_dir,
-                FLOW_URL,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=logf,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env,
-                start_new_session=True,
+    last_detail = "no attempts ran"
+
+    for attempt in range(1, RELOAD_MAX_ATTEMPTS + 1):
+        # 1. Kill any stale Firefox holding this profile (prior attempt, concurrent
+        #    reload, manual login, …) so we get a clean launch.
+        await _pkill_profile_firefox(profile_dir)
+        await asyncio.sleep(0.5)
+
+        # 2. Spawn. Detach stdin; output → a log file so a chatty Firefox can't
+        #    deadlock on a full pipe. The child dups the fd, so closing logf here
+        #    (via the with-block) is fine — Firefox keeps writing to its own copy.
+        try:
+            with open(log_path, "wb") as logf:
+                proc = await asyncio.create_subprocess_exec(
+                    FIREFOX_BIN,
+                    "--no-remote",
+                    "--profile", profile_dir,
+                    FLOW_URL,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=logf,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                )
+        except Exception as e:
+            logger.exception(f"firefox spawn failed for {account_id} (attempt {attempt})")
+            last_detail = f"spawn: {e}"
+            continue
+
+        logger.info(
+            f"[{account_id}] firefox pid={proc.pid} reloading {FLOW_URL} at {profile_dir} "
+            f"(attempt {attempt}/{RELOAD_MAX_ATTEMPTS}, wait ≤{NAV_WAIT_S}s)"
+        )
+
+        # 3. Poll for rotation OR early death. FEX page-load is ~80-100s and FEX
+        #    randomly SIGSEGVs Firefox — a death before the window elapses means we
+        #    never got a refresh, so relaunch and retry.
+        rotated = False
+        died = False
+        waited = 0
+        while waited < NAV_WAIT_S:
+            await asyncio.sleep(POLL_INTERVAL_S)
+            waited += POLL_INTERVAL_S
+            if proc.returncode is not None:
+                died = True
+                logger.warning(f"[{account_id}] reload firefox exited at ~{waited}s (FEX crash?)")
+                break
+            cur = await asyncio.to_thread(_read_session_token, profile_dir)
+            if pre_token and cur and cur != pre_token:
+                rotated = True
+                logger.info(f"[{account_id}] session-token rotated at ~{waited}s")
+                break
+
+        if rotated:
+            await asyncio.sleep(2)  # let Firefox flush the rotated Set-Cookie to sqlite
+
+        # 4. Snapshot cookies off disk (safe copy of sqlite+WAL+SHM), then tear
+        #    Firefox down so it releases the profile lock.
+        try:
+            cookies_result = await asyncio.to_thread(read_profile_cookies, profile_dir)
+        except Exception as e:
+            logger.exception(f"profile cookie read failed for {account_id}")
+            cookies_result = {"status": "error", "message": f"read_profile_cookies: {e}"}
+        await _terminate(proc)
+
+        # Success when the reload settled (rotated, OR Firefox ran the full window
+        # without crashing) AND we extracted a usable cookie set. The Node caller
+        # re-validates via /session and discards a still-dead session, so returning
+        # an un-rotated-but-readable set (e.g. session still fresh, nothing to
+        # rotate yet) is safe.
+        if cookies_result.get("status") == "ok" and (rotated or not died):
+            logger.info(
+                f"[{account_id}] firefox reload OK (attempt {attempt}, rotated={rotated}) — "
+                f"{len(cookies_result['cookies'])} chars extracted from profile"
             )
-    except Exception as e:
-        logger.exception(f"firefox spawn failed for {account_id}")
-        return {"status": "error", "message": f"firefox spawn: {e}"}
+            return {
+                "status": "ok",
+                "cookies": cookies_result["cookies"],
+                "profile_dir": profile_dir,
+            }
 
-    logger.info(
-        f"[{account_id}] firefox pid={proc.pid} reloading {FLOW_URL} "
-        f"at {profile_dir} (wait {NAV_WAIT_S}s)"
-    )
+        last_detail = (
+            f"attempt {attempt}: died={died} rotated={rotated} read={cookies_result.get('status')}"
+        )
+        logger.warning(f"[{account_id}] reload attempt {attempt} unproductive ({last_detail}) — retrying")
 
-    # 3. Wait for NextAuth refresh to complete inside Firefox. We don't
-    #    have direct page state visibility (no Playwright control here),
-    #    so we just sleep — Firefox writes the rotated session-token to
-    #    cookies.sqlite within ~5-10s after Set-Cookie lands.
-    await asyncio.sleep(NAV_WAIT_S)
-
-    # 4. Snapshot the now-rotated cookies. Use the existing reader which
-    #    copies cookies.sqlite + WAL + SHM to a temp dir before opening,
-    #    so we don't fight Firefox over file locks.
-    try:
-        cookies_result = await asyncio.to_thread(read_profile_cookies, profile_dir)
-    except Exception as e:
-        logger.exception(f"profile cookie read failed for {account_id}")
-        cookies_result = {"status": "error", "message": f"read_profile_cookies: {e}"}
-
-    # 5. Tear down Firefox so we don't leak the process and so the next
-    #    reload-via-firefox or manual login can grab the profile lock cleanly.
-    await _terminate(proc)
-
-    if cookies_result.get("status") != "ok":
-        return {"status": "error", "message": f"post-reload extraction: {cookies_result}"}
-
-    logger.info(
-        f"[{account_id}] firefox reload OK — "
-        f"{len(cookies_result['cookies'])} chars extracted from profile"
-    )
-    return {
-        "status": "ok",
-        "cookies": cookies_result["cookies"],
-        "profile_dir": profile_dir,
-    }
+    return {"status": "error", "message": f"reload exhausted after {RELOAD_MAX_ATTEMPTS} attempts: {last_detail}"}
 
 
 async def _pkill_profile_firefox(profile_dir: str) -> None:

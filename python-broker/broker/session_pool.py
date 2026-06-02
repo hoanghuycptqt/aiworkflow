@@ -74,6 +74,40 @@ def _make_browser_cm(persistent: bool) -> Any:
     return InvisiblePlaywright(profile_dir=PROFILE_DIR) if persistent else InvisiblePlaywright()
 
 
+def _make_login_cm(profile_dir: str) -> Any:
+    """Persistent-context CM at an EXPLICIT per-account profile dir.
+
+    Unlike _make_browser_cm(persistent=True) — which uses the GLOBAL
+    BROKER_PROFILE_DIR — this targets a specific dir (BROKER_PROFILE_BASE/<account>)
+    so the VPS Telegram login writes Firefox's real, coherent login state (cookies +
+    IndexedDB + ...) into the SAME dir reload-via-firefox later launches at. That
+    profile-dir match is what lets the ~20h reload self-heal without a re-login.
+    __aenter__() returns a BrowserContext for both engines (cookies live on disk).
+    launch_persistent_context verified working under FEX-Emu 2026-06-02.
+    """
+    if BROWSER_ENGINE == "camoufox":
+        from camoufox.async_api import AsyncCamoufox
+
+        return AsyncCamoufox(headless=False, persistent_context=True, user_data_dir=profile_dir)
+    from invisible_playwright.async_api import InvisiblePlaywright
+
+    return InvisiblePlaywright(profile_dir=profile_dir)
+
+
+def _wipe_profile_dir(path: str) -> None:
+    """Clean-slate a per-account persistent profile dir before a fresh login.
+
+    A crashed/partial prior login can leave a half-written session-token in the
+    dir, which would make perform_login's `_is_already_signed_in` short-circuit and
+    return stale cookies. Wiping guarantees the persistent login is a real fresh
+    login. Safe: the dir only ever holds login/reload state, never ops data.
+    """
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path, exist_ok=True)
+
+
 def _is_dead_browser_error(e: Exception) -> bool:
     """True when the error means the browser/driver connection is gone (not a
     page-level glitch). These are unrecoverable in-place — the only fix is a
@@ -609,6 +643,20 @@ class Session:
 
     async def _run_login(self, email: str, password: str) -> None:
         from broker.login import perform_login
+        from broker.profile_snapshot import is_enabled as _profile_enabled, profile_dir_for
+
+        # VPS (BROKER_PROFILE_BASE set): run the login DIRECTLY in the per-account
+        # persistent profile dir so Firefox writes a real, coherent login (cookies +
+        # IndexedDB + browser state) into the SAME dir reload-via-firefox later
+        # launches at. This is the fix for the profile-dir mismatch that broke the
+        # ~20h self-heal: the old flow logged into an ephemeral context and wrote a
+        # DEGRADED synthetic cookie snapshot to the profile dir (wrong host/httpOnly/
+        # sameSite → Firefox rendered logged-out → reload could never rotate). With
+        # the login running IN the dir, the profile is a native real login; reload
+        # just re-grants + rotates there. (Mac: BROKER_PROFILE_BASE unset → ephemeral,
+        # unchanged.)  launch_persistent_context verified working under FEX 2026-06-02.
+        _use_profile = _profile_enabled()
+        _profile_dir = profile_dir_for(self.account_id) if _use_profile else None
         # CRITICAL: hold the Session lock for the ENTIRE login flow (including the
         # 2FA wait, up to ~120s). Without this, a concurrent refresh_cookies /
         # mint_token / flow_fetch call would acquire the lock between our setup
@@ -632,10 +680,24 @@ class Session:
                         reason="login starts fresh" if attempt == 0
                         else f"dead-browser relaunch (login attempt {attempt + 1})"
                     )
-                    self._invisible_cm = _make_browser_cm(persistent=False)
-                    self.browser = await self._invisible_cm.__aenter__()
-                    self.context = await self.browser.new_context(bypass_csp=True)
-                    page = await self.context.new_page()
+                    if _use_profile:
+                        # Clean slate each attempt: a crashed/partial prior attempt
+                        # could leave a half-written session-token that makes
+                        # perform_login short-circuit ("already signed in") and return
+                        # stale cookies. Wiping guarantees a real fresh login lands in
+                        # the dir.
+                        await asyncio.to_thread(_wipe_profile_dir, _profile_dir)
+                        self._invisible_cm = _make_login_cm(_profile_dir)
+                        # Persistent wrapper __aenter__ returns a BrowserContext (no
+                        # separate Browser handle); cookies live in the profile dir.
+                        self.context = await self._invisible_cm.__aenter__()
+                        self.browser = None
+                        page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+                    else:
+                        self._invisible_cm = _make_browser_cm(persistent=False)
+                        self.browser = await self._invisible_cm.__aenter__()
+                        self.context = await self.browser.new_context(bypass_csp=True)
+                        page = await self.context.new_page()
                     self._login_page = page  # tracked for failure screenshot
 
                     async def on_2fa(path: str) -> None:
@@ -658,11 +720,21 @@ class Session:
                             continue
                         raise
 
-                # Promote login session as the working context for runtime ops.
-                self.page = page
-                self.request_count = 0
-                self.ready = True
                 self.cookies = parse_cookie_string(cookies_str)
+                if _use_profile:
+                    # Persistent login: Firefox wrote a real login into the profile
+                    # dir. Do NOT promote it as the ops context — ops must stay
+                    # EPHEMERAL (context rotation + reCAPTCHA trust score). Tear down
+                    # to release the profile-dir lock so reload-via-firefox can
+                    # raw-launch Firefox there later; ops re-init ephemeral on demand.
+                    await self._teardown_invisible(
+                        reason="login done — release persistent profile, ops back to ephemeral"
+                    )
+                else:
+                    # Promote login session as the working context for runtime ops.
+                    self.page = page
+                    self.request_count = 0
+                    self.ready = True
 
             self.login_cookies = cookies_str
             self.login_state = LoginState.COMPLETED
