@@ -116,7 +116,9 @@ def _wipe_profile_dir(path: str) -> None:
 # BROKER_LOGIN_DISPLAY with retry + aggressive cleanup + a page-health check.
 # Characterized 2026-06-02: :99 → 4-6/6 hang; :100 → reliably OK by attempt 2.
 LOGIN_DISPLAY = os.environ.get("BROKER_LOGIN_DISPLAY", ":100")
-PERSIST_LAUNCH_TIMEOUT_S = 70
+# A hung launch is a TRUE hang (Firefox up, Juggler never binds) — it won't recover,
+# so fail it fast and retry. Real launches bind in ~18s, so 45s is ample headroom.
+PERSIST_LAUNCH_TIMEOUT_S = 45
 PERSIST_LAUNCH_MAX_ATTEMPTS = 5
 
 

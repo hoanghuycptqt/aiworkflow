@@ -837,9 +837,12 @@ export async function loginGoogleFlow(userId, googleAccountCredentialId, telegra
         await sendTelegram('🚀 Đang khởi động Firefox để đăng nhập...');
         await flowBroker.startLogin(accountId, email, password);
 
-        // 4. Poll status every 2s for max 180s
+        // 4. Poll status every 2s for max 360s. The VPS persistent login (login runs
+        //    inside the per-account profile dir) spends ~60-90s acquiring a working
+        //    launch_persistent_context under FEX (retry + cleanup) BEFORE navigating,
+        //    so 2FA appears later than the old ephemeral login — 180s was too tight.
         const startedAt = Date.now();
-        const MAX_MS = 180000;
+        const MAX_MS = 360000;
         const POLL_MS = 2000;
         let twoFAReported = false;
 
