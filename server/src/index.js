@@ -149,6 +149,12 @@ httpServer.listen(PORT, async () => {
     console.error('[Telegram] Failed to start bot:', err.message);
   }
 
+  // Prime the local-LLM (Ollama) prefix cache so the first Telegram message
+  // after a restart is fast. No-op unless the bot is on the Ollama provider.
+  import('./services/telegram-ai.js')
+    .then(({ warmupOllama }) => warmupOllama())
+    .catch((err) => console.warn('[Telegram AI/Ollama] warmup error:', err.message));
+
   // Cookie Harvester cron REMOVED — the Google Flow connector now self-heals token/cookie
   // expiry inline: fast /session → slow Firefox-at-profile reload (#3) + mid-run 401
   // recovery (#3b), so the ~20h NextAuth rollover no longer needs a scheduled refresh.

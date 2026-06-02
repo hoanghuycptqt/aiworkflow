@@ -750,6 +750,38 @@ async function callAI(messages) {
     return callGemini(messages);
 }
 
+// ─── Ollama prefix warmup (call once on server startup) ──
+// Primes Ollama's KV-cache with the constant system+tools prefix (~700 tok) so
+// the FIRST real Telegram message after a restart doesn't eat the ~23s prompt-
+// eval of that prefix. No-op unless the bot is actually on Ollama. Fire-and-forget.
+export async function warmupOllama() {
+    try {
+        const provSetting = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_provider' } });
+        const provider = provSetting?.value || process.env.TELEGRAM_AI_PROVIDER || 'gemini';
+        if (provider !== 'ollama') return;
+
+        let model = 'gemma4:e4b';
+        const m = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_model' } });
+        if (m?.value) model = m.value;
+
+        const tools = functionDeclarations
+            .filter(f => OLLAMA_TOOL_NAMES.has(f.name))
+            .map(f => ({ type: 'function', function: { name: f.name, description: f.description, parameters: f.parameters } }));
+
+        const t0 = Date.now();
+        await callOllamaChat({
+            model,
+            messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: 'hi' }],
+            tools,
+            think: false,
+            timeoutMs: 120_000,
+        });
+        console.log(`[Telegram AI/Ollama] 🔥 prefix warmup done in ${((Date.now() - t0) / 1000).toFixed(1)}s (model ${model}) — first user message will be warm`);
+    } catch (e) {
+        console.warn(`[Telegram AI/Ollama] warmup skipped: ${e.message}`);
+    }
+}
+
 // ─── Quick Create + Run Helper ───────────────────────────
 async function quickCreateAndRun(ctx, state, workflowId, userId, chatId) {
     const photoCount = state.pendingPhotos.length;
