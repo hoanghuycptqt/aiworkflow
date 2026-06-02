@@ -65,16 +65,22 @@ app.get('/api/health', (req, res) => {
 
 // Public routes
 app.use('/api/auth', authRoutes);
-// Telegram webhook — must be public (Telegram POSTs here, no auth)
-app.post('/api/telegram/webhook', async (req, res) => {
-  try {
-    const { bot } = await import('./services/telegram-bot.js');
-    if (bot) await bot.handleUpdate(req.body);
-    res.sendStatus(200);
-  } catch (err) {
-    console.error('[Telegram] Webhook error:', err.message);
-    res.sendStatus(200);
-  }
+// Telegram webhook — must be public (Telegram POSTs here, no auth).
+// ACK with 200 IMMEDIATELY, then process in the background. Slow AI providers
+// (e.g. the local Ollama LLM, which can take 10-30s/message on CPU) would
+// otherwise exceed Telegram's ~60s webhook timeout, triggering update retries
+// → duplicate handling → serial-queue pileup on Ollama. The reply is sent via
+// ctx.reply when the handler finishes, independent of this response.
+app.post('/api/telegram/webhook', (req, res) => {
+  res.sendStatus(200);
+  (async () => {
+    try {
+      const { bot } = await import('./services/telegram-bot.js');
+      if (bot) await bot.handleUpdate(req.body);
+    } catch (err) {
+      console.error('[Telegram] Webhook error:', err.message);
+    }
+  })();
 });
 
 // Protected routes
