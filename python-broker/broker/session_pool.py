@@ -615,20 +615,48 @@ class Session:
         # and perform_login's page.goto, then call _teardown_invisible inside
         # ensure_ready, killing the browser mid-login — observed 2026-05-21 12:49
         # as "Target page, context or browser has been closed".
+        # FEX-resilience: the playwright node-driver pipe drops randomly under FEX
+        # ("Target ... has been closed"), killing the browser mid-login. The mint /
+        # flow_fetch paths already relaunch+retry on this; the login flow must too —
+        # otherwise a single early crash (observed: dies at the signin/identifier page,
+        # before any email/password/2FA input) fails the whole Telegram login. Crashes
+        # happen before user input, so relaunching a fresh browser and restarting
+        # perform_login is safe; a rare mid-2FA-wait death just re-sends a fresh 2FA
+        # screenshot on the retry.
+        LOGIN_MAX_BROWSER_ATTEMPTS = 3
         try:
             async with self.lock:
-                await self._teardown_invisible(reason="login starts fresh")
-                self._invisible_cm = _make_browser_cm(persistent=False)
-                self.browser = await self._invisible_cm.__aenter__()
-                self.context = await self.browser.new_context(bypass_csp=True)
-                page = await self.context.new_page()
-                self._login_page = page  # tracked for failure screenshot
+                cookies_str = None
+                for attempt in range(LOGIN_MAX_BROWSER_ATTEMPTS):
+                    await self._teardown_invisible(
+                        reason="login starts fresh" if attempt == 0
+                        else f"dead-browser relaunch (login attempt {attempt + 1})"
+                    )
+                    self._invisible_cm = _make_browser_cm(persistent=False)
+                    self.browser = await self._invisible_cm.__aenter__()
+                    self.context = await self.browser.new_context(bypass_csp=True)
+                    page = await self.context.new_page()
+                    self._login_page = page  # tracked for failure screenshot
 
-                async def on_2fa(path: str) -> None:
-                    self.login_screenshot_path = path
-                    self.login_state = LoginState.AWAITING_2FA
+                    async def on_2fa(path: str) -> None:
+                        self.login_screenshot_path = path
+                        self.login_state = LoginState.AWAITING_2FA
 
-                cookies_str = await perform_login(page, email, password, on_2fa)
+                    try:
+                        cookies_str = await perform_login(page, email, password, on_2fa)
+                        break
+                    except Exception as e:
+                        if _is_dead_browser_error(e) and attempt < LOGIN_MAX_BROWSER_ATTEMPTS - 1:
+                            logger.warning(
+                                f"[{self.account_id}] login browser/driver died "
+                                f"(attempt {attempt + 1}/{LOGIN_MAX_BROWSER_ATTEMPTS}): "
+                                f"{str(e).splitlines()[0]} — relaunching + retrying"
+                            )
+                            # Reset transient 2FA state so the retry sends a fresh prompt.
+                            self.login_state = LoginState.RUNNING
+                            self.login_screenshot_path = None
+                            continue
+                        raise
 
                 # Promote login session as the working context for runtime ops.
                 self.page = page
