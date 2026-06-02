@@ -108,6 +108,32 @@ def _wipe_profile_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+# launch_persistent_context is flaky under FEX-Emu: it frequently HANGS at
+# __aenter__ (Firefox launches, Juggler never binds) and a leftover hung Firefox
+# poisons the next attempt. Empirically it binds on the x11vnc-attached display
+# (:100) — NOT the bare headful :99 — and recovers within ~2 tries IF every leftover
+# Firefox is SIGKILLed between attempts. So the persistent Telegram login runs on
+# BROKER_LOGIN_DISPLAY with retry + aggressive cleanup + a page-health check.
+# Characterized 2026-06-02: :99 → 4-6/6 hang; :100 → reliably OK by attempt 2.
+LOGIN_DISPLAY = os.environ.get("BROKER_LOGIN_DISPLAY", ":100")
+PERSIST_LAUNCH_TIMEOUT_S = 70
+PERSIST_LAUNCH_MAX_ATTEMPTS = 5
+
+
+async def _kill_all_invisible_firefox() -> None:
+    """SIGKILL every invisible-playwright Firefox so a hung/leftover process can't
+    poison the next launch_persistent_context (the FEX Juggler cascade). Safe during
+    a login: the login holds the Session lock, so no ops browser is running."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", "-c", "pkill -9 -f 'firefox-7/firefox' 2>/dev/null || true",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except Exception as e:
+        logger.warning(f"kill-all-firefox error (non-fatal): {e}")
+
+
 def _is_dead_browser_error(e: Exception) -> bool:
     """True when the error means the browser/driver connection is gone (not a
     page-level glitch). These are unrecoverable in-place — the only fix is a
@@ -641,6 +667,60 @@ class Session:
         self.login_cookies = None
         self._login_task = asyncio.create_task(self._run_login(email, password))
 
+    async def _open_persistent_login_context(self, profile_dir: str):
+        """Open a WORKING persistent BrowserContext at profile_dir for the login.
+
+        launch_persistent_context under FEX hangs / yields broken pages
+        intermittently (see _kill_all_invisible_firefox). Retry on LOGIN_DISPLAY with
+        aggressive cleanup + a cheap page-health probe until we get a context whose
+        page can navigate. Returns (cm, context, page). Raises if all attempts fail.
+        Caller must hold self.lock and have set DISPLAY=LOGIN_DISPLAY.
+        """
+        for attempt in range(1, PERSIST_LAUNCH_MAX_ATTEMPTS + 1):
+            # Kill leftovers (a prior hung Firefox cascades the next launch) and
+            # clean-slate the dir so perform_login does a real fresh login.
+            await _kill_all_invisible_firefox()
+            await asyncio.sleep(3)
+            await asyncio.to_thread(_wipe_profile_dir, profile_dir)
+            cm = _make_login_cm(profile_dir)
+            try:
+                ctx = await asyncio.wait_for(cm.__aenter__(), timeout=PERSIST_LAUNCH_TIMEOUT_S)
+            except Exception as e:
+                logger.warning(
+                    f"[{self.account_id}] persistent launch attempt "
+                    f"{attempt}/{PERSIST_LAUNCH_MAX_ATTEMPTS} failed at enter "
+                    f"({type(e).__name__}: {str(e).splitlines()[0][:80]}) — retrying"
+                )
+                try:
+                    await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=10.0)
+                except Exception:
+                    pass
+                continue
+            # Health-check: a broken persistent context can't navigate
+            # ("browsingContext is undefined" / "loadURI"). Cheap about:blank probe.
+            try:
+                page = ctx.pages[0] if getattr(ctx, "pages", None) else await ctx.new_page()
+                await asyncio.wait_for(page.goto("about:blank"), timeout=20.0)
+            except Exception as e:
+                logger.warning(
+                    f"[{self.account_id}] persistent launch attempt {attempt} page-health "
+                    f"failed ({str(e).splitlines()[0][:80]}) — retrying"
+                )
+                try:
+                    await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=10.0)
+                except Exception:
+                    pass
+                continue
+            logger.info(
+                f"[{self.account_id}] persistent login context ready on {LOGIN_DISPLAY} "
+                f"(attempt {attempt})"
+            )
+            return cm, ctx, page
+        raise RuntimeError(
+            f"persistent login context unavailable after {PERSIST_LAUNCH_MAX_ATTEMPTS} "
+            f"attempts on {LOGIN_DISPLAY}"
+        )
+
     async def _run_login(self, email: str, password: str) -> None:
         from broker.login import perform_login
         from broker.profile_snapshot import is_enabled as _profile_enabled, profile_dir_for
@@ -654,7 +734,8 @@ class Session:
         # sameSite → Firefox rendered logged-out → reload could never rotate). With
         # the login running IN the dir, the profile is a native real login; reload
         # just re-grants + rotates there. (Mac: BROKER_PROFILE_BASE unset → ephemeral,
-        # unchanged.)  launch_persistent_context verified working under FEX 2026-06-02.
+        # unchanged.)  launch_persistent_context is FEX-flaky → _open_persistent_login_context
+        # retries on LOGIN_DISPLAY with aggressive cleanup (see that helper).
         _use_profile = _profile_enabled()
         _profile_dir = profile_dir_for(self.account_id) if _use_profile else None
         # CRITICAL: hold the Session lock for the ENTIRE login flow (including the
@@ -671,6 +752,12 @@ class Session:
         # happen before user input, so relaunching a fresh browser and restarting
         # perform_login is safe; a rare mid-2FA-wait death just re-sends a fresh 2FA
         # screenshot on the retry.
+        # Persistent login must run on LOGIN_DISPLAY (x11vnc-attached) — Juggler hangs
+        # on the bare :99. Override DISPLAY for the duration; restore in finally so
+        # ephemeral ops go back to :99. Safe: the login holds the lock (no concurrent ops).
+        _saved_display = os.environ.get("DISPLAY")
+        if _use_profile:
+            os.environ["DISPLAY"] = LOGIN_DISPLAY
         LOGIN_MAX_BROWSER_ATTEMPTS = 3
         try:
             async with self.lock:
@@ -681,18 +768,13 @@ class Session:
                         else f"dead-browser relaunch (login attempt {attempt + 1})"
                     )
                     if _use_profile:
-                        # Clean slate each attempt: a crashed/partial prior attempt
-                        # could leave a half-written session-token that makes
-                        # perform_login short-circuit ("already signed in") and return
-                        # stale cookies. Wiping guarantees a real fresh login lands in
-                        # the dir.
-                        await asyncio.to_thread(_wipe_profile_dir, _profile_dir)
-                        self._invisible_cm = _make_login_cm(_profile_dir)
-                        # Persistent wrapper __aenter__ returns a BrowserContext (no
-                        # separate Browser handle); cookies live in the profile dir.
-                        self.context = await self._invisible_cm.__aenter__()
+                        # Robust persistent launch: retry on LOGIN_DISPLAY with
+                        # aggressive cleanup + page-health check (FEX flakiness). The
+                        # helper wipes the dir each attempt (clean-slate fresh login).
+                        self._invisible_cm, self.context, page = (
+                            await self._open_persistent_login_context(_profile_dir)
+                        )
                         self.browser = None
-                        page = self.context.pages[0] if self.context.pages else await self.context.new_page()
                     else:
                         self._invisible_cm = _make_browser_cm(persistent=False)
                         self.browser = await self._invisible_cm.__aenter__()
@@ -760,6 +842,13 @@ class Session:
                     await self._teardown_invisible(reason="login failed cleanup")
             except Exception as cleanup_err:
                 logger.warning(f"[{self.account_id}] failed-login cleanup error: {cleanup_err}")
+        finally:
+            # Restore the ops DISPLAY (:99) — only mutated for the persistent login.
+            if _use_profile:
+                if _saved_display is not None:
+                    os.environ["DISPLAY"] = _saved_display
+                else:
+                    os.environ.pop("DISPLAY", None)
 
     def login_status_snapshot(self) -> dict:
         return {
