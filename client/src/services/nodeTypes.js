@@ -118,17 +118,27 @@ export const NODE_TYPES = {
         color: '#ef4444',
         description: 'Generate videos with Google Flow (auto-uses Flow Image output as start frame)',
         configSchema: {
-            prompt: { type: 'textarea', label: 'Video Prompt', required: true, description: 'Use {{nodeId.videoPrompt}} for Text Extractor output' },
+            prompt: { type: 'textarea', label: 'Video Prompt', required: true, description: 'Use {{nodeId.videoPrompt}} for Text Extractor output. For omni_flash inline refs, embed @LABEL tokens.' },
             model: {
                 type: 'select', label: 'Model',
                 options: [
-                    { label: 'Veo 3.1 Fast (Low Priority)', value: 'veo3_fast_low' },
-                    { label: 'Veo 3.1 - Fast', value: 'veo3_fast' },
-                    { label: 'Veo 3.1 - Quality', value: 'veo3' },
-                    { label: 'Veo 3.1 - Lite', value: 'veo3_lite' },
                     { label: 'Veo 3.1 - Lite (Low Priority)', value: 'veo3_lite_low' },
+                    { label: 'Veo 3.1 - Quality', value: 'veo3_quality' },
+                    { label: 'Gemini Omni Flash', value: 'omni_flash' },
                 ],
-                default: 'veo3_fast_low',
+                default: 'veo3_lite_low',
+            },
+            mode: {
+                type: 'select', label: 'Mode',
+                description: 'Auto: omni_flash → r2v if upstream image present else t2v; veo3_* → i2v if upstream image (i2v_se if End Frame set) else t2v.',
+                options: [
+                    { label: 'Auto (from upstream image)', value: 'auto' },
+                    { label: 'Text → Video (t2v)', value: 't2v' },
+                    { label: 'Start Frame (i2v)', value: 'i2v' },
+                    { label: 'Start + End Frame (i2v_se)', value: 'i2v_se' },
+                    { label: 'Reference Images (r2v)', value: 'r2v' },
+                ],
+                default: 'auto',
             },
             aspectRatio: {
                 type: 'select', label: 'Aspect Ratio',
@@ -139,7 +149,17 @@ export const NODE_TYPES = {
                 ],
                 default: '9:16',
             },
-            useStartFrame: { type: 'boolean', label: 'Use Start Frame from Upstream Image', description: 'Use generated image from Flow Image as video start frame', default: true },
+            duration: {
+                type: 'select', label: 'Duration',
+                options: [
+                    { label: '4s', value: '4' },
+                    { label: '6s', value: '6' },
+                    { label: '8s', value: '8' },
+                    { label: '10s (omni_flash only)', value: '10' },
+                ],
+                default: '8',
+            },
+            useStartFrame: { type: 'boolean', label: 'Use Start Frame from Upstream Image', description: 'veo3_* i2v only. Ignored for t2v / r2v and for omni_flash (upstream image becomes a reference).', default: true },
             resolution: {
                 type: 'select', label: 'Resolution',
                 options: [
@@ -148,6 +168,9 @@ export const NODE_TYPES = {
                 ],
                 default: '720p',
             },
+            endFrameMediaId: { type: 'text', label: 'End Frame Media ID', description: 'Pre-uploaded Flow media ID for last frame (i2v_se, veo3_* only); or supply via upstream input.endFrameMediaId.' },
+            referenceImages: { type: 'file', accept: 'image/*', label: 'Reference Images', description: 'Reference images for r2v (max 3 for veo3_lite_low, 7 for omni_flash). For omni_flash inline @-refs, also fill Inline Labels in matching order.' },
+            inlineLabels: { type: 'text', label: 'Inline Labels (omni_flash)', description: 'Comma-separated labels matching each uploaded reference image in order; each must appear as @label in the prompt.' },
             projectId: { type: 'text', label: 'Project ID', required: true, description: 'Your Google Flow project UUID' },
             credentialId: { type: 'credential', label: 'Credential', provider: 'google-flow', required: true },
         },

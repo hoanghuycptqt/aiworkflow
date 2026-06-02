@@ -645,10 +645,9 @@ export class GoogleFlowImageConnector extends BaseConnector {
                     label: 'Model',
                     options: [
                         { label: 'Nano Banana 2 (Gemini 2.5 Pro)', value: 'banana2' },
-                        { label: 'Nano Banana (Gemini 2.5 Flash)', value: 'banana' },
                         { label: 'Nano Banana Pro (Gemini 3 Pro)', value: 'banana_pro' },
-                        { label: 'Imagen 4', value: 'imagen4' },
-                        { label: 'Nano (Imagen 3.5)', value: 'nano' },
+                        // Removed dead options (banana / imagen4 / nano): not in IMAGE_MODELS,
+                        // were silently coerced to GEM_PIX_2. Now matches mcp-server (banana2 + banana_pro).
                     ],
                     default: 'banana2',
                 },
@@ -1005,14 +1004,137 @@ export class GoogleFlowImageConnector extends BaseConnector {
 //  GoogleFlowVideoConnector
 // ─────────────────────────────────────────────────────────
 
-// Video model mapping (confirmed from HAR)
+// Video model keys: keyed by [model][mode][duration]. Default duration is 8s.
+// Ported VERBATIM from mcp-server/lib/google-flow-api.js (HAR-captured from
+// labs.google/fx/tools/flow on 2026-05-19). These magic strings are load-bearing —
+// a single typo returns null (thrown) or a key Google rejects. Do NOT retype by hand.
+// Quality at 9:16 (portrait): 8s splits into landscape/portrait keys; 4s/6s share a unified key.
+// r2v silently downgrades for 4s/6s — only 8s supported.
 const VIDEO_MODELS = {
-    'veo3_fast_low': 'veo_3_1_i2v_s_fast_portrait_ultra_relaxed',  // Veo 3.1 Fast (Low Priority) — CONFIRMED
-    'veo3_fast': 'veo_3_1_i2v_s_fast_portrait_ultra',              // Veo 3.1 - Fast — CONFIRMED via HAR
-    'veo3': 'veo_3_1_i2v_s_portrait',                              // Veo 3.1 - Quality — CONFIRMED via HAR
-    'veo3_lite': 'veo_3_1_i2v_lite',                               // Veo 3.1 - Lite
-    'veo3_lite_low': 'veo_3_1_i2v_lite_low_priority',              // Veo 3.1 - Lite (Low Priority)
+    'veo3_lite_low': {
+        t2v: {
+            8: 'veo_3_1_t2v_lite_low_priority',
+            6: 'veo_3_1_t2v_lite_6s_low_priority',
+            4: 'veo_3_1_t2v_lite_4s_low_priority',
+        },
+        i2v: {
+            8: 'veo_3_1_i2v_lite_low_priority',
+            6: 'veo_3_1_i2v_s_lite_6s_low_priority',
+            4: 'veo_3_1_i2v_s_lite_4s_low_priority',
+        },
+        i2v_se: {
+            8: 'veo_3_1_interpolation_lite_low_priority',
+            6: 'veo_3_1_i2v_s_lite_6s_fl_low_priority',
+            4: 'veo_3_1_i2v_s_lite_4s_fl_low_priority',
+        },
+        r2v: { 8: 'veo_3_1_r2v_lite_low_priority' },
+    },
+    'veo3_quality': {
+        t2v: {
+            8: 'veo_3_1_t2v',
+            6: 'veo_3_1_t2v_quality_6s',
+            4: 'veo_3_1_t2v_quality_4s',
+        },
+        i2v: {
+            8: 'veo_3_1_i2v_s',
+            6: 'veo_3_1_i2v_s_quality_6s',
+            4: 'veo_3_1_i2v_s_quality_4s',
+        },
+        i2v_portrait: { 8: 'veo_3_1_i2v_s_portrait' },
+        i2v_se: {
+            8: 'veo_3_1_i2v_s_fl',
+            6: 'veo_3_1_i2v_s_quality_6s_fl',
+            4: 'veo_3_1_i2v_s_quality_4s_fl',
+        },
+        i2v_se_portrait: { 8: 'veo_3_1_i2v_s_portrait_fl' },
+        // r2v: NOT SUPPORTED for quality model
+    },
+    // Omni Flash: a separate model family using 'abra_' prefix. Supports t2v and r2v.
+    // i2v / i2v_se are silently downgraded to t2v by Veo even if start/end frame
+    // images are attached in the UI — so we refuse those combinations upfront.
+    'omni_flash': {
+        t2v: {
+            10: 'abra_t2v_10s',
+            8:  'abra_t2v_8s',
+            6:  'abra_t2v_6s',
+            4:  'abra_t2v_4s',
+        },
+        r2v: {
+            10: 'abra_r2v_10s',
+            8:  'abra_r2v_8s',
+            6:  'abra_r2v_6s',
+            4:  'abra_r2v_4s',
+        },
+        // i2v / i2v_se: NOT SUPPORTED
+    },
 };
+
+// Back-compat aliases for the retired pre-rename keys. Saved workflows that still
+// reference the old Fast/Lite tier keep working; default (no model) → veo3_lite_low
+// to match mcp-server. Same mapping is applied by migrate-flow-video-models.mjs.
+const VIDEO_MODEL_ALIAS = {
+    veo3_fast_low: 'veo3_lite_low',
+    veo3_fast: 'veo3_lite_low',
+    veo3: 'veo3_quality',
+    veo3_lite: 'veo3_lite_low',
+};
+function resolveModelAlias(m) {
+    return VIDEO_MODEL_ALIAS[m] || m || 'veo3_lite_low';
+}
+
+// Get the correct video model key for a given (model, mode, aspectRatio, duration).
+// Ported VERBATIM from mcp-server/lib/google-flow-api.js getVideoModelKey().
+// Returns null if the mode is not supported for this (model, duration).
+function getVideoModelKey(model, mode, aspectRatio, duration = 8) {
+    const tier = VIDEO_MODELS[model] || VIDEO_MODELS['veo3_lite_low'];
+    const dur = Number(duration) || 8;
+    // Quality 8s portrait split: only at 8s does i2v / i2v_se have separate portrait keys.
+    const isPortraitImageMode = model === 'veo3_quality' && aspectRatio === '9:16' && dur === 8 && (mode === 'i2v' || mode === 'i2v_se');
+    const modeKey = isPortraitImageMode ? `${mode}_portrait` : mode;
+    const modeMap = tier[modeKey];
+    if (!modeMap) return null;
+    return modeMap[dur] || null;
+}
+
+// Build structuredPrompt parts for inline @-references (omni_flash). Each @LABEL in
+// the prompt is replaced with a reference part; surrounding text becomes text parts.
+// Ported VERBATIM from mcp-server/lib/google-flow-api.js buildInlineReferenceParts().
+function buildInlineReferenceParts(prompt, inlineRefs) {
+    if (!inlineRefs?.length) return [{ text: prompt }];
+    // Match longest labels first to avoid prefix collisions.
+    const sortedRefs = [...inlineRefs].sort((a, b) => b.label.length - a.label.length);
+    const parts = [];
+    let cursor = 0;
+    while (cursor < prompt.length) {
+        let matched = null;
+        if (prompt[cursor] === '@') {
+            for (const ref of sortedRefs) {
+                if (prompt.startsWith('@' + ref.label, cursor)) {
+                    matched = ref;
+                    break;
+                }
+            }
+        }
+        if (matched) {
+            parts.push({
+                reference: { media: { handle: matched.label, mediaId: matched.mediaId } },
+            });
+            cursor += 1 + matched.label.length;
+        } else {
+            let nextAt = prompt.indexOf('@', cursor + 1);
+            if (nextAt < 0) nextAt = prompt.length;
+            const chunk = prompt.slice(cursor, nextAt);
+            const last = parts[parts.length - 1];
+            if (last && last.text !== undefined) {
+                last.text += chunk;
+            } else {
+                parts.push({ text: chunk });
+            }
+            cursor = nextAt;
+        }
+    }
+    return parts.length ? parts : [{ text: prompt }];
+}
 
 // Video aspect ratio enum mapping
 const VIDEO_ASPECT_RATIO_MAP = {
@@ -1039,11 +1161,24 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                     type: 'select',
                     label: 'Model',
                     options: [
-                        { label: 'Veo 3.1 Fast (Low Priority)', value: 'veo3_fast_low' },
-                        { label: 'Veo 3.1 - Fast', value: 'veo3_fast' },
-                        { label: 'Veo 3.1 - Quality', value: 'veo3' },
+                        { label: 'Veo 3.1 - Lite (Low Priority)', value: 'veo3_lite_low' },
+                        { label: 'Veo 3.1 - Quality', value: 'veo3_quality' },
+                        { label: 'Gemini Omni Flash', value: 'omni_flash' },
                     ],
-                    default: 'veo3_fast_low',
+                    default: 'veo3_lite_low',
+                },
+                mode: {
+                    type: 'select',
+                    label: 'Mode',
+                    description: 'Auto: omni_flash → r2v if an upstream image is present else t2v; veo3_* → i2v if an upstream image is present (i2v_se if an end frame is set) else t2v.',
+                    options: [
+                        { label: 'Auto (from upstream image)', value: 'auto' },
+                        { label: 'Text → Video (t2v)', value: 't2v' },
+                        { label: 'Start Frame (i2v)', value: 'i2v' },
+                        { label: 'Start + End Frame (i2v_se)', value: 'i2v_se' },
+                        { label: 'Reference Images (r2v)', value: 'r2v' },
+                    ],
+                    default: 'auto',
                 },
                 aspectRatio: {
                     type: 'select',
@@ -1055,10 +1190,21 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                     ],
                     default: '9:16',
                 },
+                duration: {
+                    type: 'select',
+                    label: 'Duration',
+                    options: [
+                        { label: '4s', value: '4' },
+                        { label: '6s', value: '6' },
+                        { label: '8s', value: '8' },
+                        { label: '10s (omni_flash only)', value: '10' },
+                    ],
+                    default: '8',
+                },
                 useStartFrame: {
                     type: 'boolean',
                     label: 'Use Start Frame from Upstream Image',
-                    description: 'Use a generated image from Flow Image as the video start frame',
+                    description: 'veo3_* i2v only. Ignored for t2v / r2v and for omni_flash (where an upstream image becomes a reference).',
                     default: true,
                 },
                 resolution: {
@@ -1069,6 +1215,22 @@ export class GoogleFlowVideoConnector extends BaseConnector {
                         { label: '1080p (Upscaled)', value: '1080p' },
                     ],
                     default: '720p',
+                },
+                endFrameMediaId: {
+                    type: 'text',
+                    label: 'End Frame Media ID',
+                    description: 'Pre-uploaded Flow media ID for the last frame (i2v_se, veo3_* only); or supply via upstream input.endFrameMediaId.',
+                },
+                referenceImages: {
+                    type: 'file',
+                    accept: 'image/*',
+                    label: 'Reference Images',
+                    description: 'Reference images for r2v (max 3 for veo3_lite_low, 7 for omni_flash). For omni_flash inline @-refs, also fill Inline Labels in matching order.',
+                },
+                inlineLabels: {
+                    type: 'text',
+                    label: 'Inline Labels (omni_flash)',
+                    description: 'Comma-separated labels matching each uploaded reference image in order; each must appear as @label in the prompt.',
                 },
                 projectId: {
                     type: 'text',
@@ -1106,10 +1268,12 @@ export class GoogleFlowVideoConnector extends BaseConnector {
         const prompt = config.prompt || input.videoPrompt || input.text || '';
         if (!prompt) throw new Error('Video prompt is required.');
 
-        const modelKey = config.model || 'veo3_fast_low';
-        const videoModelKey = VIDEO_MODELS[modelKey] || 'veo_3_1_i2v_s_fast_portrait_ultra_relaxed';
-        const aspectRatio = VIDEO_ASPECT_RATIO_MAP[config.aspectRatio || '9:16'] || 'VIDEO_ASPECT_RATIO_PORTRAIT';
+        const model = resolveModelAlias(config.model);
+        const duration = Number(config.duration) || 8;
+        const finalRatio = config.aspectRatio || '9:16';
+        const aspectRatio = VIDEO_ASPECT_RATIO_MAP[finalRatio] || 'VIDEO_ASPECT_RATIO_PORTRAIT';
         const sessionId = `;${Date.now()}`;
+        let sessionCookies = credentials.metadata?.sessionCookies || '';
 
         // ─── Get start frame from upstream Flow Image ───
         let startFrameMediaId = null;
@@ -1160,26 +1324,140 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             console.log('[FlowVideo] Start frame disabled by config — video will be text-only.');
         }
 
+        // ─── Resolve reference images (r2v) + inline @-refs + end frame ───
+        // Explicit references come from this node's own file uploader (config.filePaths);
+        // they take precedence over an auto upstream start frame.
+        const uploadsDir = process.env.UPLOAD_DIR || './uploads';
+        let referenceMediaIds = [];
+        if (Array.isArray(config.filePaths) && config.filePaths.length) {
+            for (const url of config.filePaths) {
+                try {
+                    const p = (typeof url === 'string' && url.startsWith('/uploads/'))
+                        ? join(uploadsDir, url.replace('/uploads/', ''))
+                        : url;
+                    const base64 = (await readFile(p)).toString('base64');
+                    referenceMediaIds.push(await uploadReferenceImage(token, projectId, base64));
+                    console.log('[FlowVideo] Uploaded reference image from:', p);
+                } catch (e) {
+                    console.warn('[FlowVideo] Reference image upload failed:', e.message);
+                }
+            }
+        }
+
+        // Inline @-ref labels pair 1:1 with the uploaded references, in order (omni_flash).
+        // Require exact count parity so a label/image mismatch (or a partial upload above,
+        // which only warns) can't silently desync labels↔images.
+        const inlineLabels = String(config.inlineLabels || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (inlineLabels.length && inlineLabels.length !== referenceMediaIds.length) {
+            throw new Error(`Số Inline Labels (${inlineLabels.length}) phải khớp số reference image đã tải lên (${referenceMediaIds.length}). Mỗi nhãn ứng với một ảnh theo thứ tự (một ảnh tải lên thất bại cũng gây lệch số).`);
+        }
+        let inlineRefs = inlineLabels.length
+            ? referenceMediaIds.map((mediaId, i) => ({ mediaId, label: inlineLabels[i] }))
+            : [];
+
+        // End frame (i2v_se, veo3_* only): pre-uploaded media id from config or upstream.
+        let endFrameMediaId = config.endFrameMediaId || input.endFrameMediaId || null;
+
+        // ─── Determine generation mode + route images ───
+        // omni_flash has no start/end frames; an upstream start image becomes a reference (decision #2).
+        if (model === 'omni_flash') {
+            if (!referenceMediaIds.length && startFrameMediaId) referenceMediaIds = [startFrameMediaId];
+            startFrameMediaId = null;
+            if (endFrameMediaId) {
+                throw new Error('omni_flash không hỗ trợ start/end frame (Veo sẽ tự hạ xuống t2v). Bỏ End Frame, hoặc đổi sang veo3_lite_low / veo3_quality cho chế độ ảnh. omni_flash hỗ trợ Reference Images (r2v).');
+            }
+        }
+        // Explicit reference uploads win over an auto upstream start frame (veo3_*).
+        if (referenceMediaIds.length && startFrameMediaId) startFrameMediaId = null;
+
+        const forced = (config.mode && config.mode !== 'auto') ? config.mode : null;
+        let mode = forced || (
+            referenceMediaIds.length ? 'r2v'
+                : (startFrameMediaId && endFrameMediaId) ? 'i2v_se'
+                    : startFrameMediaId ? 'i2v'
+                        : 't2v'
+        );
+        // Reconcile inputs to a forced mode.
+        if (forced === 't2v') { startFrameMediaId = null; endFrameMediaId = null; referenceMediaIds = []; inlineRefs = []; }
+        if (forced === 'i2v') { endFrameMediaId = null; referenceMediaIds = []; inlineRefs = []; }
+        if (forced === 'i2v_se') { referenceMediaIds = []; inlineRefs = []; }
+        if (forced === 'r2v' && !referenceMediaIds.length && startFrameMediaId) { referenceMediaIds = [startFrameMediaId]; startFrameMediaId = null; }
+
+        // ─── Validate (model, mode, duration, refs) — ported from mcp-server generate-video.js ───
+        const hasRefs = referenceMediaIds.length > 0;
+        const hasInlineRefs = inlineRefs.length > 0;
+        if (hasInlineRefs && model !== 'omni_flash') {
+            throw new Error("Inline @-references (Inline Labels) chỉ hỗ trợ model 'omni_flash'.");
+        }
+        if (hasRefs && model === 'veo3_quality') {
+            throw new Error('veo3_quality không hỗ trợ Reference Images (r2v). Dùng veo3_lite_low hoặc omni_flash.');
+        }
+        if (mode === 'r2v' && model === 'veo3_lite_low' && duration !== 8) {
+            throw new Error(`Reference Images (r2v) với veo3_lite_low chỉ hỗ trợ 8s (đang chọn ${duration}s). Đặt duration=8 hoặc đổi sang omni_flash (r2v 4/6/8/10s).`);
+        }
+        if (duration === 10 && model !== 'omni_flash') {
+            throw new Error(`duration=10 chỉ hỗ trợ model omni_flash (đang chọn ${model}). Chọn 4/6/8 hoặc đổi model.`);
+        }
+        if (hasRefs) {
+            const refLimit = model === 'omni_flash' ? 7 : 3;
+            if (referenceMediaIds.length > refLimit) {
+                throw new Error(`Quá nhiều reference image: ${referenceMediaIds.length}. Giới hạn cho ${model} là ${refLimit}.`);
+            }
+        }
+        if (hasInlineRefs) {
+            const seen = new Set();
+            for (const r of inlineRefs) {
+                if (!r.label) throw new Error('Inline Labels: mỗi nhãn không được rỗng.');
+                if (seen.has(r.label)) throw new Error(`Inline Labels trùng: "${r.label}". Mỗi nhãn phải duy nhất.`);
+                seen.add(r.label);
+                if (!prompt.includes('@' + r.label)) {
+                    throw new Error(`Prompt không chứa "@${r.label}". Thêm @${r.label} vào prompt hoặc bỏ nhãn này khỏi Inline Labels.`);
+                }
+            }
+        }
+        // A forced image mode must actually have its frame(s) — otherwise we'd build a request
+        // with a null mediaId and let Google reject it instead of failing cleanly upfront.
+        // (mcp derives mode from frame presence so it never hits this; we allow a forced mode.)
+        if ((mode === 'i2v' || mode === 'i2v_se') && !startFrameMediaId) {
+            throw new Error('Chế độ Start Frame (i2v / i2v_se) cần có start frame. Cấp ảnh upstream làm start frame hoặc đổi mode.');
+        }
+        if (mode === 'i2v_se' && !endFrameMediaId) {
+            throw new Error('Chế độ Start + End Frame (i2v_se) cần cả start frame và End Frame Media ID.');
+        }
+        if (mode === 'r2v' && !referenceMediaIds.length) {
+            throw new Error('Chế độ Reference Images (r2v) cần ít nhất một reference image. Tải ảnh lên (hoặc nối ảnh upstream), hoặc đổi mode.');
+        }
+
+        const videoModelKey = getVideoModelKey(model, mode, finalRatio, duration);
+        if (!videoModelKey) {
+            throw new Error(`Model '${model}' không hỗ trợ mode '${mode}' ở ${duration}s.`);
+        }
+
         // ─── Build request (from HAR capture) ───
         // Delay before video token to avoid rate limiting after image batch
         await new Promise(r => setTimeout(r, 5000));
-        const recaptchaToken = await fetchRecaptchaToken(credentials.metadata?.sessionCookies || '', 'VIDEO_GENERATION', instanceId);
+        const recaptchaToken = await fetchRecaptchaToken(sessionCookies, 'VIDEO_GENERATION', instanceId);
         const batchId = uuidv4();
 
+        const parts = inlineRefs.length ? buildInlineReferenceParts(prompt, inlineRefs) : [{ text: prompt }];
         const request = {
             aspectRatio,
             seed: Math.floor(Math.random() * 100000),
             textInput: {
-                structuredPrompt: {
-                    parts: [{ text: prompt }],
-                },
+                structuredPrompt: { parts },
             },
             videoModelKey,
             metadata: {},
         };
 
-        if (startFrameMediaId) {
+        // Mode-specific request fields (start/end frame or reference images).
+        if (mode === 'i2v') {
             request.startImage = { mediaId: startFrameMediaId };
+        } else if (mode === 'i2v_se') {
+            request.startImage = { mediaId: startFrameMediaId };
+            request.endImage = { mediaId: endFrameMediaId };
+        } else if (mode === 'r2v') {
+            request.referenceImages = referenceMediaIds.map(mediaId => ({ mediaId, imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' }));
         }
 
         const body = {
@@ -1202,14 +1480,24 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             useV2ModelConfig: true,
         };
 
-        console.log(`[FlowVideo] Submitting video generation, model=${videoModelKey}, aspect=${aspectRatio}, startFrame=${!!startFrameMediaId}...`);
+        // Endpoint is mode-specific. The connector previously ALWAYS hit StartImage;
+        // t2v / i2v_se / r2v each need their own endpoint or Google rejects the request.
+        const VIDEO_ENDPOINTS = {
+            t2v: `${API_BASE}/v1/video:batchAsyncGenerateVideoText`,
+            i2v: `${API_BASE}/v1/video:batchAsyncGenerateVideoStartImage`,
+            i2v_se: `${API_BASE}/v1/video:batchAsyncGenerateVideoStartAndEndImage`,
+            r2v: `${API_BASE}/v1/video:batchAsyncGenerateVideoReferenceImages`,
+        };
+        const endpoint = VIDEO_ENDPOINTS[mode];
+
+        console.log(`[FlowVideo] Submitting ${mode} video, model=${model} (${videoModelKey}), aspect=${finalRatio}, dur=${duration}s, refs=${referenceMediaIds.length}, startFrame=${!!startFrameMediaId}...`);
         console.log('[FlowVideo] Request body:', JSON.stringify(body, null, 2).substring(0, 1000));
 
         let result;
         const MAX_RETRIES = 2;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             result = await browserFetch(
-                `${API_BASE}/v1/video:batchAsyncGenerateVideoStartImage`,
+                endpoint,
                 token,
                 body,
                 instanceId
@@ -1330,7 +1618,8 @@ export class GoogleFlowVideoConnector extends BaseConnector {
 
         // Fetch the actual video download URL (poll response doesn't contain it)
         let videoUrl = '';
-        const sessionCookies = credentials?.metadata?.sessionCookies || '';
+        // Re-read in case a mid-run 401 rotated credentials since the prologue.
+        sessionCookies = credentials?.metadata?.sessionCookies || sessionCookies;
         videoUrl = await this._fetchVideoDownloadUrl(token, projectId, downloadMediaId, sessionCookies, instanceId);
 
         // Download video to job folder if available
@@ -1364,9 +1653,14 @@ export class GoogleFlowVideoConnector extends BaseConnector {
             videoUrl,
             videoPath,
             remainingCredits,
-            model: videoModelKey,
+            model: videoModelKey,        // resolved Google key (kept for downstream back-compat)
+            modelName: model,            // user-facing tier (veo3_lite_low / veo3_quality / omni_flash)
+            mode,
+            duration,
+            resolution,
+            aspectRatio: finalRatio,
             startFrameMediaId,
-            message: `Video generation completed (${videoModelKey}).`,
+            message: `Video generation completed (${model}/${mode}, ${videoModelKey}).`,
         };
     }
 
