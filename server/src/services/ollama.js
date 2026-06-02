@@ -72,11 +72,16 @@ export async function callOllamaChat({
     timeoutMs = 180_000,
     baseUrl = OLLAMA_BASE_URL,
 }) {
+    // Stream the response (NDJSON). Streaming avoids Node fetch's ~5min
+    // headers/body timeout on long CPU generations: headers arrive at the first
+    // token and tokens flow continuously. The AbortController below is the only
+    // overall cap (timeoutMs). We re-assemble the same shape a non-stream call
+    // would return ({ message: { content, tool_calls }, ...stats }).
     const buildBody = (includeThink) => ({
         model,
         messages,
         ...(tools && tools.length ? { tools } : {}),
-        stream: false,
+        stream: true,
         ...(includeThink ? { think } : {}),
         ...(temperature != null ? { options: { temperature } } : {}),
     });
@@ -84,47 +89,81 @@ export async function callOllamaChat({
     const post = async (body) => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
-        let res;
         try {
-            res = await fetch(`${baseUrl}/api/chat`, {
+            const res = await fetch(`${baseUrl}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
                 signal: controller.signal,
             });
+            return { res, clear: () => clearTimeout(timer) };
         } catch (e) {
+            clearTimeout(timer);
             if (e.name === 'AbortError') {
-                throw new Error(`Ollama request timed out (${timeoutMs / 1000}s) — model "${model}" may be loading or overloaded.`);
+                throw new Error(`Ollama request timed out (${Math.round(timeoutMs / 1000)}s) — model "${model}" may be loading or overloaded.`);
             }
             throw new Error(`Cannot reach Ollama at ${baseUrl}: ${e.message}`);
-        } finally {
-            clearTimeout(timer);
         }
-        return res;
     };
 
-    let res = await post(buildBody(true));
+    const readStream = async (res, clear) => {
+        let content = '';
+        let toolCalls = null;
+        let stats = {};
+        let buf = '';
+        const decoder = new TextDecoder();
+        const reader = res.body.getReader();
+        try {
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                let nl;
+                while ((nl = buf.indexOf('\n')) >= 0) {
+                    const line = buf.slice(0, nl).trim();
+                    buf = buf.slice(nl + 1);
+                    if (!line) continue;
+                    let obj;
+                    try { obj = JSON.parse(line); } catch { continue; }
+                    if (obj.error) throw new Error(`Ollama error: ${String(obj.error).substring(0, 300)}`);
+                    if (obj.message?.content) content += obj.message.content;
+                    if (obj.message?.tool_calls) toolCalls = obj.message.tool_calls;
+                    if (obj.done) stats = obj;
+                }
+            }
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                throw new Error(`Ollama request timed out (${Math.round(timeoutMs / 1000)}s) — generation exceeded the limit.`);
+            }
+            throw e;
+        } finally {
+            clear();
+            try { reader.releaseLock(); } catch { /* already released */ }
+        }
+        return { message: { content, tool_calls: toolCalls }, ...stats };
+    };
+
+    let { res, clear } = await post(buildBody(true));
 
     // Some models reject the `think` field ("does not support thinking"); retry without it.
     if (!res.ok && res.status === 400) {
-        const errText = await res.clone().text().catch(() => '');
+        const errText = await res.text().catch(() => '');
+        clear();
         if (/think/i.test(errText)) {
-            res = await post(buildBody(false));
+            ({ res, clear } = await post(buildBody(false)));
         } else {
-            if (res.status === 404) {
-                throw new Error(`Ollama model "${model}" not found. Pull it on the server: ollama pull ${model}`);
-            }
             throw new Error(`Ollama error (400): ${errText.substring(0, 300)}`);
         }
     }
 
     if (!res.ok) {
         const text = await res.text().catch(() => '');
+        clear();
         if (res.status === 404) {
             throw new Error(`Ollama model "${model}" not found. Pull it on the server: ollama pull ${model}`);
         }
         throw new Error(`Ollama error (${res.status}): ${text.substring(0, 300)}`);
     }
 
-    return res.json();
+    return readStream(res, clear);
 }

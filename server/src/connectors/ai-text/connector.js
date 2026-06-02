@@ -207,6 +207,8 @@ export class AITextConnector extends BaseConnector {
             messages,
             temperature,
             think: false,
+            // Long product-copy generations on CPU can run for minutes; default 60min ceiling.
+            timeoutMs: parseInt(process.env.OLLAMA_AI_TIMEOUT_MS || '3600000', 10),
             ...(baseUrl ? { baseUrl } : {}),
         });
 
