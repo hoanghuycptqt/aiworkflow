@@ -27,6 +27,11 @@ export const PROVIDER_MODELS = {
         'gemini-3-flash-preview',
         'gemini-3-pro-preview',
     ],
+    // Self-hosted local LLM. This is only a fallback — NodeConfigPanel fetches the
+    // live list from GET /api/ollama/models (whatever is actually pulled on the box).
+    ollama: [
+        'gemma4:e4b',
+    ],
 };
 
 /** Human-friendly labels for model IDs in dropdowns. Falls back to the raw ID. */
@@ -36,6 +41,7 @@ export const MODEL_LABELS = {
     'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite (GA, fast)',
     'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
     'gemini-3-pro-preview': 'Gemini 3 Pro (Preview)',
+    'gemma4:e4b': 'Gemma 4 E4B (Local Ollama)',
 };
 
 export const NODE_TYPES = {
@@ -70,7 +76,7 @@ export const NODE_TYPES = {
             },
             temperature: { type: 'number', label: 'Temperature', default: 0.7, min: 0, max: 2 },
             includeImage: { type: 'boolean', label: 'Include Image from Previous Node', default: false },
-            credentialId: { type: 'credential', label: 'Credential', provider: ['openrouter', 'gemini'], required: true },
+            credentialId: { type: 'credential', label: 'Credential', provider: ['openrouter', 'gemini', 'ollama'], required: true },
         },
         inputs: 1,
         outputs: 1,

@@ -4,10 +4,15 @@
  */
 
 import { Router } from 'express';
-import { execSync } from 'child_process';
+import { execSync, execFile } from 'child_process';
 import os from 'os';
 import { prisma } from '../index.js';
 import { hashPassword } from '../services/auth.service.js';
+import { fetchOllamaModels } from '../services/ollama.js';
+
+// Root-owned wrapper that rewrites /etc/nginx/.ollama_htpasswd + reloads nginx.
+// Installed manually on the VPS (NOT in the app dir, so git-pull can't tamper).
+const OLLAMA_PW_WRAPPER = process.env.OLLAMA_PW_WRAPPER || '/usr/local/sbin/vcw-ollama-pw';
 
 const router = Router();
 
@@ -355,9 +360,47 @@ router.get('/settings', async (req, res, next) => {
     try {
         const settings = await prisma.systemSetting.findMany();
         const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
-        res.json({ settings: settingsMap, geminiModels: GEMINI_MODELS });
+        // Local Ollama models discovered live (cached); empty if Ollama is down.
+        let ollamaModels = [];
+        try { ollamaModels = await fetchOllamaModels(); } catch { /* leave empty */ }
+        res.json({ settings: settingsMap, geminiModels: GEMINI_MODELS, ollamaModels });
     } catch (err) {
         next(err);
+    }
+});
+
+// ─── Change Local LLM (Ollama) Password ──────────────────
+// Updates the nginx basic-auth password (user 'flowadmin') that gates the
+// public https://thhflow.com/ollama/ endpoint. The Node process can't write
+// /etc/nginx itself, so it shells out to a narrow root-owned wrapper via sudo,
+// passing the new password on STDIN (never argv → not visible in `ps`).
+router.put('/ollama-password', async (req, res, next) => {
+    try {
+        const { password } = req.body;
+        if (!password || typeof password !== 'string' || password.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        }
+        if (password.length > 256) {
+            return res.status(400).json({ error: 'Password too long (max 256)' });
+        }
+
+        await new Promise((resolve, reject) => {
+            const child = execFile('sudo', ['-n', OLLAMA_PW_WRAPPER], { timeout: 15000 }, (err, stdout, stderr) => {
+                if (err) {
+                    const detail = (stderr || err.message || '').toString().trim().substring(0, 300);
+                    return reject(new Error(detail || 'wrapper failed'));
+                }
+                resolve(stdout);
+            });
+            child.stdin.on('error', () => { /* ignore EPIPE if wrapper exits early */ });
+            child.stdin.write(password);
+            child.stdin.end();
+        });
+
+        res.json({ message: 'Local LLM password updated. External clients must use the new password.' });
+    } catch (err) {
+        console.error('[Ollama PW] update failed:', err.message);
+        res.status(500).json({ error: `Failed to update password: ${err.message}` });
     }
 });
 

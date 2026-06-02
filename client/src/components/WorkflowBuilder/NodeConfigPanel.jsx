@@ -9,11 +9,19 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
     const [credentials, setCredentials] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [uploadPreviews, setUploadPreviews] = useState([]);
+    const [ollamaModels, setOllamaModels] = useState([]);
     const typeDef = getNodeType(node.data?.type);
 
     useEffect(() => {
         loadCredentials();
     }, [node?.id]);
+
+    // Live list of models pulled on the local Ollama instance (for the AI Text node).
+    useEffect(() => {
+        api.getOllamaModels()
+            .then((d) => setOllamaModels(d.models || []))
+            .catch(() => { /* Ollama may be down — fall back to static list */ });
+    }, []);
 
     // Set previews if files already uploaded
     useEffect(() => {
@@ -142,7 +150,10 @@ export default function NodeConfigPanel({ node, onUpdateConfig, onDelete, onClos
                 if (fieldSchema.dynamic && key === 'model') {
                     const credId = config.credentialId;
                     const selectedCred = credentials.find(c => c.id === credId);
-                    if (selectedCred && PROVIDER_MODELS[selectedCred.provider]) {
+                    if (selectedCred?.provider === 'ollama') {
+                        // Live models from the box; fall back to the static list if unreachable.
+                        options = ollamaModels.length ? ollamaModels : (PROVIDER_MODELS.ollama || []);
+                    } else if (selectedCred && PROVIDER_MODELS[selectedCred.provider]) {
                         options = PROVIDER_MODELS[selectedCred.provider];
                     } else {
                         // Show all models grouped if no credential selected yet

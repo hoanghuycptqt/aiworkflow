@@ -11,6 +11,7 @@ const PROVIDERS = [
     { id: 'google-flow', label: 'Google Flow', icon: 'clapperboard', description: 'Auth token for Google Flow (labs.google/fx)' },
     { id: 'google-account', label: 'Google Account', icon: 'user', description: 'Email & password for auto-login Google Flow via Telegram bot' },
     { id: 'chatgpt', label: 'ChatGPT', icon: 'message-square', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },
+    { id: 'ollama', label: 'Ollama (Local)', icon: 'sparkles', description: 'Self-hosted local LLM on this server (gemma4:e4b) — no API key needed' },
 ];
 
 export default function CredentialsPage() {
@@ -142,6 +143,14 @@ export default function CredentialsPage() {
             // Auto-set placeholder token
             if (!form.token.trim()) {
                 form.token = 'google-account-auto';
+            }
+        } else if (form.provider === 'ollama') {
+            // Local Ollama needs no secret; default the base URL to localhost.
+            if (!form.token.trim()) {
+                form.token = 'local-ollama';
+            }
+            if (!form.metadata?.baseURL?.trim()) {
+                form.metadata = { ...form.metadata, baseURL: 'http://127.0.0.1:11434' };
             }
         } else if (!form.token.trim()) {
             toast.error('Token is required');
@@ -440,6 +449,21 @@ export default function CredentialsPage() {
                                         </span>
                                     </div>
                                 </>
+                            ) : form.provider === 'ollama' ? (
+                                <div className="form-group">
+                                    <label className="form-label">Base URL</label>
+                                    <input
+                                        className="input"
+                                        type="text"
+                                        placeholder="http://127.0.0.1:11434"
+                                        value={form.metadata?.baseURL || ''}
+                                        onChange={(e) => setForm({ ...form, metadata: { ...form.metadata, baseURL: e.target.value } })}
+                                    />
+                                    <span className="form-hint">
+                                        Self-hosted Ollama on this server — no API key needed. Leave blank to use the default
+                                        local endpoint (http://127.0.0.1:11434). Pick the model (e.g. gemma4:e4b) in the AI Text node.
+                                    </span>
+                                </div>
                             ) : (
                                 <>
                                     <div className="form-group">

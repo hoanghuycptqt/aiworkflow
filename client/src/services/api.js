@@ -259,6 +259,18 @@ class ApiClient {
             body: JSON.stringify({ settings }),
         });
     }
+
+    // ─── Ollama (local LLM) ──────────────────────────────
+    async getOllamaModels() {
+        return this.request('/ollama/models');
+    }
+
+    async updateOllamaPassword(password) {
+        return this.request('/admin/ollama-password', {
+            method: 'PUT',
+            body: JSON.stringify({ password }),
+        });
+    }
 }
 
 export const api = new ApiClient();

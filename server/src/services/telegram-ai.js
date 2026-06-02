@@ -16,6 +16,7 @@ import { runJobBatch, cancelBatch } from './job-runner.js';
 import { downloadTelegramPhoto, bot, getVideoDimensions } from './telegram-bot.js';
 import { loginGoogleFlow } from './google-login-agent.js';
 import { harvestForSpecificUser } from './cookie-harvester.js';
+import { callOllamaChat } from './ollama.js';
 import { existsSync } from 'fs';
 
 // ─── Transient State (per-chat, non-persistent) ──────────
@@ -670,9 +671,61 @@ async function callOpenRouter(messages) {
     return { text: choice.message?.content || '', functionCalls };
 }
 
+// ─── Ollama Provider (self-hosted local LLM) ─────────────
+async function callOllama(messages) {
+    // Model comes from the global admin setting (telegram_ai_model); when the
+    // admin picks the Ollama provider this holds an Ollama tag e.g. 'gemma4:e4b'.
+    let selectedModel = 'gemma4:e4b';
+    try {
+        const setting = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_model' } });
+        if (setting?.value) selectedModel = setting.value;
+    } catch { /* use default */ }
+
+    const tools = functionDeclarations.map(f => ({
+        type: 'function',
+        function: { name: f.name, description: f.description, parameters: f.parameters },
+    }));
+
+    const formattedMessages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...messages,
+    ];
+
+    const data = await callOllamaChat({
+        model: selectedModel,
+        messages: formattedMessages,
+        tools,
+        think: false,
+        timeoutMs: 180_000,
+    });
+
+    const msg = data.message || {};
+    const functionCalls = [];
+    if (Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+            const args = tc.function?.arguments;
+            functionCalls.push({
+                name: tc.function?.name,
+                arguments: typeof args === 'string' ? (() => { try { return JSON.parse(args); } catch { return {}; } })() : (args || {}),
+            });
+        }
+    }
+
+    return { text: msg.content || '', functionCalls };
+}
+
 // ─── Unified AI Call ─────────────────────────────────────
 async function callAI(messages) {
-    const provider = process.env.TELEGRAM_AI_PROVIDER || 'gemini';
+    // Provider is admin-selectable (telegram_ai_provider in DB); env is the fallback.
+    let provider = process.env.TELEGRAM_AI_PROVIDER || 'gemini';
+    try {
+        const setting = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_provider' } });
+        if (setting?.value) provider = setting.value;
+    } catch { /* use env/default */ }
+
+    if (provider === 'ollama') {
+        return callOllama(messages);
+    }
     if (provider === 'openrouter') {
         return callOpenRouter(messages);
     }

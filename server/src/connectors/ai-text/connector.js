@@ -11,6 +11,7 @@
 
 import { BaseConnector } from '../base-connector.js';
 import { normalizeGeminiModel } from '../gemini/model-alias.js';
+import { callOllamaChat, getOllamaBaseUrl } from '../../services/ollama.js';
 
 // ─── Model Lists ─────────────────────────────────────────
 const OPENROUTER_MODELS = [
@@ -106,7 +107,7 @@ export class AITextConnector extends BaseConnector {
     static get metadata() {
         return {
             name: 'AI Text',
-            description: 'AI text generation & image analysis (OpenRouter + Google Gemini)',
+            description: 'AI text generation & image analysis (OpenRouter + Google Gemini + local Ollama)',
             icon: '🔀',
             category: 'ai',
             configSchema: {
@@ -144,18 +145,83 @@ export class AITextConnector extends BaseConnector {
     }
 
     async execute(input, credentials, config) {
-        if (!credentials?.token) {
+        const provider = credentials?.provider;
+
+        // Ollama is local & unauthenticated — no API key needed.
+        if (provider !== 'ollama' && !credentials?.token) {
             throw new Error('API key required. Add a credential in the Credentials page.');
         }
 
-        const provider = credentials.provider;
         console.log(`[AI-Text] Provider: ${provider}`);
 
         if (provider === 'gemini') {
             return this._executeGemini(input, credentials, config);
         }
+        if (provider === 'ollama') {
+            return this._executeOllama(input, credentials, config);
+        }
         // Default: OpenRouter
         return this._executeOpenRouter(input, credentials, config);
+    }
+
+    // ─── Ollama Provider (self-hosted, local) ────────────────
+    async _executeOllama(input, credentials, config) {
+        const prompt = config.prompt || '';
+        const selectedModel = config.model || 'gemma4:e4b';
+        const systemInstruction = config.systemInstruction || '';
+        const temperature = parseFloat(config.temperature ?? 0.7);
+        const includeImage = config.includeImage || false;
+
+        // Per-credential base URL override (metadata.baseURL); else env/default local.
+        let baseUrl;
+        try {
+            const meta = typeof credentials.metadata === 'string'
+                ? JSON.parse(credentials.metadata || '{}')
+                : (credentials.metadata || {});
+            baseUrl = meta.baseURL || undefined;
+        } catch { /* use default */ }
+
+        console.log('[AI-Text/Ollama] Model:', selectedModel, '| baseUrl:', baseUrl || getOllamaBaseUrl());
+        console.log('[AI-Text/Ollama] Prompt:', prompt.substring(0, 80) + '...');
+
+        const messages = [];
+        if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
+
+        const userMessage = { role: 'user', content: prompt };
+        if (includeImage) {
+            // Ollama /api/chat takes raw base64 strings in an `images` array on the message.
+            const imgs = [];
+            if (input.images && input.images.length > 0) {
+                for (const img of input.images) {
+                    if (img.imageData) imgs.push(img.imageData);
+                }
+            } else if (input.imageData) {
+                imgs.push(input.imageData);
+            }
+            if (imgs.length > 0) userMessage.images = imgs;
+        }
+        messages.push(userMessage);
+
+        const data = await callOllamaChat({
+            model: selectedModel,
+            messages,
+            temperature,
+            think: false,
+            ...(baseUrl ? { baseUrl } : {}),
+        });
+
+        const text = data.message?.content || '';
+        if (!text) throw new Error('Empty response from Ollama.');
+
+        console.log(`[AI-Text/Ollama] ✅ Success! Length: ${text.length}`);
+        return {
+            text,
+            prompt,
+            model: selectedModel,
+            usage: data.prompt_eval_count != null
+                ? { promptTokens: data.prompt_eval_count, completionTokens: data.eval_count }
+                : null,
+        };
     }
 
     // ─── OpenRouter Provider ─────────────────────────────────
@@ -392,6 +458,18 @@ export class AITextConnector extends BaseConnector {
             const timeout = setTimeout(() => controller.abort(), 10000);
             if (credentials.provider === 'gemini') {
                 const resp = await fetch(`${GEMINI_API_BASE}/models?key=${credentials.token}`, { signal: controller.signal });
+                clearTimeout(timeout);
+                return resp.ok;
+            }
+            if (credentials.provider === 'ollama') {
+                let base = getOllamaBaseUrl();
+                try {
+                    const meta = typeof credentials.metadata === 'string'
+                        ? JSON.parse(credentials.metadata || '{}')
+                        : (credentials.metadata || {});
+                    if (meta.baseURL) base = meta.baseURL.replace(/\/+$/, '');
+                } catch { /* default */ }
+                const resp = await fetch(`${base}/api/tags`, { signal: controller.signal });
                 clearTimeout(timeout);
                 return resp.ok;
             }
