@@ -152,6 +152,21 @@ async def _page_responsive(page) -> bool:
     return False
 
 
+def _first_line(s) -> str:
+    """First line of a possibly-empty/multiline string — '' when empty."""
+    lines = str(s).splitlines()
+    return lines[0] if lines else ""
+
+
+def _err_line(e) -> str:
+    """First line of an exception's message, falling back to the class name when the
+    message is EMPTY. asyncio.TimeoutError has an empty str(), so the old
+    `str(e).splitlines()[0]` raised IndexError and crashed the caller — that was the
+    'list index out of range' login failure (a hung launch_persistent_context raises
+    an empty-message TimeoutError)."""
+    return _first_line(e) or type(e).__name__
+
+
 def _is_dead_browser_error(e: Exception) -> bool:
     """True when the error means the browser/driver connection is gone (not a
     page-level glitch). These are unrecoverable in-place — the only fix is a
@@ -510,7 +525,7 @@ class Session:
                         ) from e
                     logger.warning(
                         f"[{self.account_id}] grecaptcha unavailable at mint "
-                        f"({detail.splitlines()[0]}); reloading page in place "
+                        f"({_first_line(detail)}); reloading page in place "
                         f"(attempt {attempt + 1}/3)"
                     )
                     try:
@@ -545,7 +560,7 @@ class Session:
                     if attempt == 0 and _is_dead_browser_error(e):
                         logger.warning(
                             f"[{self.account_id}] browser/driver died during mint "
-                            f"({str(e).splitlines()[0]}); tearing down + relaunching"
+                            f"({_err_line(e)}); tearing down + relaunching"
                         )
                         await self._teardown_invisible(reason="dead-browser recovery (mint)")
                         self.ready = False
@@ -573,7 +588,7 @@ class Session:
                     if attempt == 0 and _is_dead_browser_error(e):
                         logger.warning(
                             f"[{self.account_id}] browser/driver died during flow_fetch "
-                            f"({str(e).splitlines()[0]}); tearing down + relaunching"
+                            f"({_err_line(e)}); tearing down + relaunching"
                         )
                         await self._teardown_invisible(reason="dead-browser recovery (flow_fetch)")
                         self.ready = False
@@ -707,7 +722,7 @@ class Session:
                 logger.warning(
                     f"[{self.account_id}] persistent launch attempt "
                     f"{attempt}/{PERSIST_LAUNCH_MAX_ATTEMPTS} failed at enter "
-                    f"({type(e).__name__}: {str(e).splitlines()[0][:80]}) — retrying"
+                    f"({type(e).__name__}: {_err_line(e)[:80]}) — retrying"
                 )
                 try:
                     await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=10.0)
@@ -725,7 +740,7 @@ class Session:
             except Exception as e:
                 logger.warning(
                     f"[{self.account_id}] persistent launch attempt {attempt} new_page "
-                    f"failed ({str(e).splitlines()[0][:80]}) — retrying"
+                    f"failed ({_err_line(e)[:80]}) — retrying"
                 )
                 try:
                     await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=10.0)
@@ -825,7 +840,7 @@ class Session:
                             logger.warning(
                                 f"[{self.account_id}] login browser/driver died "
                                 f"(attempt {attempt + 1}/{LOGIN_MAX_BROWSER_ATTEMPTS}): "
-                                f"{str(e).splitlines()[0]} — relaunching + retrying"
+                                f"{_err_line(e)} — relaunching + retrying"
                             )
                             # Reset transient 2FA state so the retry sends a fresh prompt.
                             self.login_state = LoginState.RUNNING
