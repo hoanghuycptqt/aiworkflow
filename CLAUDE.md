@@ -37,7 +37,7 @@ Client build: `npm run build` (root) or `cd client && npm run build` — output 
 
 MCP server: `cd mcp-server && npm start`. To debug interactively: `npm run inspect` (launches `@modelcontextprotocol/inspector`).
 
-reCAPTCHA / Google Flow VPS diagnostic: `cd server && node test-recaptcha-vps.mjs` (uses the `sqlite3` CLI for ESM compatibility on the VPS — do not rewrite to use the Prisma client there).
+Broker / Google Flow VPS diagnostic: `curl 127.0.0.1:8002/healthz` (broker liveness + ready sessions) + `sudo tail -f /opt/vcw/logs/broker-error.log` (broker INFO→stderr). The legacy Chrome `test-recaptcha-vps.mjs` diagnostic was removed with the dead Chrome path (2026-06).
 
 No automated test suite exists. Verify changes by running `npm run dev` and exercising the affected flow in the browser/MCP client.
 
@@ -78,7 +78,7 @@ reCAPTCHA Enterprise is defeated by a **stealth Firefox driven through the Pytho
 
 The SAME `python-broker` + `invisible_playwright` Firefox runs in two distinct systems — see memories `system-thhflow-vps` and `system-mcp-server-mac`, and `HANDOFF-NEW-SESSION.md`:
 
-1. **thhflow (production web platform)** — Oracle Ampere **ARM64 VPS** `149.118.130.165`. The x86_64 Firefox runs **under FEX-Emu** (binfmt), `engine=invisible`, systemd `vcw-flow-broker`. Auth driven by the Express server's connector (self-healing fast→slow refresh + mid-run 401 recovery, warm-forever broker); `cookie-harvester` is on-demand re-login only (cron removed). Camoufox was tried here and **fails reCAPTCHA** — invisible-under-FEX is the only working engine.
+1. **thhflow (production web platform)** — Oracle Ampere **ARM64 VPS** `149.118.142.16`. The x86_64 Firefox runs **under FEX-Emu** (binfmt), `engine=invisible`, systemd `vcw-flow-broker`. Auth driven by the Express server's connector (self-healing fast→slow refresh + mid-run 401 recovery, warm-forever broker); `cookie-harvester` is on-demand re-login only (cron removed). Camoufox was tried here and **fails reCAPTCHA** — invisible-under-FEX is the only working engine.
 2. **mcp-server** — the user's **Mac**, broker in Docker via **Rosetta 2**. Auth driven by `mcp-server/lib/*` (warm-forever browser, auto-refresh-on-401, slow Firefox-at-profile refresh) — the rock-solid reference whose robustness is being ported to the VPS.
 
 `browser-manager.js` (Puppeteer/Chrome) is legacy for the dead `google-login-agent.js` path; the live Flow connector uses the broker, not browser-manager. On Linux the broker's Firefox renders headful on Xvfb `:99` (`headless:false` is required; never true-headless for Flow).
@@ -108,13 +108,13 @@ The standalone stdio MCP server on the user's **Mac** (NOT on the VPS). Stdio tr
 ## Deployment
 
 **Production VPS** — migrated 2026-06-01 from GCP x86_64 to an **Oracle Cloud Ampere A1 ARM64** instance (the old GCP box `instance-template-20260309-…` was decommissioned 2026-06-01 — snapshot `vcw-old-final` retained). Details + full migration story: memory `system-thhflow-vps` + `migration-arm-camoufox-progress`.
-- Public IP: `149.118.130.165` · Arch: **aarch64** (Ubuntu 24.04) · Domain: `thhflow.com` (matbao registrar, A→IP)
+- Public IP: `149.118.142.16` · Arch: **aarch64** (Ubuntu 24.04) · Domain: `thhflow.com` (matbao registrar, A→IP)
 - App dir: `/opt/vcw/app` · System user: `truonghoanghuy` · nginx 443 (Sectigo cert `/etc/ssl/thhflow`, valid 2027-03) + Xvfb `:99`
 - **Broker = `invisible_playwright` x86_64 stealth Firefox running under FEX-Emu** (binfmt x86_64 auto-emulation on ARM), systemd `vcw-flow-broker` (`venv-x86`, `DISPLAY=:99`, `HOME=/home/truonghoanghuy`, `BROKER_BROWSER_ENGINE=invisible`). FEX rootfs `~truonghoanghuy/.local/share/fex-emu/RootFS/Ubuntu_24_04`; Firefox cache `~/.cache/invisible-playwright/firefox-7` (placed manually — invisible's `fetch` aborts on aarch64).
 
 **SSH into the VPS:**
 ```bash
-ssh -i "<repo>/cert/ssh-key-2026-06-01.key" truonghoanghuy@149.118.130.165   # chmod 600 the key first
+ssh -i "<repo>/cert/ssh-key-2026-06-01.key" truonghoanghuy@149.118.142.16   # chmod 600 the key first
 ```
 
 **VPS maintenance:**

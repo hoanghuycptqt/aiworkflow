@@ -5,17 +5,17 @@
   },
   "permissions": {
     "allow": [
-      "Bash(gcloud compute ssh instance-template-20260309-20260309-113128-a *)"
+      "Bash(ssh -i * truonghoanghuy@149.118.142.16 *)"
     ]
   },
   "autoMode": {
     "allow": [
       "$defaults",
-      "Read-only diagnostic SSH into the project's GCP VPS (instance instance-template-20260309-20260309-113128-a, zone asia-southeast1-a, domain thhflow.com) is pre-authorized for the user and any subagents acting on their behalf. Allowed remote commands (run via gcloud compute ssh ... --command=\"...\"): ls/cat/grep, pm2 logs vcw-server, sqlite3 prisma/dev.db SELECT queries, curl http://127.0.0.1:*, pgrep, and running the existing diagnostic script node /opt/vcw/app/server/test-recaptcha-vps.mjs. Mutating commands (pm2 restart, pkill, rm, npm install, git pull) still require user confirmation."
+      "Read-only diagnostic SSH into the project's Oracle Ampere ARM64 VPS (149.118.142.16, domain thhflow.com, app dir /opt/vcw/app, PM2 vcw-server, broker systemd vcw-flow-broker) is pre-authorized for the user and any subagents acting on their behalf. Direct SSH via `ssh -i cert/ssh-key-2026-06-01.key truonghoanghuy@149.118.142.16 ...` (no gcloud — migrated off GCP 2026-06-01). Allowed remote commands: ls/cat/grep/tail, pm2 logs vcw-server --nostream, sqlite3 prisma/dev.db SELECT queries, curl 127.0.0.1:8002/healthz and /sessions/<acct>/login-status, pgrep, sudo tail /opt/vcw/logs/broker-error.log. Mutating commands (systemctl restart vcw-flow-broker, pm2 restart, pkill, rm, npm install, git pull) and any login/session reset on a real account still require user confirmation."
     ],
     "environment": [
       "$defaults",
-      "Project VPS context: the GCP instance instance-template-20260309-20260309-113128-a (zone asia-southeast1-a, domain thhflow.com, app dir /opt/vcw/app, PM2 process vcw-server) is the user's own production server. The user (hoanghuycptqt@gmail.com) is the sole operator. Diagnostic SSH access via gcloud compute ssh ... --tunnel-through-iap --command=\"...\" is sanctioned by the user for debugging the Video Creator Workflow application, particularly the Google Flow reCAPTCHA pipeline."
+      "Project VPS context: the Oracle Cloud Ampere A1 ARM64 instance at 149.118.142.16 (domain thhflow.com, app dir /opt/vcw/app, PM2 process vcw-server, Python broker systemd vcw-flow-broker running invisible_playwright Firefox under FEX-Emu) is the user's own production server. The user (hoanghuycptqt@gmail.com) is the sole operator. Read-only diagnostic SSH (direct `ssh -i`, no gcloud) is sanctioned for debugging the Video Creator Workflow application, particularly the Google Flow auth/login pipeline (broker + Firefox)."
     ]
   }
 }

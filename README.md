@@ -30,11 +30,11 @@ Cần `.env` trong `server/` — xem [server/.env.example](server/.env.example).
 | Prisma migration mới | `cd server && npm run db:migrate` |
 | MCP server | `cd mcp-server && npm start` |
 | Debug MCP qua inspector | `cd mcp-server && npm run inspect` |
-| Diagnostic reCAPTCHA trên VPS | `cd server && node test-recaptcha-vps.mjs` |
+| Diagnostic broker trên VPS | `curl 127.0.0.1:8002/healthz` + `sudo tail -f /opt/vcw/logs/broker-error.log` |
 
 ## Deploy
 
-Push `main` → GitHub Actions tự SSH vào VPS GCP, pull, install, `prisma db push`, build client, `pm2 restart vcw-server`. Cấu hình tại [.github/workflows/deploy.yml](.github/workflows/deploy.yml).
+Push `main` → GitHub Actions tự SSH vào VPS (Oracle Ampere ARM64 `149.118.142.16`), pull, install, `prisma db push`, build client, `pm2 restart vcw-server` (+ restart `vcw-flow-broker` nếu `python-broker/` đổi). Cấu hình tại [.github/workflows/deploy.yml](.github/workflows/deploy.yml).
 
 VPS info chi tiết (SSH command, maintenance) — xem section **Deployment** trong [CLAUDE.md](CLAUDE.md).
 
