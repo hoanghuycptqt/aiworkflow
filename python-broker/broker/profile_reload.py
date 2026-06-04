@@ -32,10 +32,13 @@ Used by:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from broker.config import BROWSER_ENGINE
@@ -90,13 +93,40 @@ KILL_GRACE_S = 4
 
 _SESSION_TOKEN_NAME = "__Secure-next-auth.session-token"
 
+# NextAuth /session endpoint + request shape. Mirrors
+# server/src/services/flow-session.js getAccessToken EXACTLY (UA, Referer, and the
+# alive/dead classification) so the broker's liveness verdict can never drift from
+# the connector's ground truth. Pure stdlib (urllib) — the broker must pick up NO
+# new dependency here (broker dep changes need a manual pip install under FEX; see
+# CLAUDE.md deploy notes).
+_SESSION_API = "https://labs.google/fx/api/auth/session"
+_SESSION_HEADERS = {
+    "Accept": "*/*",
+    "Content-Type": "application/json",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://labs.google/fx/vi/tools/flow/",
+}
+
+
+def _session_token_from_cookie_string(cookie_string: str) -> str | None:
+    """Extract the `__Secure-next-auth.session-token` value from a cookie string."""
+    for part in cookie_string.split(";"):
+        part = part.strip()
+        if part.startswith(_SESSION_TOKEN_NAME + "="):
+            return part[len(_SESSION_TOKEN_NAME) + 1:]
+    return None
+
 
 def _read_session_token(profile_dir: str) -> str | None:
     """Current `__Secure-next-auth.session-token` value in the profile, or None.
 
     Reuses read_profile_cookies' safe-snapshot read (copies sqlite+WAL+SHM before
-    opening), so it's safe to call repeatedly while Firefox is writing. Used to
-    detect rotation (value CHANGES when NextAuth re-grants).
+    opening), so it's safe to call repeatedly while Firefox is writing. Used only to
+    LOG rotation (value CHANGES when NextAuth re-grants) — rotation is NOT the success
+    signal; see _session_alive.
     """
     try:
         res = read_profile_cookies(profile_dir)
@@ -104,11 +134,45 @@ def _read_session_token(profile_dir: str) -> str | None:
         return None
     if res.get("status") != "ok":
         return None
-    for part in res["cookies"].split(";"):
-        part = part.strip()
-        if part.startswith(_SESSION_TOKEN_NAME + "="):
-            return part[len(_SESSION_TOKEN_NAME) + 1:]
-    return None
+    return _session_token_from_cookie_string(res["cookies"])
+
+
+def _session_alive(cookies: str) -> bool | None:
+    """Validate `cookies` against NextAuth's /session — the ground-truth liveness
+    check, identical to the connector's getAccessToken (flow-session.js).
+
+    Returns:
+        True  — live session (no ACCESS_TOKEN_REFRESH_NEEDED error, access_token present).
+        False — dead session (the error signal / no access_token / HTTP 4xx rejection).
+        None  — transient (network error / 5xx / unparseable): caller should keep
+                waiting, NOT treat as a hard dead.
+
+    WHY this exists (2026-06-04 incident): a session-token *rotation* is NOT proof of
+    a successful re-auth. Under FEX the first rotation (~12s) is frequently the early
+    error-embedding JWE — NextAuth ran before the page/ServiceWorker/IndexedDB settled
+    and baked ACCESS_TOKEN_REFRESH_NEEDED into the new token; the SUCCESSFUL re-grant
+    lands a few seconds later (~20s). reload_profile_via_firefox used to return on the
+    first rotation, handing the connector a still-dead token → a false "needs re-login".
+    Validating each candidate against /session and waiting for a live one fixes it.
+    """
+    req = urllib.request.Request(_SESSION_API, headers={**_SESSION_HEADERS, "Cookie": cookies})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        # 4xx → the session is rejected (dead); 5xx → transient (keep waiting).
+        return False if 400 <= e.code < 500 else None
+    except Exception:
+        return None
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+    if data.get("error") == "ACCESS_TOKEN_REFRESH_NEEDED":
+        return False
+    if not data.get("access_token"):
+        return False
+    return True
 
 
 async def reload_profile_via_firefox(account_id: str) -> dict:
@@ -135,10 +199,10 @@ async def reload_profile_via_firefox(account_id: str) -> dict:
     if not Path(FIREFOX_BIN).is_file():
         return {"status": "error", "message": f"firefox binary not found at {FIREFOX_BIN}"}
 
-    # Capture the session-token BEFORE the reload so we can detect rotation
-    # (NextAuth mints a fresh session-token JWT when it re-grants). Polling for
-    # the value to CHANGE lets us return as soon as the refresh lands instead of
-    # always blocking the full NAV_WAIT_S.
+    # Capture the session-token BEFORE the reload purely so we can LOG when it
+    # rotates. Rotation is NOT the success signal (see _session_alive): the first
+    # rotation under FEX is often a dead error-JWE. We succeed only on a token that
+    # /session validates ALIVE, and keep Firefox running until then.
     pre_token = await asyncio.to_thread(_read_session_token, profile_dir)
 
     env = {**os.environ, "DISPLAY": DISPLAY}
@@ -177,11 +241,16 @@ async def reload_profile_via_firefox(account_id: str) -> dict:
             f"(attempt {attempt}/{RELOAD_MAX_ATTEMPTS}, wait ≤{NAV_WAIT_S}s)"
         )
 
-        # 3. Poll for rotation OR early death. FEX page-load is ~80-100s and FEX
-        #    randomly SIGSEGVs Firefox — a death before the window elapses means we
-        #    never got a refresh, so relaunch and retry.
-        rotated = False
+        # 3. Poll until the recovered session VALIDATES ALIVE, Firefox dies, or the
+        #    budget runs out. Each poll: snapshot cookies off disk (safe copy of
+        #    sqlite+WAL+SHM while Firefox writes) and check /session. We return on a
+        #    LIVE token — NOT on the first rotation, which under FEX is usually the
+        #    early dead error-JWE (2026-06-04 incident). Firefox stays alive across
+        #    polls so the successful re-grant has time to land.
         died = False
+        rotation_logged = False
+        alive_cookies = None
+        last_cookies = None
         waited = 0
         while waited < NAV_WAIT_S:
             await asyncio.sleep(POLL_INTERVAL_S)
@@ -190,42 +259,53 @@ async def reload_profile_via_firefox(account_id: str) -> dict:
                 died = True
                 logger.warning(f"[{account_id}] reload firefox exited at ~{waited}s (FEX crash?)")
                 break
-            cur = await asyncio.to_thread(_read_session_token, profile_dir)
-            if pre_token and cur and cur != pre_token:
-                rotated = True
-                logger.info(f"[{account_id}] session-token rotated at ~{waited}s")
+            res = await asyncio.to_thread(read_profile_cookies, profile_dir)
+            if res.get("status") != "ok":
+                continue
+            cookies = res["cookies"]
+            last_cookies = cookies
+            cur_token = _session_token_from_cookie_string(cookies)
+            if not rotation_logged and pre_token and cur_token and cur_token != pre_token:
+                rotation_logged = True
+                logger.info(f"[{account_id}] session-token rotated at ~{waited}s — validating /session…")
+            verdict = await asyncio.to_thread(_session_alive, cookies)
+            if verdict is True:
+                alive_cookies = cookies
+                logger.info(
+                    f"[{account_id}] session validated ALIVE at ~{waited}s "
+                    f"(rotated={rotation_logged}) — {len(cookies)} chars"
+                )
                 break
+            # verdict is False (still dead) or None (transient /session error): keep
+            # Firefox alive and poll again. The good re-grant may not have landed yet.
 
-        if rotated:
-            await asyncio.sleep(2)  # let Firefox flush the rotated Set-Cookie to sqlite
+        # 4a. Validated-alive token → flush, re-read the freshest on-disk copy, tear
+        #     Firefox down (releases the profile lock), return success.
+        if alive_cookies is not None:
+            await asyncio.sleep(1)  # let Firefox flush any final Set-Cookie to sqlite
+            fresh = await asyncio.to_thread(read_profile_cookies, profile_dir)
+            await _terminate(proc)
+            cookies = fresh["cookies"] if fresh.get("status") == "ok" else alive_cookies
+            logger.info(f"[{account_id}] firefox reload OK (attempt {attempt}, validated alive)")
+            return {"status": "ok", "cookies": cookies, "profile_dir": profile_dir, "validated": True}
 
-        # 4. Snapshot cookies off disk (safe copy of sqlite+WAL+SHM), then tear
-        #    Firefox down so it releases the profile lock.
-        try:
-            cookies_result = await asyncio.to_thread(read_profile_cookies, profile_dir)
-        except Exception as e:
-            logger.exception(f"profile cookie read failed for {account_id}")
-            cookies_result = {"status": "error", "message": f"read_profile_cookies: {e}"}
         await _terminate(proc)
 
-        # Success when the reload settled (rotated, OR Firefox ran the full window
-        # without crashing) AND we extracted a usable cookie set. The Node caller
-        # re-validates via /session and discards a still-dead session, so returning
-        # an un-rotated-but-readable set (e.g. session still fresh, nothing to
-        # rotate yet) is safe.
-        if cookies_result.get("status") == "ok" and (rotated or not died):
-            logger.info(
-                f"[{account_id}] firefox reload OK (attempt {attempt}, rotated={rotated}) — "
-                f"{len(cookies_result['cookies'])} chars extracted from profile"
+        # 4b. No live token within the budget, but Firefox ran without crashing and we
+        #     have a readable set → hand it back UNVALIDATED so the connector makes the
+        #     final call. It re-validates via /session and, if genuinely dead (the
+        #     ~2-month boundary: Google revoked the grant, or the profile's own Google
+        #     account cookies expired), surfaces the real "needs re-login". A crash
+        #     (died) instead falls through to a clean relaunch.
+        if last_cookies is not None and not died:
+            logger.warning(
+                f"[{account_id}] reload settled but /session never validated alive within "
+                f"{NAV_WAIT_S}s — returning unvalidated cookies for the connector to arbitrate"
             )
-            return {
-                "status": "ok",
-                "cookies": cookies_result["cookies"],
-                "profile_dir": profile_dir,
-            }
+            return {"status": "ok", "cookies": last_cookies, "profile_dir": profile_dir, "validated": False}
 
         last_detail = (
-            f"attempt {attempt}: died={died} rotated={rotated} read={cookies_result.get('status')}"
+            f"attempt {attempt}: died={died} read={'ok' if last_cookies else 'none'} validated=False"
         )
         logger.warning(f"[{account_id}] reload attempt {attempt} unproductive ({last_detail}) — retrying")
 

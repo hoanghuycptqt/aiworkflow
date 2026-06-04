@@ -156,19 +156,22 @@ export class FlowBroker {
      * IndexedDB, fingerprint coherence), then returns the rotated cookies
      * read off cookies.sqlite.
      *
-     * Slow path for cookie-harvester: only fired when the fast `/session`
-     * call returns ACCESS_TOKEN_REFRESH_NEEDED (session past NextAuth maxAge).
-     * Takes ~25-30s because of the in-Firefox wait. Returns:
-     *   { status: 'ok', cookies, profile_dir }
+     * Slow path for the self-healing connector: only fired when the fast `/session`
+     * call returns ACCESS_TOKEN_REFRESH_NEEDED (session past NextAuth maxAge). The
+     * broker keeps Firefox alive and polls /session until the re-grant validates
+     * ALIVE (recovers in ~20-30s), or returns the latest cookies unvalidated when
+     * the session is genuinely dead (it runs the broker's full NAV_WAIT_S budget,
+     * ~120s, before giving up). Returns:
+     *   { status: 'ok', cookies, profile_dir, validated }
      *   { status: 'no_profile_base' | 'no_profile' | 'error', ... }
      *
-     * Endpoint has its own timeout budget on the broker side; bump the
-     * client-side _call timeout to give ample room for a cold-start
-     * Firefox launch on a sleepy VPS.
+     * timeoutMs MUST exceed the broker's worst case (NAV_WAIT_S + a couple of short
+     * FEX-crash relaunches) so a genuinely-dead session returns the clean dead-cookies
+     * verdict instead of tripping a client timeout → noisy Tier-B fallback.
      */
     async reloadViaFirefox(accountId) {
         return this._call('POST', `/sessions/${encodeURIComponent(accountId)}/reload-via-firefox`,
-            undefined, { timeoutMs: 60000 });
+            undefined, { timeoutMs: 180000 });
     }
 
     /**
