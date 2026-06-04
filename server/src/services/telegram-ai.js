@@ -683,6 +683,11 @@ const OLLAMA_TOOL_NAMES = new Set([
     'list_workflows', 'run_job', 'get_status', 'stop_batch',             // run/monitor
 ]);
 const OLLAMA_HISTORY_LIMIT = parseInt(process.env.OLLAMA_TG_HISTORY || '6', 10);
+// Per-call cap for the Telegram bot's Ollama requests (and the startup warmup).
+// gemma4:12b is ~7x slower to cold-warm than the old 8B on the 4-core CPU box
+// (~96s vs ~13s) and slower per token, so the old 180s/120s caps were marginal.
+// Env-configurable; 5min default.
+const OLLAMA_TG_TIMEOUT_MS = parseInt(process.env.OLLAMA_TG_TIMEOUT_MS || '300000', 10);
 
 async function callOllama(messages) {
     // Model comes from the global admin setting (telegram_ai_model); when the
@@ -713,7 +718,7 @@ async function callOllama(messages) {
         messages: formattedMessages,
         tools,
         think: false,
-        timeoutMs: 180_000,
+        timeoutMs: OLLAMA_TG_TIMEOUT_MS,
     });
     console.log(`[Telegram AI/Ollama] ${selectedModel} replied in ${((Date.now() - t0) / 1000).toFixed(1)}s (history=${trimmedHistory.length}, tools=${tools.length})`);
 
@@ -774,7 +779,7 @@ export async function warmupOllama() {
             messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: 'hi' }],
             tools,
             think: false,
-            timeoutMs: 120_000,
+            timeoutMs: OLLAMA_TG_TIMEOUT_MS,
         });
         console.log(`[Telegram AI/Ollama] 🔥 prefix warmup done in ${((Date.now() - t0) / 1000).toFixed(1)}s (model ${model}) — first user message will be warm`);
     } catch (e) {
