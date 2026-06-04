@@ -292,12 +292,41 @@ export async function downloadTelegramPhoto(ctx, fileId) {
 // notification carrying a raw connector error dump with stray _ * ` [ { in it. With
 // parse_mode that 400s and the user gets NOTHING (the throw also skips any media). Try
 // Markdown, and on a parse error resend as plain text so the notification always lands.
+/**
+ * Retry a Telegram send on TRANSIENT failures only. A dropped TCP connection to
+ * api.telegram.org surfaces as a node-fetch FetchError ("request to … failed,
+ * reason:" with an EMPTY reason) — a single momentary blip should not silently lose
+ * a whole notification (2026-06-04 incident: chat 1475447433 lost its entire batch
+ * notify to one such drop; logged to server-error.log, never retried). PERMANENT
+ * errors (markdown parse, bot blocked, chat not found, other 4xx) are rethrown
+ * immediately — retrying them only wastes time. Tradeoff: a send whose REQUEST
+ * succeeded but whose RESPONSE was lost will be retried → a rare duplicate; for
+ * notifications, at-least-once (rare dup) beats at-most-once (silent loss).
+ */
+async function sendWithRetry(fn, label, attempts = 3) {
+    for (let i = 1; i <= attempts; i++) {
+        try {
+            return await fn();
+        } catch (err) {
+            const msg = err?.message || '';
+            const code = err?.response?.error_code ?? err?.code;
+            const transient =
+                code === 429 ||
+                (typeof code === 'number' && code >= 500) ||
+                /failed, reason|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|socket hang up|network timeout|request timed out|EFATAL|FetchError/i.test(msg);
+            if (!transient || i === attempts) throw err;
+            console.warn(`[Telegram] ${label} attempt ${i}/${attempts} failed (${msg || code || 'unknown'}) — retry in ${i}s`);
+            await new Promise(r => setTimeout(r, i * 1000));
+        }
+    }
+}
+
 async function sendMarkdownSafe(chatId, text) {
     try {
-        await bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+        await sendWithRetry(() => bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' }), `text→${chatId}`);
     } catch (err) {
         if (/parse entities|parse_mode|parse markdown/i.test(err.message || '')) {
-            await bot.telegram.sendMessage(chatId, text); // plain-text fallback
+            await sendWithRetry(() => bot.telegram.sendMessage(chatId, text), `text-plain→${chatId}`); // plain-text fallback
         } else {
             throw err;
         }
@@ -326,20 +355,26 @@ export async function notifyTelegramUser(userId, message, mediaFiles = []) {
                 try {
                     if (media.type === 'video') {
                         const dims = await getVideoDimensions(media.path);
-                        await bot.telegram.sendVideo(link.chatId, { source: media.path }, {
+                        await sendWithRetry(() => bot.telegram.sendVideo(link.chatId, { source: media.path }, {
                             supports_streaming: true,
                             ...(dims && { width: dims.width, height: dims.height }),
-                        });
+                        }), `video→${link.chatId}`);
                     } else {
-                        await bot.telegram.sendPhoto(link.chatId, { source: media.path });
+                        await sendWithRetry(() => bot.telegram.sendPhoto(link.chatId, { source: media.path }), `photo→${link.chatId}`);
                     }
                 } catch (mediaErr) {
-                    // If file too large, send URL instead
+                    // Don't lose media silently (the old code swallowed this when there was
+                    // no url): log it, then fall back to the public URL if we have one.
+                    console.error(`[Telegram] media send failed chat ${link.chatId} (${media.path}): ${mediaErr.message}`);
                     if (media.url) {
-                        await bot.telegram.sendMessage(
-                            link.chatId,
-                            `📎 File quá lớn, tải tại: ${media.url}`
-                        );
+                        try {
+                            await sendWithRetry(() => bot.telegram.sendMessage(
+                                link.chatId,
+                                `📎 File quá lớn, tải tại: ${media.url}`
+                            ), `url→${link.chatId}`);
+                        } catch (urlErr) {
+                            console.error(`[Telegram] url fallback failed chat ${link.chatId}: ${urlErr.message}`);
+                        }
                     }
                 }
             }
