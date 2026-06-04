@@ -11,7 +11,7 @@ const PROVIDERS = [
     { id: 'google-flow', label: 'Google Flow', icon: 'clapperboard', description: 'Auth token for Google Flow (labs.google/fx)' },
     { id: 'google-account', label: 'Google Account', icon: 'user', description: 'Email & password for auto-login Google Flow via Telegram bot' },
     { id: 'chatgpt', label: 'ChatGPT', icon: 'message-square', description: 'Access Token for ChatGPT (chatgpt.com) — supports Custom GPTs' },
-    { id: 'ollama', label: 'Ollama (Local)', icon: 'sparkles', description: 'Self-hosted local LLM on this server (gemma4:e4b) — no API key needed' },
+    { id: 'ollama', label: 'Ollama (Local)', icon: 'sparkles', description: 'Self-hosted local LLM on this server (gemma4:12b) — no API key needed' },
 ];
 
 export default function CredentialsPage() {
@@ -461,7 +461,7 @@ export default function CredentialsPage() {
                                     />
                                     <span className="form-hint">
                                         Self-hosted Ollama on this server — no API key needed. Leave blank to use the default
-                                        local endpoint (http://127.0.0.1:11434). Pick the model (e.g. gemma4:e4b) in the AI Text node.
+                                        local endpoint (http://127.0.0.1:11434). Pick the model (e.g. gemma4:12b) in the AI Text node.
                                     </span>
                                 </div>
                             ) : (

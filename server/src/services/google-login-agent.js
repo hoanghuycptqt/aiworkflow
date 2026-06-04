@@ -37,7 +37,7 @@ async function getGeminiModel() {
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_model' } });
         const value = setting?.value || '';
         // telegram_ai_model is shared across providers; if the admin selected a
-        // non-Gemini provider (e.g. Ollama 'gemma4:e4b'), don't feed it to Gemini.
+        // non-Gemini provider (e.g. Ollama 'gemma4:12b'), don't feed it to Gemini.
         return value.startsWith('gemini') ? value : 'gemini-3-flash-preview';
     } catch {
         return 'gemini-3-flash-preview';

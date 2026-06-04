@@ -167,7 +167,7 @@ export class AITextConnector extends BaseConnector {
     // ─── Ollama Provider (self-hosted, local) ────────────────
     async _executeOllama(input, credentials, config) {
         const prompt = config.prompt || '';
-        const selectedModel = config.model || 'gemma4:e4b';
+        const selectedModel = config.model || 'gemma4:12b';
         const systemInstruction = config.systemInstruction || '';
         const temperature = parseFloat(config.temperature ?? 0.7);
         const includeImage = config.includeImage || false;

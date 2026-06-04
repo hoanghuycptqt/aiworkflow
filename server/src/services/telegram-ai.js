@@ -686,8 +686,8 @@ const OLLAMA_HISTORY_LIMIT = parseInt(process.env.OLLAMA_TG_HISTORY || '6', 10);
 
 async function callOllama(messages) {
     // Model comes from the global admin setting (telegram_ai_model); when the
-    // admin picks the Ollama provider this holds an Ollama tag e.g. 'gemma4:e4b'.
-    let selectedModel = 'gemma4:e4b';
+    // admin picks the Ollama provider this holds an Ollama tag e.g. 'gemma4:12b'.
+    let selectedModel = 'gemma4:12b';
     try {
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_model' } });
         if (setting?.value) selectedModel = setting.value;
@@ -760,7 +760,7 @@ export async function warmupOllama() {
         const provider = provSetting?.value || process.env.TELEGRAM_AI_PROVIDER || 'gemini';
         if (provider !== 'ollama') return;
 
-        let model = 'gemma4:e4b';
+        let model = 'gemma4:12b';
         const m = await prisma.systemSetting.findUnique({ where: { key: 'telegram_ai_model' } });
         if (m?.value) model = m.value;
 

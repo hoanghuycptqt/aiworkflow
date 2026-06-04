@@ -54,7 +54,7 @@ export async function fetchOllamaModels({ force = false, baseUrl = OLLAMA_BASE_U
  * Call Ollama's native /api/chat (non-streaming).
  *
  * @param {object} opts
- * @param {string} opts.model      e.g. 'gemma4:e4b'
+ * @param {string} opts.model      e.g. 'gemma4:12b'
  * @param {Array}  opts.messages   [{ role, content, images? }]  (images = raw base64 strings)
  * @param {Array}  [opts.tools]    OpenAI-style tool/function declarations (gemma4 supports tools)
  * @param {number} [opts.temperature]
